@@ -253,6 +253,54 @@ details.pc .inner{padding:4px 8px 8px}
 .rungs{display:flex;flex-wrap:wrap;gap:5px}
 .rung{font:11px var(--mono);border:1px solid #2a3244;border-radius:3px;padding:2px 6px;color:#9aa6bd}
 .rung.hit{border-color:#34d399;color:#34d399} .rung.next{border-color:#ff5fd2;color:#ffd6f6}
+.sform{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.sform input[type=text]{flex:1 1 320px;min-width:0;font:13px var(--mono);background:#05070c;color:var(--ink);border:1px solid #2a3244;border-radius:6px;padding:11px 12px;min-height:44px}
+.sform input[type=text]:focus,.wform input:focus{outline:none;border-color:#ff5fd2}
+.tog{display:flex;align-items:center;gap:6px;font:12px var(--mono);color:#c6cfdf;white-space:nowrap}
+.tog input{width:18px;height:18px;accent-color:#34d399}
+.rep{border:1px solid #1b2233;border-radius:6px;margin-top:10px;background:#070910;overflow:hidden}
+.rep > summary{list-style:none;cursor:pointer} .rep > summary::-webkit-details-marker{display:none}
+.rhead{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:10px 12px;font:12px var(--mono)}
+.verdict{font:800 12px var(--mono);padding:4px 9px;border-radius:4px;letter-spacing:.06em}
+.verdict.BUY{background:#14532d;color:#bbf7d0} .verdict.WATCH{background:#3a2a05;color:#fde68a} .verdict.SKIP{background:#4c0519;color:#fecdd3}
+.rhead .tk{font:800 15px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.sbar{display:inline-flex;align-items:center;gap:6px} .sbar i{display:block;width:90px;height:6px;border-radius:3px;background:#1b2233;overflow:hidden}
+.sbar i b{display:block;height:100%} .rhead .chip{border:1px solid #2a3244;border-radius:10px;padding:1px 7px;color:#9aa6bd;font-size:11px}
+.rhead .when{margin-left:auto;color:#6b7489}
+.rbody{padding:0 12px 12px;font:12px var(--mono)}
+.rline{color:#c6cfdf;margin:2px 0 6px;overflow-wrap:anywhere} .rline.act{font-weight:700} .rline.act.ok{color:#34d399} .rline.act.no{color:#fbbf24}
+.rfacts{color:#8b97b0;margin-bottom:8px;overflow-wrap:anywhere}
+.rgroups{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px}
+.rgroup{border:1px solid #141a27;border-radius:4px;padding:6px 8px}
+.rgroup h4{margin:0 0 4px;font:700 10px var(--mono);letter-spacing:.14em;color:#9aa6bd}
+.rrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) 40px;gap:6px;padding:3px 0;border-top:1px solid #10151f;align-items:baseline}
+.rrow:first-of-type{border-top:0} .rrow span{overflow-wrap:anywhere} .rrow .l{color:#8b97b0} .rrow .v{color:#e8edf6}
+.rrow .o{text-align:right;font-weight:800;font-size:11px} .rrow .o.y{color:#4ade80} .rrow .o.x{color:#f87171} .rrow .o.u{color:#4b5569;letter-spacing:.1em}
+.rpts{margin-top:8px;display:flex;flex-direction:column;gap:2px}
+.rpts .pt{display:grid;grid-template-columns:38px minmax(0,1fr);gap:6px} .rpts .pt b{text-align:right}
+.rlist{margin:8px 0 0;padding:0;list-style:none} .rlist li{padding:2px 0} .rlist.veto li{color:#fca5a5} .rlist.veto li::before{content:"✗ ";font-weight:800}
+.rlist.wait li{color:#fde68a} .rlist.wait li::before{content:"… "}
+.rbuzz{margin-top:8px;color:#c6cfdf} .rbuzz a{color:#93c5fd;text-decoration:none;margin-right:10px;display:inline-block}
+.racts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px} .racts .btn,.racts a.btn{min-height:36px;padding:6px 12px;font-size:12px;text-decoration:none;display:inline-flex;align-items:center}
+.sgrid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px;margin-top:14px}
+@media (max-width:900px){.sgrid{grid-template-columns:minmax(0,1fr)}}
+.sbox{border:1px solid #161c2a;border-radius:6px;padding:10px 12px;background:#080a11;min-width:0}
+.sbox h3{margin:0 0 8px;font:700 11px var(--mono);letter-spacing:.14em;color:#9aa6bd;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.modes{display:flex;gap:6px;flex-wrap:wrap} .modes .btn{min-height:36px;padding:6px 12px;font-size:12px}
+.modes .btn.on.off{border-color:#6b7489;color:#e8edf6} .modes .btn.on.watch{border-color:#fbbf24;color:#fde68a;background:#2a1f05}
+.modes .btn.on.auto{border-color:#34d399;color:#bbf7d0;background:#06281a}
+.gates{font:11px/1.6 var(--mono);color:#8b97b0;margin:8px 0}
+.radar{max-height:340px;overflow-y:auto;font:12px var(--mono);-webkit-overflow-scrolling:touch}
+.rad{display:grid;grid-template-columns:40px minmax(0,.9fr) 58px minmax(0,1.6fr);gap:8px;padding:5px 0;border-top:1px solid #121826;align-items:baseline;cursor:pointer}
+.rad span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .rad .w{color:#6b7489} .rad .why{color:#8b97b0}
+.rad .vd{font-weight:800;font-size:11px} .rad .vd.BUY{color:#4ade80} .rad .vd.WATCH{color:#fbbf24} .rad .vd.SKIP{color:#f87171} .rad .vd.pre{color:#4b5569}
+.wrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr) 34px;gap:8px;padding:6px 0;border-top:1px solid #121826;align-items:center;font:12px var(--mono)}
+.wrow b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap} .wrow a{color:#93c5fd;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wrow button{background:none;border:1px solid #2a3244;color:#f87171;border-radius:4px;min-height:30px;font:700 13px var(--mono)}
+.wform{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.wform input{flex:1 1 180px;min-width:0;font:12px var(--mono);background:#05070c;color:var(--ink);border:1px solid #2a3244;border-radius:6px;padding:9px 10px;min-height:40px}
+.wform input#walletLabel{flex:0 1 130px}
+.small{font-size:11px} .sc td.n{text-align:right}
 .money{margin-top:12px;border-top:1px solid #161c2a;padding-top:10px}
 .money h3{margin:0 0 6px;font:700 11px var(--mono);letter-spacing:.14em;color:#9aa6bd}
 </style>
@@ -345,6 +393,42 @@ details.pc .inner{padding:4px 8px 8px}
   <section class="panel">
     <h2>TRADES <span id="tradeCount"></span></h2>
     <table><thead><tr><th>closed</th><th>token</th><th>cost</th><th>out</th><th>P&amp;L</th><th>why</th></tr></thead><tbody id="trades"></tbody></table>
+  </section>
+
+  <section class="panel" id="snipePanel">
+    <h2>SNIPER · CHECK A COIN <span id="snipeMode"></span></h2>
+    <form class="sform" id="checkForm" autocomplete="off">
+      <input id="checkInput" type="text" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go"
+        placeholder="paste a coin address, or a DexScreener / pump.fun / GMGN / Birdeye link" aria-label="coin address">
+      <label class="tog"><input type="checkbox" id="checkBuy" checked> buy if it looks good</label>
+      <button class="btn go" type="submit" id="checkBtn">Check</button>
+    </form>
+    <div class="msg" id="checkMsg" role="status"></div>
+    <div id="checkNow"></div>
+    <div id="checkOld"></div>
+    <div class="sgrid">
+      <div class="sbox">
+        <h3>THE FAST LANE <span id="laneNote"></span></h3>
+        <div class="modes" id="snipeModes"></div>
+        <div class="gates" id="snipeGates"></div>
+        <div class="radar" id="radar"></div>
+      </div>
+      <div class="sbox">
+        <h3>WALLETS YOU FOLLOW</h3>
+        <div id="wallets"></div>
+        <form class="wform" id="walletForm" autocomplete="off">
+          <input id="walletAddr" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="a trader's Solana wallet address" aria-label="wallet address">
+          <input id="walletLabel" type="text" maxlength="24" placeholder="name (optional)" aria-label="wallet name">
+          <button class="btn" type="submit">Follow</button>
+        </form>
+        <p class="muted small">When a wallet you follow buys a coin, the sniper checks that coin within a minute and, on AUTO, buys it
+          if it passes every rug check and scores a BUY. Up to 25 wallets.</p>
+      </div>
+    </div>
+    <div class="sbox" style="margin-top:12px">
+      <h3>WHAT IT LEARNED <span class="muted" style="letter-spacing:0">from its own closed trades</span></h3>
+      <div id="scorecard"></div>
+    </div>
   </section>
 
   <section class="panel">
@@ -808,8 +892,9 @@ function planBlock(p, W, i, n, bare){
   const tbl = el("table", "plan");
   const leftBag = num(p.tokens_raw) !== null && num(p.tokens_raw_initial) ? p.tokens_raw / p.tokens_raw_initial * 100 : null;
   const armed = num(p.peak_gain_pct) !== null && num(W.trail_arm_pct) !== null && p.peak_gain_pct >= W.trail_arm_pct;
-  const trail = !W.trail_pct ? "off" : armed ? (peakMC !== null ? `armed: sells the rest under ${mcap(peakMC * (1 - W.trail_pct / 100))} MC (-${W.trail_pct}% off the best)` : `armed: sells ${W.trail_pct}% off the best`)
-    : `arms at +${W.trail_arm_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 + W.trail_arm_pct / 100))} MC)` : "") + `, then sells ${W.trail_pct}% off the best`;
+  const lock = W.lock_pct ? `, and never back under +${W.lock_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 + W.lock_pct / 100))} MC)` : "") : "";
+  const trail = (!W.trail_pct ? "off" : armed ? (peakMC !== null ? `armed: sells the rest under ${mcap(peakMC * (1 - W.trail_pct / 100))} MC (-${W.trail_pct}% off the best)` : `armed: sells ${W.trail_pct}% off the best`)
+    : `arms at +${W.trail_arm_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 + W.trail_arm_pct / 100))} MC)` : "") + `, then sells ${W.trail_pct}% off the best`) + (W.trail_pct ? lock : "");
   const stop = !W.stop_loss_pct ? "off" : entryMC !== null ? `sells all under ${mcap(entryMC * (1 - W.stop_loss_pct / 100))} MC (-${W.stop_loss_pct}%)` : `-${W.stop_loss_pct}%`;
   const held = num(p.opened_ts) !== null ? (Date.now() / 1000 - p.opened_ts) / 3600 : null;
   const rungs = el("div", "rungs"), done = new Set((p.rungs_done || []).map(Number));
@@ -825,7 +910,10 @@ function planBlock(p, W, i, n, bare){
     ["banked from this coin", signed(num(p.realized_usd))], ["take-profit ladder", rungs],
     ["take-profit (all)", W.take_profit_pct ? "+" + W.take_profit_pct + "%" + (entryMC !== null ? ` (${mcap(entryMC * (1 + W.take_profit_pct / 100))} MC)` : "") : "off"],
     ["trailing stop", trail], ["stop-loss", stop],
-    ["max hold", W.max_hold_hours ? (held === null ? W.max_hold_hours + "h" : Math.max(0, W.max_hold_hours - held).toFixed(1) + "h left of " + W.max_hold_hours + "h") : "off"],
+    ["max hold", W.max_hold_hours ? (held === null ? W.max_hold_hours + "h" : Math.max(0, W.max_hold_hours - held).toFixed(1) + "h left of " + W.max_hold_hours + "h")
+      + (W.ride_x > 1 ? `, rides up to ${W.ride_x}x longer while buyers lead` : "") : "off"],
+    ...(W.stall_minutes ? [["no momentum", `out if it hasn't made +${W.stall_gain_pct}% within ${W.stall_minutes} min`]] : []),
+    ["bought by", p.plan === "snipe" ? "the sniper" + (p.source ? ` (${p.source})` : "") + (num(p.score) !== null ? `, score ${p.score}/100` : "") : "the desk (Jev's pick)"],
     ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells all under 0.20)"]];
   for (const [k, v] of rows){ const tr = el("tr"), td = el("td", k === "open P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : "");
     if (v instanceof Node) td.appendChild(v); else td.textContent = v; tr.append(el("td", "muted", k), td); tbl.appendChild(tr); }
@@ -1310,7 +1398,7 @@ function liveDraw(now){
   ctx.strokeStyle = "#1b2233"; ctx.beginPath(); ctx.moveTo(plotR + .5, 0); ctx.lineTo(plotR + .5, plotB); ctx.moveTo(0, plotB + .5); ctx.lineTo(W, plotB + .5); ctx.stroke();
   if (!L){ say("no coin under the lens yet"); liveUi(null); return; }
   const k = liveSupply(L), useMc = view.liveScale === "mc" && !!k, val = p => useMc ? p * k : p, fmt = v => useMc ? "$" + compact(v) : fmtP(v);
-  const bars = liveBars(L, view.liveIv), cur = livePrice(L), q = liveHeld(L.mint), Wt = (lastStatus && lastStatus.watch) || {};
+  const bars = liveBars(L, view.liveIv), cur = livePrice(L), q = liveHeld(L.mint), W0 = (lastStatus && lastStatus.watch) || {}, Wt = q && q.plan === "snipe" ? Object.assign({}, W0, W0.snipe || {}) : W0;
   const entryP = q && num(q.entry_price_usd) ? q.entry_price_usd : q && num(q.entry_mcap) && k ? q.entry_mcap / k : null;
   const entryMc = q ? (num(q.entry_mcap) ?? (entryP !== null && k ? entryP * k : null)) : null;
   if (now - liveUiAt > 250){ liveUiAt = now; liveUi(L, k, cur, entryMc, q, bars); }
@@ -1671,7 +1759,8 @@ function render(d){
     sm.append(el("span", "t", (ps.length > 1 ? (i + 1) + ". " : "") + "$" + clip(q.ticker || q.mint.slice(0, 6), 12)), el("span", "m", `MC ${mcap(n.entry)} → ${mcap(n.now)}`),
       el("b", n.g === null ? "" : n.g >= 0 ? "pos" : "neg", pcTxt(n.g)), el("b", n.pnl === null ? "" : n.pnl >= 0 ? "pos" : "neg", n.pnl === null ? "P&L —" : signed(n.pnl)));
     det.appendChild(sm);
-    const inner = el("div", "inner"); inner.appendChild(planBlock(q, W, 0, 1, true)); det.appendChild(inner);
+    const Wq = q.plan === "snipe" ? Object.assign({}, W, W.snipe || {}) : W;      // a sniper buy runs the sniper's exits
+    const inner = el("div", "inner"); inner.appendChild(planBlock(q, Wq, 0, 1, true)); det.appendChild(inner);
     const want = view.openPlans.has(q.mint) ? view.openPlans.get(q.mint) : ps.length === 1;
     det.open = want;
     det.addEventListener("toggle", () => view.openPlans.set(q.mint, det.open));
@@ -1718,7 +1807,167 @@ function render(d){
     if (t.note) row.append(el("div", "muted", t.note));
     tests.appendChild(row);
   }
+  sniperRender(d);
 }
+// ---------- the sniper: your own checks, the fast lane, the wallets you follow ----------
+const GROUPS = [["rug", "RUG SAFETY"], ["who", "WHO'S BEHIND IT"], ["market", "WHERE IT IS"], ["flow", "MOMENTUM NOW"],
+  ["smart", "SMART MONEY"], ["attention", "ATTENTION"], ["jev", "JEV"]];
+const checkView = {pending: null, open: new Set()};
+function scoreColor(v){ return v >= 70 ? "#34d399" : v >= 45 ? "#fbbf24" : "#f87171"; }
+function reportCard(rep, full){
+  const box = el(full ? "div" : "details", "rep"); box.dataset.id = rep.id;
+  if (!full){ box.open = checkView.open.has(rep.id); box.addEventListener("toggle", () => { if (box.open) checkView.open.add(rep.id); else checkView.open.delete(rep.id); }); }
+  const head = el(full ? "div" : "summary"), h = el("div", "rhead");
+  h.appendChild(el("span", "verdict " + (rep.verdict || "WATCH"), rep.verdict || "?"));
+  const tk = el("span", "tk"); tk.appendChild(coinLink(rep.ticker, rep.mint)); h.appendChild(tk);
+  const sc = num(rep.score), bar = el("span", "sbar"), i = el("i"), b = el("b");
+  b.style.width = Math.max(0, Math.min(100, sc || 0)) + "%"; b.style.background = scoreColor(sc || 0); i.appendChild(b);
+  bar.append(i, el("span", "", (sc === null ? "?" : sc) + "/100")); h.appendChild(bar);
+  if (rep.setup && rep.setup !== "unknown") h.appendChild(el("span", "chip", rep.setup));
+  if (rep.source) h.appendChild(el("span", "chip", rep.source === "you" ? "you asked" : clip(rep.source, 34)));
+  h.appendChild(el("span", "when", ago(rep.time) + " ago"));
+  head.appendChild(h); box.appendChild(head);
+  const body = el("div", "rbody");
+  if (rep.headline) body.appendChild(el("div", "rline", rep.headline));
+  if (rep.action) body.appendChild(el("div", "rline act " + (rep.bought ? "ok" : "no"), (rep.bought ? "✓ " : "→ ") + rep.action));
+  if (rep.note) body.appendChild(el("div", "rline", rep.note));
+  const F = rep.facts || {};
+  const facts = [num(F.mcap) !== null ? "MC $" + compact(F.mcap) : null, num(F.liq) !== null ? "liq $" + compact(F.liq) : null,
+    num(F.age_min) !== null ? (F.age_min < 120 ? Math.round(F.age_min) + "m old" : F.age_min < 2880 ? (F.age_min / 60).toFixed(1) + "h old" : (F.age_min / 1440).toFixed(1) + "d old") : null,
+    num(F.holders) !== null ? compact(F.holders) + " holders" : null, F.dex || null, num(F.price) !== null ? fmtP(F.price) : null].filter(Boolean);
+  if (facts.length) body.appendChild(el("div", "rfacts", facts.join(" · ")));
+  if ((rep.veto || []).length){ const ul = el("ul", "rlist veto"); rep.veto.forEach(v => ul.appendChild(el("li", "", v))); body.appendChild(ul); }
+  if ((rep.wait || []).length){ const ul = el("ul", "rlist wait"); rep.wait.forEach(v => ul.appendChild(el("li", "", v))); body.appendChild(ul); }
+  const groups = el("div", "rgroups");
+  for (const [g, title] of GROUPS){
+    const rows = (rep.checks || []).filter(c => c.group === g); if (!rows.length) continue;
+    const gb = el("div", "rgroup"); gb.appendChild(el("h4", "", title));
+    rows.forEach(c => { const r = el("div", "rrow");
+      r.append(el("span", "l", c.label), el("span", "v", (c.value ?? "—") + (c.note ? " · " + c.note : "")),
+        el("span", "o " + (c.ok === true ? "y" : c.ok === false ? "x" : "u"), c.ok === true ? "PASS" : c.ok === false ? "DROP" : "····")); gb.appendChild(r); });
+    groups.appendChild(gb);
+  }
+  body.appendChild(groups);
+  const pts = (rep.points || []).slice().sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts));
+  if (pts.length){ const pb = el("div", "rpts");
+    pb.appendChild(el("div", "muted", "THE SCORE: starts at 25, then"));
+    pts.forEach(p => { const r = el("div", "pt"); r.append(el("b", p.pts >= 0 ? "pos" : "neg", (p.pts >= 0 ? "+" : "−") + Math.abs(p.pts)), el("span", "", p.label)); pb.appendChild(r); });
+    body.appendChild(pb); }
+  const bz = rep.buzz || {};
+  const bzb = el("div", "rbuzz");
+  if (bz.status === "ok"){ bzb.append(el("b", "", "Online: "), document.createTextNode((bz.mentions || "?") + " talk" + (bz.platforms && bz.platforms.length ? " on " + bz.platforms.join(", ") : "")
+      + (bz.linked_to ? " · about " + bz.linked_to : "") + (bz.summary ? " · " + bz.summary : "")));
+    if ((bz.sources || []).length){ const ls = el("div"); bz.sources.forEach(x => { if (!/^https:\/\//.test(x.url)) return; const a = el("a", "", "↗ " + clip(x.title || x.url, 48)); a.href = x.url; a.target = "_blank"; a.rel = "noopener noreferrer"; ls.appendChild(a); }); bzb.appendChild(ls); } }
+  if (bzb.childNodes.length) body.appendChild(bzb);
+  const acts = el("div", "racts");
+  const fresh = Date.now() - Date.parse(rep.time) < 170000;
+  if (!rep.bought && rep.verdict !== "SKIP" && fresh && MINT_RE.test(rep.mint || "")){
+    const bb = el("button", "btn go", "Buy it"); bb.type = "button";
+    bb.addEventListener("click", () => {
+      const live = lastStatus && lastStatus.mode === "live";
+      if (!confirm((live ? "REAL MONEY: " : "") + `Buy $${rep.ticker || rep.mint.slice(0, 6)} at half the sniper's normal size? It scored ${rep.score}/100 (${rep.verdict}).`)) return;
+      admin("/api/check-buy", {id: rep.id}).then(res => { if (res && res.text) $("checkMsg").textContent = res.text; });
+    });
+    acts.appendChild(bb);
+  }
+  if (MINT_RE.test(rep.mint || "")){
+    const cb = el("button", "btn", "Chart"); cb.type = "button";
+    cb.addEventListener("click", () => { view.pin = {mint: rep.mint, ticker: rep.ticker, until: Date.now() + 120000}; if (lastStatus) analysisRender(lastStatus);
+      $("anlPanel").scrollIntoView({behavior: reduceMotion ? "auto" : "smooth", block: "start"}); });
+    acts.appendChild(cb);
+    const link = (label, href) => { const a = el("a", "btn", label); a.href = href; a.target = "_blank"; a.rel = "noopener noreferrer"; acts.appendChild(a); };
+    link("DexScreener ↗", "https://dexscreener.com/solana/" + rep.mint);
+    link("RugCheck ↗", "https://rugcheck.xyz/tokens/" + rep.mint);
+    link("Solscan ↗", "https://solscan.io/token/" + rep.mint);
+  }
+  body.appendChild(acts);
+  box.appendChild(body);
+  return box;
+}
+function sniperRender(d){
+  const S = d.sniper || {}, checks = d.checks || [], mode = S.mode || "off", live = d.mode === "live";
+  $("snipeMode").textContent = "FAST LANE " + mode.toUpperCase() + (S.wallets && S.wallets.length ? ` · ${S.wallets.length} WALLET${S.wallets.length > 1 ? "S" : ""} FOLLOWED` : "");
+  // the latest check, in full; the ones before it, one line each
+  const now = $("checkNow"), old = $("checkOld"), key = checks.map(c => c.id + (c.bought ? "b" : "") + (c.action || "")).join("|") + "|" + Math.floor(Date.now() / 30000);
+  if (now.dataset.key !== key){ now.dataset.key = key; now.textContent = ""; old.textContent = "";
+    if (checks[0]) now.appendChild(reportCard(checks[0], true));
+    checks.slice(1).forEach(c => old.appendChild(reportCard(c, false))); }
+  if (checkView.pending){
+    const p = checkView.pending, done = checks.find(c => c.mint === p.mint && Date.parse(c.time) >= p.at - 2000);
+    if (done){ checkView.pending = null; $("checkMsg").textContent = ""; }
+    else $("checkMsg").textContent = `checking ${p.mint.slice(0, 4)}…${p.mint.slice(-4)}: ` + (d.working && d.working.mint === p.mint ? d.working.step || "working" : "queued") + " · usually 10 to 40 seconds";
+  }
+  // the fast lane
+  const mb = $("snipeModes"), mk = mode + live;
+  if (mb.dataset.key !== mk){ mb.dataset.key = mk; mb.textContent = "";
+    [["off", "OFF", "only the coins you paste"], ["watch", "WATCH", "finds and checks coins every minute, never buys"], ["auto", "AUTO", "buys every coin that scores a BUY"]].forEach(([m, label, tip]) => {
+      const b = el("button", "btn " + m + (mode === m ? " on" : ""), label); b.type = "button"; b.title = tip;
+      b.addEventListener("click", () => { if (m === mode) return;
+        if (m === "auto" && live && !confirm("REAL MONEY: the sniper will buy coins on its own (inside your size and exposure limits). Turn AUTO on?")) return;
+        admin("/api/snipe-mode", {mode: m}); });
+      mb.appendChild(b); });
+    mb.appendChild(el("span", "muted small", {off: "off: only the coins you paste get checked", watch: "watching: finds and checks coins every minute, never buys",
+      auto: live ? "AUTO with real money: buys every coin that scores a BUY" : "AUTO (paper): buys every coin that scores a BUY"}[mode] || "")); }
+  const G = S.gates || {}, P = ((d.watch || {}).snipe) || {}, bz = S.buzz || {};
+  const ladder = (P.ladder || []).map(([g, s]) => `${s}% at +${g}%`).join(", ");
+  $("snipeGates").textContent = `looks at coins ${G.min_age_minutes ?? "?"}m to ${G.max_age_hours ?? "?"}h old · MC $${compact(G.min_mcap_usd ?? null)} to $${compact(G.max_mcap_usd ?? null)}`
+    + ` · liquidity ≥ $${compact(G.min_liquidity_usd ?? null)} · biggest wallet ≤ ${G.max_top_wallet_pct ?? "?"}% · top 10 ≤ ${G.max_top10_pct ?? "?"}% · dev ≤ ${G.max_dev_pct ?? "?"}%`
+    + ` · buys at ${S.buy_score ?? "?"}/100.  Exits: ` + [P.stop_loss_pct ? `stop −${P.stop_loss_pct}%` : null, ladder ? "sells " + ladder : null,
+      P.trail_pct ? `trail ${P.trail_pct}% off the top after +${P.trail_arm_pct}%` : null, P.stall_minutes ? `out if not +${P.stall_gain_pct}% within ${P.stall_minutes} min` : null,
+      P.max_hold_hours ? `${P.max_hold_hours}h max, riding up to ${P.ride_x || 1}× longer while buyers lead` : null].filter(Boolean).join(" · ")
+    + `.  Web search for buzz: ` + (bz.enabled ? `on (${bz.used_hour ?? 0}/${bz.per_hour} this hour)` : "off (needs ANTHROPIC_API_KEY)");
+  const note = S.note || {};
+  $("laneNote").textContent = S.last_round ? `last look ${ago(S.last_round)} ago · ${note.candidates ?? 0} candidates · ${note.checked ?? 0} checked deep` : mode === "off" ? "off" : "first look soon";
+  const rb = $("radar"), radar = d.radar || [], rkey = radar.map(x => x.mint + (x.verdict || "") + (x.score ?? "")).join("|") + Math.floor(Date.now() / 30000);
+  if (rb.dataset.key !== rkey){ rb.dataset.key = rkey; rb.textContent = "";
+    if (!radar.length) rb.appendChild(el("div", "empty", mode === "off" ? "the fast lane is off: set WATCH or AUTO" : "nothing looked at yet"));
+    radar.slice(0, 30).forEach(x => { const r = el("div", "rad"); r.title = x.why || "";
+      const tk = el("span"); tk.appendChild(coinLink(x.ticker, x.mint));
+      r.append(el("span", "w", ago(x.time)), tk, el("span", "vd " + (x.verdict || "pre"), x.verdict ? `${x.verdict} ${x.score ?? ""}` : "pass"),
+        el("span", "why", (x.sources || []).join(", ") + (num(x.mcap) !== null ? " · MC $" + compact(x.mcap) : "") + (x.why ? " · " + x.why : "")));
+      r.addEventListener("click", () => { const c = (lastStatus.checks || []).find(c => c.id && c.id === x.id); if (c){ checkView.open.add(c.id); $("checkNow").dataset.key = ""; sniperRender(lastStatus);
+        const node = document.querySelector(`.rep[data-id="${c.id}"]`); if (node) node.scrollIntoView({behavior: reduceMotion ? "auto" : "smooth", block: "center"}); } });
+      rb.appendChild(r); }); }
+  // wallets
+  const wb = $("wallets"), ws = S.wallets || [], wkey = ws.map(w => w.address + w.label).join("|");
+  if (wb.dataset.key !== wkey){ wb.dataset.key = wkey; wb.textContent = "";
+    if (!ws.length) wb.appendChild(el("div", "empty", "no wallets yet: add a trader's wallet below"));
+    ws.forEach(w => { const r = el("div", "wrow"), a = el("a", "", w.address.slice(0, 6) + "…" + w.address.slice(-6));
+      a.href = "https://solscan.io/account/" + w.address; a.target = "_blank"; a.rel = "noopener noreferrer";
+      r.append(el("b", "", w.label), a);
+      if (w.from === "page"){ const x = el("button", "", "×"); x.type = "button"; x.title = "unfollow";
+        x.addEventListener("click", () => { if (confirm("Stop following " + w.label + "?")) admin("/api/wallets", {remove: w.address}); }); r.appendChild(x); }
+      else r.appendChild(el("span", "muted small", "var"));
+      wb.appendChild(r); }); }
+  // what it learned
+  const sb = $("scorecard"), rows = d.scorecard || [], skey = JSON.stringify(rows);
+  if (sb.dataset.key !== skey){ sb.dataset.key = skey; sb.textContent = "";
+    if (!rows.length) sb.appendChild(el("div", "empty", "nothing yet: this fills in as coins are sold. Each signal it bought on gets a win rate, so you can see which ones actually pay."));
+    else { const t = el("table", "sc"), hd = el("tr"); ["signal", "coins", "won", "avg", "P&L"].forEach(x => hd.appendChild(el("th", "", x))); t.appendChild(hd);
+      rows.forEach(x => { const tr = el("tr"); tr.append(el("td", "", x.signal), el("td", "n", String(x.n)), el("td", "n", x.win_pct + "%"),
+        el("td", "n " + ((x.avg_pct || 0) >= 0 ? "pos" : "neg"), x.avg_pct === null ? "—" : pcTxt(x.avg_pct)), el("td", "n " + (x.pnl >= 0 ? "pos" : "neg"), signed(x.pnl))); t.appendChild(tr); });
+      sb.appendChild(t); } }
+}
+$("checkForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = $("checkInput").value.trim(), m = (text.split(/[?#]/)[0].match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g) || []).pop();
+  if (!m){ $("checkMsg").textContent = "paste a Solana coin address, or a link with one in it"; return; }
+  const buy = $("checkBuy").checked, live = lastStatus && lastStatus.mode === "live";
+  if (buy && live && !confirm("REAL MONEY: if this coin passes every check and scores a BUY, the bot buys it right away. Go?")) return;
+  checkView.pending = {mint: m, at: Date.now()};
+  const res = await admin("/api/check", {text, buy});
+  if (res && res.ok){ $("checkInput").value = ""; $("checkMsg").textContent = res.text; fastUntil = Date.now() + 90000; }
+  else { checkView.pending = null; if (res && res.text) $("checkMsg").textContent = res.text; }
+});
+$("walletForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const address = $("walletAddr").value.trim(), label = $("walletLabel").value.trim();
+  if (!MINT_RE.test(address)){ $("adminMsg").textContent = ""; alert("That isn't a Solana wallet address."); return; }
+  const res = await admin("/api/wallets", {add: {address, label}});
+  if (res && res.ok){ $("walletAddr").value = ""; $("walletLabel").value = ""; }
+  else if (res && res.text) alert(res.text);
+});
+
 function tickCountdown(){
   const box = document.getElementById("countdown"), d = lastStatus; if (!box || !d) return;
   if (d.working){ box.textContent = "scanning now"; return; }

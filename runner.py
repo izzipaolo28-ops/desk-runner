@@ -39,6 +39,7 @@ import collect  # noqa: E402
 import filter as desk_filter  # noqa: E402  (the desk's filter.py, not the builtin)
 import main  # noqa: E402
 import pick as desk_pick  # noqa: E402
+import snipe  # noqa: E402
 import thresholds  # noqa: E402
 from jupiter import Jupiter  # noqa: E402
 from public_list import PublicList  # noqa: E402
@@ -74,6 +75,11 @@ try:
     TEST_SWAP_USD = min(20.0, max(0.5, float(os.environ.get("TEST_SWAP_USD", "1"))))
 except ValueError:
     TEST_SWAP_USD = 1.0
+DESK_GATE = "off" if os.environ.get("DESK_GATE", "on").strip().lower() == "off" else "on"
+try:
+    DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "50"))))
+except ValueError:
+    DESK_GATE_SCORE = 50.0
 SCAN_NOW_COOLDOWN = 60          # seconds: "Scan now" can't fire twice inside a minute (GeckoTerminal, Jev credits)
 
 
@@ -140,6 +146,9 @@ class Runner:
         main.universe = universe                  # trade only what Jupiter can, trending first
         main.book = SlotBook(self)                # main stands down only when every slot is full
         self._instrument()
+        self.sniper = snipe.Sniper(self)          # your own checks, the wallets you follow, the fast lane
+        self._watching = False
+        collect.WAIT_HOOK = self.watch_if_due     # a scan waiting on GeckoTerminal keeps watching prices meanwhile
 
     # ---------- the live feed: main.run_once is the desk's code, unchanged; each step it calls is wrapped ----------
     def _instrument(self):
@@ -165,6 +174,7 @@ class Runner:
         def step(agent, name, t):
             R.coin = _coin(t)
             st.set_working(agent, name, n=R.seen_n, of=R.seen_of, **R.coin)
+            R.watch_if_due()                      # a scan takes minutes: the coins held are still watched
 
         def free_kill(t):
             R.seen_n += 1
@@ -288,6 +298,44 @@ class Runner:
                              a.get("worth_trading_at_all", {}).get("noul"), "worth")
         return r
 
+    def watch_if_due(self):
+        """WATCH between the steps of a scan or a check (they can take minutes, and a memecoin can drop 40% in one).
+        Never touches the scan's own 'working' marker; never runs inside itself."""
+        if self._watching or not self.cfg.watch or not self.state.positions():
+            return
+        now = self.clock()
+        if self.last_watch is not None and now - self.last_watch < self.cfg.watch_seconds:
+            return
+        self._watching = True
+        try:
+            self.last_watch = now
+            self.seats.watch_poll(clock=self.clock)
+        except Exception as exc:
+            self.state.error(f"watch during a scan: {type(exc).__name__}: {exc}")
+        finally:
+            self._watching = False
+
+    def gate(self, order):
+        """Every desk pick gets the sniper's full check before a cent goes in: RugCheck, locked liquidity, the dev
+        wallet, bundles, copycats, people able to sell, buyers vs sellers right now. (True, why) to buy."""
+        tok = order["token"]
+        if DESK_GATE == "off":
+            return True, "gate off"
+        rep = self.sniper.check(tok["address"], "desk pick")
+        if rep["verdict"] == "SKIP":
+            ok, why = False, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"
+        elif rep.get("momentum_ok") is False:
+            ok, why = False, "sellers are ahead right now"
+        elif (rep.get("score") or 0) < DESK_GATE_SCORE:
+            ok, why = False, f"sniper score {rep.get('score')} is under {DESK_GATE_SCORE:g}"
+        else:
+            ok, why = True, f"sniper score {rep.get('score')}"
+        rep["action"] = ("desk pick: passed the sniper's checks, buying" if ok else f"desk pick not bought: {why}")
+        self.sniper._save(rep)
+        if not ok:
+            self.state.feed("chief", "cut", f"desk pick stopped by the sniper's checks: {why}", tok.get("ticker"), tok["address"])
+        return ok, why
+
     def slots_free(self):
         return len(self.state.positions()) < self.cfg.max_positions
 
@@ -298,6 +346,8 @@ class Runner:
         if self.test_requested:                   # asked for from the dashboard; runs here, never beside a trade
             self.test_requested = False
             return self.run_test_swap()
+        if self.sniper.queue or self.sniper.forced:   # a coin you pasted (or "buy anyway") goes before anything else
+            return self.sniper.run_queued()
         done = []                                 # (weight, what): a sale > a scan > a RISK check > a WATCH check
         holding = bool(self.state.positions()) or book.held() is not None
         if holding:
@@ -328,6 +378,8 @@ class Runner:
                     done.append((0, "paused"))
             elif self.last_cycle is None or now - self.last_cycle >= CYCLE_SECONDS:
                 done.append((3, self.cycle(now)))
+            elif self.sniper.due(now):           # the fast lane: new launches, promoted coins, your wallets' buys
+                done.append((3, self.sniper.round(now)))
         if not done:
             return "holding" if holding else "waiting"
         return max(enumerate(done), key=lambda x: (x[1][0], x[0]))[1][1]
@@ -350,6 +402,12 @@ class Runner:
                              f"{collect.RPC_FAILURES[-1][:200]}. A free key from helius.dev in SOLANA_RPC_URL fixes this.")
         self.report(order, stats)
         if order:
+            ok, why = self.gate(order)
+            if not ok:
+                book.sit(f"{order['token']['address']}:{order['token'].get('network_id') or collect.FOMO_NET['solana']}", "sniper_gate")
+                self.seats.release_unfilled(order, f"sniper gate: {why}")
+                self.snapshot()
+                return "cycle: gate said no"
             try:
                 self.seats.send_to_seats(order, bank)
             finally:
@@ -490,9 +548,24 @@ class Runner:
                  start_bank=self.cfg.paper_bank_usd if not self.cfg.live else None, overrides=OVERRIDES,
                  practice=PRACTICE["active"], practice_note=PRACTICE["note"], watch=self.cfg.watch_plan(),
                  max_daily_loss_pct=self.cfg.max_daily_loss_pct,
-                 thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD})
+                 thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD},
+                 sniper=self.sniper.status(), scorecard=snipe.scorecard(d.get("trades")))
         d.pop("shadow", None)
+        d.pop("wallet_sigs", None)
         return d
+
+    # ---------- the sniper, from the page (admin token checked by the handler) ----------
+    def request_check(self, text, buy):
+        return self.sniper.request(text, buy)
+
+    def request_check_buy(self, rid):
+        return self.sniper.request_buy(str(rid or ""))
+
+    def set_snipe_mode(self, mode):
+        return self.sniper.set_mode(str(mode or "").strip().lower())
+
+    def edit_wallets(self, body):
+        return self.sniper.edit_wallets(body if isinstance(body, dict) else {})
 
     def set_goal(self, value):
         """The goal on the bar at the top, set from the page. 0 or empty clears it (GOAL_USD then applies)."""
@@ -555,7 +628,8 @@ def make_handler(runner, admin_token):
             return self._send(404, {"detail": "not found"})
 
         def do_POST(self):
-            if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap", "/api/goal"):
+            if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap", "/api/goal",
+                                 "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets"):
                 return self._send(404, {"detail": "not found"})
             given = self.headers.get("X-Admin-Token", "")
             if len(admin_token) < MIN_ADMIN_TOKEN or not hmac.compare_digest(given.encode(), admin_token.encode()):
@@ -566,13 +640,29 @@ def make_handler(runner, admin_token):
             if self.path == "/api/test-swap":
                 code, msg = runner.request_test()
                 return self._send(code, {"detail": msg})
-            if self.path == "/api/goal":
+            body = None
+            if self.path in ("/api/goal", "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets"):
                 try:
-                    n = min(int(self.headers.get("Content-Length") or 0), 1000)
+                    n = min(int(self.headers.get("Content-Length") or 0), 2000)
                     body = json.loads(self.rfile.read(n) or b"{}")
                 except (ValueError, OSError):
-                    return self._send(400, {"detail": "send {\"goal_usd\": 100000}"})
-                code, msg = runner.set_goal(body.get("goal_usd") if isinstance(body, dict) else None)
+                    body = None
+                if not isinstance(body, dict):
+                    return self._send(400, {"detail": "send a JSON object"})
+            if self.path == "/api/goal":
+                code, msg = runner.set_goal(body.get("goal_usd"))
+                return self._send(code, {"detail": msg})
+            if self.path == "/api/check":
+                code, msg = runner.request_check(body.get("text") or body.get("mint"), body.get("buy") is True)
+                return self._send(code, {"detail": msg})
+            if self.path == "/api/check-buy":
+                code, msg = runner.request_check_buy(body.get("id"))
+                return self._send(code, {"detail": msg})
+            if self.path == "/api/snipe-mode":
+                code, msg = runner.set_snipe_mode(body.get("mode"))
+                return self._send(code, {"detail": msg})
+            if self.path == "/api/wallets":
+                code, msg = runner.edit_wallets(body)
                 return self._send(code, {"detail": msg})
             runner.set_paused(self.path == "/api/pause", "paused from the dashboard")
             return self._send(200, {"paused": bool(runner.status().get("paused"))})
@@ -684,6 +774,18 @@ class Stopped:
         return 409, self.reason
 
     def set_goal(self, value):
+        return 409, self.reason
+
+    def request_check(self, text, buy):
+        return 409, self.reason
+
+    def request_check_buy(self, rid):
+        return 409, self.reason
+
+    def set_snipe_mode(self, mode):
+        return 409, self.reason
+
+    def edit_wallets(self, body):
         return 409, self.reason
 
     def tick(self):

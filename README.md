@@ -121,12 +121,55 @@ desk monitors show the balance, fills, tickets, P&L and coins per scan. threshol
 lens with its real value next to every rule, ✓ or ✗. The live feed lists every coin: what was cut and why, what Jev
 was asked, what was bought and sold. Tap a coin to open its DexScreener chart.
 
+## The sniper (SNIPER · CHECK A COIN, near the bottom of the page)
+
+**Check a coin.** Paste a coin address, or any link with one in it (DexScreener, pump.fun, GMGN, Birdeye, Solscan),
+and tap **Check**. Within a minute you get a report and a score out of 100:
+
+| group | what it checks |
+|---|---|
+| rug safety | mint and freeze authority revoked (from the chain itself), Token-2022 traps, the biggest wallet and the top 10 (pools excluded), RugCheck's report (rugged, its danger list), liquidity locked or burned (or still on the bonding curve), people can actually sell |
+| who's behind it | how much the dev / creator still holds, the dev wallet's history (an old busy wallet vs one made right before the launch), RugCheck's insider wallets, a bundled launch (many wallets buying in the very first block), **copycats** (an older coin with the same ticker and 3x the liquidity = this one is a knock-off), holders |
+| where it is | age, market cap, liquidity, fresh launch / early runner / second leg, graduated from the curve |
+| momentum now | every trade on the pool: different wallets buying in the last 5 min, buy dollars vs sell dollars, the biggest buy, volume speeding up, the price in the last 5 min |
+| smart money | the wallets you follow: did they buy it, do they hold it |
+| attention | socials, paid DexScreener boosts, which lists it's on, and a web search for posts on X, Reddit, TikTok, YouTube and news (only with `ANTHROPIC_API_KEY`) |
+| Jev | the desk's read of the market shape, whether the move is spent, the holder exit risk |
+
+Any single rug-safety failure, a copycat, or "nobody can sell" is a **SKIP**, whatever the score. Unknown is never a
+pass: a check that couldn't be read is a **WATCH**. A **BUY** needs 70/100 (`SNIPE_BUY_SCORE`) and buyers ahead
+right now. With **buy if it looks good** ticked, a BUY is bought at once; untick it to only check, then **Buy it**
+buys at half size (never a SKIP).
+
+**The fast lane.** Every minute (`SNIPE_SCAN_SECONDS`) it looks at new pools, GeckoTerminal's 5-minute trending,
+DexScreener's newest profiles, boosts and community takeovers, and every buy by a wallet you follow. A cheap first
+look decides which two get the full check. **OFF** = only your own checks, **WATCH** = finds and checks, never buys,
+**AUTO** = buys every BUY. Paper starts on AUTO, live starts on WATCH (`SNIPE_MODE` sets it).
+
+**Wallets you follow.** Add any trader's Solana wallet on the page (or `SMART_WALLETS=address:name,address:name`).
+When one of them buys a coin, that coin is checked within a minute, and a followed buy adds up to 24 points.
+
+**In and out.** The sniper's coins get their own plan: stop at −25%, sell 50% at +50% and 25% at +100%, a 20%
+trailing stop once it's been up 30%, and **out if it hasn't made +10% within 20 minutes** (no momentum, no stay).
+At 12 hours it sells, unless buyers are still ahead and it's still rising: then it rides up to 3x longer. Every
+number is a variable (`SNIPE_*` below).
+
+**What it learned.** Every closed sniper trade keeps the signals it was bought on. The page shows, for each signal,
+how many coins, how many won, the average result and the P&L, so you can see which signals actually pay and raise or
+lower the bar. It doesn't change its own rules: you do, with the variables.
+
+**Honest limits.** No bot can promise to beat the best traders. Most new memecoins go to zero, and the earlier you
+buy, the less there is to check. The sniper can't see private Telegram groups or a celebrity's post before
+everyone else. It only reads X, TikTok and Reddit through the web search, which needs `ANTHROPIC_API_KEY` and costs
+about $0.01 per search plus tokens (at most 3 searches a check, `BUZZ_PER_HOUR` checks an hour). Run it on paper first.
+
 ## Several coins at once
 
 The desk holds up to `MAX_POSITIONS` coins (default **5**) and keeps scanning while it has a free slot. Each coin
 gets its own plan below. All coins together stay under `MAX_EXPOSURE_PCT` (default **25**%) of everything (cash +
 what's in coins): a ticket that would go over is cut to the room left, or skipped. A coin it already holds is
-skipped by the scan, and a coin it just sold is set aside for an hour, so it never buys straight back in.
+skipped by the scan. A coin it sold at a profit is set aside for three hours and a coin it lost money on for a day,
+so it never chases a coin back up or buys a loser twice.
 `MAX_POSITIONS=1` gives back the one-coin desk.
 
 Prices are shown as **market caps** everywhere (DexScreener's market cap, never FDV): what it bought at, where it
@@ -135,7 +178,7 @@ is now, its best, and the market cap at which each ladder step, the trailing sto
 ## Taking profit and cutting losses (RISK + WATCH)
 
 While a coin is held, **WATCH** reads its real price and the last five minutes of buys and sells from DexScreener
-every minute, keeps the best price since the buy, and acts on the first rule that applies (one action per check,
+every 20 seconds (`WATCH_SECONDS`), also while a scan is running, keeps the best price since the buy, and acts on the first rule that applies (one action per check,
 no action on a number it can't read):
 
 | rule | default | what it does |
@@ -143,13 +186,25 @@ no action on a number it can't read):
 | stop-loss | `STOP_LOSS_PCT=30` | down 30% from the buy → sell everything |
 | take-profit (all) | `TAKE_PROFIT_PCT=0` (off) | up X% → sell everything |
 | max hold | `MAX_HOLD_HOURS=24` | held this long → sell everything |
+| profit lock | `TRAIL_LOCK_PCT=8` | once it has been up 20%, it never lets it fall back under +8%: sells everything there instead of giving the gain back |
 | trailing stop | `TRAIL_ARM_PCT=20`, `TRAIL_PCT=15` | once it has been up 20%, a 15% drop from its best price sells everything: "looks like the top" |
 | profit ladder | `SCALE_OUT=30:25,60:25,100:25` | at +30% sell 25% of the original bag, at +60% another 25%, at +100% another 25%; the last 25% rides on the trailing stop |
 | breaking down | `WATCH_DROP_M5_PCT=8` | in a loss and down 16%+ in 5 minutes with sellers 1.5× buyers → sell everything |
 | turning down | `WATCH_DROP_M5_PCT=8`, `WATCH_DERISK_PCT=50` | in profit, down 8%+ in 5 minutes with sellers 1.3× buyers → sell half of what's left (at most every 10 minutes) |
 | spike | `WATCH_PUMP_M5_PCT=20`, `WATCH_PUMP_SELL_PCT=30` | up 20%+ in 5 minutes while 20%+ in profit → take 30% off (at most every 15 minutes) |
 
-RISK's volume rule still runs every 5 minutes on top (volume ratio under 0.20 → sell everything). `WATCH=off`
+RISK's volume rule still runs every 5 minutes on top: volume ratio under 0.20 on **two checks in a row** sells
+everything. It only applies to a pool more than 2 hours old and 20 minutes after the buy (five minutes of volume is
+noise, and a pump.fun coin moving to its own pool pauses trading for a few minutes).
+
+**Never sold at a bad price.** Before any sale, the quote is compared with the market price. A quote under half of
+what the market prices the coins at, while the pool still has money in it, is a routing hiccup (a coin moving to its
+pool, a route that isn't ready): it doesn't sell, and tries again on the next check. A real rug (the pool emptied)
+still sells for whatever there is, and after 20 minutes of bad quotes it sells anyway.
+
+**Every desk pick gets the sniper's checks.** Before the desk buys its own pick, the sniper runs its full check:
+RugCheck, locked liquidity, the dev wallet, bundles, copycats, whether people can sell, buyers against sellers right
+now. A SKIP, sellers ahead, or a score under 50 (`DESK_GATE_SCORE`) means no buy. `DESK_GATE=off` turns it off. `WATCH=off`
 turns the price manager off; `0` turns a single rule off; `SCALE_OUT=off` removes the ladder. Every sale is its
 own row in TRADES (part sales are marked with the % sold); wins and losses count per coin, not per sale.
 The POSITIONS · TRADE PLAN panel shows each coin's plan live: entry and price now, best so far, which ladder steps are done,
@@ -218,6 +273,23 @@ stays paused until you tap **Resume**.
 | `HARD_<NAME>` | thresholds.py | override one HARD number, e.g. `HARD_MAX_AGE_HOURS=168` |
 | `SOFT_<NAME>` | thresholds.py | override one SOFT limit, e.g. `SOFT_MOMENTUM_ALREADY_SPENT=0.75` |
 | `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
+| `WATCH_SECONDS` | `20` | how often WATCH reads the price of each coin held (10 at least) |
+| `TRAIL_LOCK_PCT` / `SNIPE_TRAIL_LOCK_PCT` | `8` / `10` | once the trail is armed, sell rather than fall back under this gain |
+| `DESK_GATE` / `DESK_GATE_SCORE` | `on` / `50` | every desk pick must pass the sniper's checks and score at least this |
+| `SNIPE_MODE` | `auto` paper, `watch` live | the fast lane: `off`, `watch` (never buys) or `auto` |
+| `SNIPE_BUY_SCORE` | `70` | the score a BUY needs |
+| `SNIPE_SCAN_SECONDS` | `60` | how often the fast lane looks |
+| `SNIPE_MIN_AGE_MINUTES` / `SNIPE_MAX_AGE_HOURS` | `3` / `72` | how young and how old a coin it looks at |
+| `SNIPE_MIN_LIQUIDITY_USD` | `8000` | thinner than this is too hard to get out of |
+| `SNIPE_MIN_MCAP_USD` / `SNIPE_MAX_MCAP_USD` | `20000` / `30000000` | the market cap window |
+| `SNIPE_MAX_TOP_WALLET_PCT` / `SNIPE_MAX_TOP10_PCT` / `SNIPE_MAX_DEV_PCT` | `8` / `45` / `10` | rug lines |
+| `SNIPE_BUNDLE_WALLETS` | `8` | this many wallets in the launch block = a bundled launch |
+| `SNIPE_STOP_LOSS_PCT`, `SNIPE_SCALE_OUT`, `SNIPE_TRAIL_ARM_PCT`, `SNIPE_TRAIL_PCT` | `25`, `50:50,100:25`, `30`, `20` | the sniper's exits |
+| `SNIPE_STALL_MINUTES` / `SNIPE_STALL_GAIN_PCT` | `20` / `10` | out if it hasn't made +10% within 20 min |
+| `SNIPE_MAX_HOLD_HOURS` / `SNIPE_RIDE_X` | `12` / `3` | max hold, and how much longer it rides while buyers lead |
+| `SMART_WALLETS` | none | wallets to follow: `address:name,address:name` (or add them on the page) |
+| `ANTHROPIC_API_KEY` | none | turns on the web search for buzz (X, Reddit, TikTok, news), from console.anthropic.com |
+| `BUZZ_PER_HOUR` / `BUZZ_MODEL` | `6` / `claude-haiku-5-5` | web-searched checks per hour (your own checks may use up to 30) |
 | `PRACTICE_MODE` | none | `true` (paper only): opens the gates that keep most coins out, so you can watch the desk buy and sell. It sets `SHAPE_MIN_CROWD=0.25`, `PICK_MIN_WORTH=0.20`, `PICK_MIN_CONF=0.30`, momentum 0.90, concentration 0.80, dev 0.80, liquidity fit 0.35, age 168h, top wallet 12%, top 10 80%. Ignored in live mode. Paper results under it say nothing about the real rules. |
 
 Overrides change the desk's rules, in paper and in live alike. The thresholds.py panel on the page shows the

@@ -80,6 +80,9 @@ class FetchFailed(RuntimeError):
 
 
 # ---- plumbing -------------------------------------------------------------------------------------
+WAIT_HOOK = None      # called every ~2 s while a call waits its turn: the runner keeps watching the coins it holds
+
+
 class _Limiter:
     """Sliding 60 s window shared by every GeckoTerminal call, plus a hard pause after a 429."""
 
@@ -91,18 +94,25 @@ class _Limiter:
             self.paused_until = max(self.paused_until, time.monotonic() + seconds)
 
     def wait(self):
-        with self.lock:
-            while True:
+        while True:
+            with self.lock:
                 now = time.monotonic()
                 if now < self.paused_until:
-                    time.sleep(self.paused_until - now)
-                    continue
-                while self.sent and now - self.sent[0] >= 60:
-                    self.sent.popleft()
-                if len(self.sent) < self.per_minute:
-                    self.sent.append(now)
-                    return
-                time.sleep(60 - (now - self.sent[0]))
+                    delay = self.paused_until - now
+                else:
+                    while self.sent and now - self.sent[0] >= 60:
+                        self.sent.popleft()
+                    if len(self.sent) < self.per_minute:
+                        self.sent.append(now)
+                        return
+                    delay = 60 - (now - self.sent[0])
+            hook = WAIT_HOOK
+            time.sleep(min(delay, 2.0) if hook else delay)
+            if hook:
+                try:
+                    hook()
+                except Exception as exc:          # watching must never break a scan
+                    log.warning("wait hook: %s", exc)
 
 
 GT_LIMIT = _Limiter(int(os.environ.get("GT_MAX_CALLS_PER_MIN", 90 if GT_KEY else 8)))
@@ -453,7 +463,7 @@ def sol_chain_facts(mint: str) -> dict:
     top_program_account_percent: the largest account is nearly always the pool, which is not a holder."""
     out = {"mint_authority_revoked": None, "freeze_authority_revoked": None, "risky_extensions": None,
            "sell_block_possible": None, "top_wallet_percent": None, "top_wallet_at_most_percent": None,
-           "top_program_account_percent": None, "decimals": None}
+           "top_program_account_percent": None, "decimals": None, "top_wallets": None, "top10_wallets_percent": None}
     info = ((_rpc("getAccountInfo", [mint, {"encoding": "jsonParsed"}]) or {}).get("value")) or {}
     program = info.get("owner")
     parsed = ((info.get("data") or {}).get("parsed") or {}) if isinstance(info.get("data"), dict) else {}
@@ -502,6 +512,10 @@ def sol_chain_facts(mint: str) -> dict:
             unknown = max(unknown, amount)                 # could not tell who owns it
     if programs:
         out["top_program_account_percent"] = round(100.0 * max(programs.values()) / supply, 3)
+    ranked = sorted(wallets.items(), key=lambda kv: -kv[1])
+    out["top_wallets"] = [{"owner": o, "pct": round(100.0 * a / supply, 3)} for o, a in ranked[:10]]   # who holds it
+    if len(accounts) >= 10 or not unknown:
+        out["top10_wallets_percent"] = round(100.0 * sum(a for _, a in ranked[:10]) / supply, 3)       # pools excluded
     biggest_wallet = max(wallets.values()) if wallets else None
     if biggest_wallet is not None and biggest_wallet >= unknown:
         out["top_wallet_percent"] = round(100.0 * biggest_wallet / supply, 3)

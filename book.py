@@ -35,8 +35,11 @@ BENCH_MINUTES = {
     "dossier_failed": 20,
     # held right now: look again soon, RISK may have sold it
     "already_held": 5,
-    # just sold: not straight back into the coin RISK got out of
-    "sold": 60,
+    # just sold: not straight back into the coin RISK got out of. A coin that lost money is left alone for a day
+    # (HIRE and SEAN were bought back and lost again); a winner for three hours, so it can't be chased at the top
+    "sold": 180, "sold_loss": 1440,
+    # a desk pick the sniper's checks turned down
+    "sniper_gate": 60,
 }
 DEFAULT_BENCH = 45      # anything not listed, e.g. "<question>_missing"
 
