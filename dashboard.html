@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="referrer" content="no-referrer">
+<title>Desk Floor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1220'/%3E%3Cpath d='M7 21l6-6 4 4 8-9' stroke='%23ff4fd8' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root{
+  --frame:#e040c8; --frame-2:#ff6ad5; --bg:#0a0e18; --panel:#111827; --panel-2:#0d1322; --line:#1f2a3d; --ink:#e8edf6; --muted:#8392aa;
+  --green:#34d399; --red:#f87171; --amber:#fbbf24; --blue:#60a5fa; --pink:#ff4fd8; --orange:#fb923c; --white:#f1f5f9; --scarlet:#ef4444;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--frame);color:var(--ink);font:14px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+  padding:calc(env(safe-area-inset-top) + 8px) 8px calc(env(safe-area-inset-bottom) + 16px)}
+.shell{max-width:1180px;margin:0 auto;background:var(--bg);border-radius:14px;padding:12px;box-shadow:0 0 0 1px #ff9be8 inset}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:4px 4px 12px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:22px;letter-spacing:.02em}
+.brand svg{width:30px;height:30px}
+.tag{font:12px var(--mono);color:var(--muted)}
+.goal{flex:1 1 240px;display:flex;align-items:center;gap:10px;min-width:0}
+.bar{flex:1;height:12px;border:1px solid #3a2a55;border-radius:3px;background:repeating-linear-gradient(90deg,#1b1530 0 6px,#140f24 6px 8px);overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,#b23aa5,var(--pink));width:0}
+.clock{font:700 18px var(--mono);background:#05070d;border:1px solid var(--line);border-radius:6px;padding:4px 10px}
+.mode{font:700 12px var(--mono);padding:4px 8px;border-radius:5px;letter-spacing:.06em}
+.mode.paper{background:#1d2b45;color:var(--blue)} .mode.live{background:#3b0d12;color:#fecaca;box-shadow:0 0 0 1px var(--red) inset}
+.mode.paused{background:#3a2a05;color:var(--amber)}
+.agents{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+@media (max-width:820px){.agents{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.agent{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;min-width:0;position:relative}
+.agent .top{display:flex;align-items:center;gap:8px}
+.agent .face{width:22px;height:22px;flex:none}
+.agent h3{margin:0;font-size:16px;font-weight:800;letter-spacing:.02em}
+.agent .role{font:11px var(--mono);color:var(--muted)}
+.agent .kv{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:8px;font:11px var(--mono);color:var(--muted)}
+.agent .kv b{font:700 15px var(--mono);color:var(--ink)}
+.agent .meter{height:3px;background:#1a2336;border-radius:2px;margin:6px 0;overflow:hidden}
+.agent .meter i{display:block;height:100%;width:0}
+.agent .line{font:11px var(--mono);color:#b9c4d8;min-height:28px;overflow-wrap:anywhere}
+.agent .ago{position:absolute;top:8px;right:10px;font:10px var(--mono);color:var(--muted)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:10px;min-width:0}
+.panel h2{margin:0 0 8px;font:700 12px var(--mono);letter-spacing:.08em;color:#c9d3e4;display:flex;justify-content:space-between;gap:8px}
+.panel h2 span{color:var(--pink)}
+.floor{position:relative;background:radial-gradient(ellipse at 50% 10%,#16203a 0,#0b1020 60%,#080b14 100%);border:1px solid var(--line);border-radius:10px;
+  margin-top:10px;padding:12px;overflow:hidden}
+.floor .screen{background:#05070d;border:1px solid #2a3550;border-radius:6px;padding:10px;max-width:560px;margin:0 auto 12px;font:12px var(--mono)}
+.floor .screen .big{font:700 18px var(--mono)}
+.stations{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+@media (max-width:620px){.stations{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.station{position:relative;height:118px;border-radius:8px;background:linear-gradient(#141c30,#0e1526);border:1px solid #1d2840}
+.station .desk{position:absolute;left:10%;right:10%;bottom:14px;height:26px;background:#232c41;border-radius:4px;box-shadow:0 6px 0 #161d2e}
+.station .mon{position:absolute;left:30%;right:30%;bottom:40px;height:22px;background:#06090f;border:1px solid #33405e;border-radius:3px;overflow:hidden}
+.station .mon i{position:absolute;left:0;right:0;bottom:0;height:40%;opacity:.8}
+.station .bot{position:absolute;left:50%;bottom:42px;width:30px;height:30px;transform:translateX(-50%);transition:transform .4s}
+.station.active .bot{animation:bob 1.6s ease-in-out infinite}
+.station.active{box-shadow:0 0 0 1px var(--c) inset,0 0 24px -8px var(--c)}
+@keyframes bob{0%,100%{transform:translate(-50%,0)}50%{transform:translate(-50%,-6px)}}
+@media (prefers-reduced-motion:reduce){.station.active .bot{animation:none}}
+.station .name{position:absolute;left:8px;top:6px;font:700 10px var(--mono);color:var(--c)}
+.bubble{position:absolute;left:6px;right:6px;top:22px;font:10px var(--mono);color:#dfe6f2;background:rgba(5,7,13,.85);border:1px solid #2a3550;border-radius:5px;padding:3px 5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+@media (max-width:820px){.grid2{grid-template-columns:minmax(0,1fr)}}
+.balance{display:flex;gap:12px;align-items:flex-end}
+.balance svg{flex:1;height:150px;min-width:0}
+.balance .now{text-align:right;flex:none}
+.balance .now b{display:block;font:800 24px var(--mono);color:var(--green)}
+.muted{color:var(--muted)} .mono{font-family:var(--mono)}
+table{width:100%;border-collapse:collapse;font:12px var(--mono)}
+td,th{padding:5px 4px;border-top:1px solid var(--line);text-align:left;vertical-align:top;overflow-wrap:anywhere}
+th{color:var(--muted);font-weight:500;border-top:0}
+.pos{color:var(--green)} .neg{color:var(--red)}
+.pipe{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font:12px var(--mono)}
+.pipe .step{border:1px solid #3a4560;border-radius:4px;padding:4px 7px}
+.pipe .step.on{background:var(--pink);color:#1a0716;border-color:var(--pink);font-weight:700}
+.pipe .arrow{color:var(--muted)}
+.th{display:grid;grid-template-columns:1fr auto;gap:2px 10px;font:12px var(--mono)}
+.th .k{color:#9fb4d8} .th .v{text-align:right}
+.btn{font:700 13px var(--mono);border-radius:6px;border:1px solid #3a4560;background:#18213a;color:var(--ink);padding:8px 12px;min-height:38px}
+.btn.warn{border-color:var(--amber);color:var(--amber)}
+.empty{color:var(--muted);font:12px var(--mono);padding:8px 0}
+.err{color:#fca5a5}
+.addr{font:11px var(--mono);color:var(--muted);overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header>
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#0d1220"/><path d="M7 21l6-6 4 4 8-9" stroke="#ff4fd8" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      DESK FLOOR
+    </div>
+    <span class="tag">jev judges · code trades</span>
+    <span class="mode paper" id="mode">…</span>
+    <div class="goal"><span class="tag" id="goalText">bank —</span><div class="bar" aria-hidden="true"><i id="goalBar"></i></div><span class="tag" id="goalPct"></span></div>
+    <span class="clock" id="clock">--:--</span>
+  </header>
+
+  <section class="agents" id="agents" aria-label="Seats"></section>
+
+  <section class="floor" aria-label="The floor">
+    <div class="screen" id="screen"><div class="muted">waiting for the desk…</div></div>
+    <div class="stations" id="stations"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>BALANCE <span id="record"></span></h2>
+      <div class="balance">
+        <svg id="chart" viewBox="0 0 600 150" preserveAspectRatio="none" role="img" aria-label="Balance over time"></svg>
+        <div class="now"><span class="tag">balance</span><b id="balanceNow">—</b><span class="tag" id="balanceNote"></span></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>POSITION <span id="posMode"></span></h2>
+      <div id="position" class="empty">no position: the desk is scanning</div>
+    </section>
+  </div>
+
+  <div class="grid2">
+    <section class="panel">
+      <h2>LAST CYCLE <span id="cycleTime"></span></h2>
+      <div class="pipe" id="pipe"></div>
+      <div id="cycleLine" class="empty" style="margin-top:8px"></div>
+      <h2 style="margin-top:12px">JEV · LAST ANSWERS</h2>
+      <table><thead><tr><th>set</th><th>answers</th><th>model</th></tr></thead><tbody id="judge"></tbody></table>
+    </section>
+    <section class="panel">
+      <h2>thresholds.py <span>every number the desk believes</span></h2>
+      <div class="th" id="thresholds"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h2>TRADES <span id="tradeCount"></span></h2>
+    <table><thead><tr><th>closed</th><th>token</th><th>cost</th><th>out</th><th>P&amp;L</th><th>why</th></tr></thead><tbody id="trades"></tbody></table>
+  </section>
+
+  <section class="panel">
+    <h2>DESK <span id="walletMode"></span></h2>
+    <div class="addr" id="wallet"></div>
+    <div id="errors" style="margin-top:8px"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn warn" id="pauseBtn" type="button">Pause new trades</button>
+      <button class="btn" id="resumeBtn" type="button">Resume</button>
+    </div>
+    <p class="muted" style="font-size:12px">Pause stops new entries. An open position stays with RISK, which alone closes it.
+      Pause and resume need the ADMIN_TOKEN you set on the server. It's kept only on this phone.</p>
+  </section>
+</div>
+
+<script>
+"use strict";
+const SEATS = [
+  {id: "chief",   name: "CHIEF",   role: "never takes a position", c: "#f1f5f9", shape: "ghost"},
+  {id: "scan",    name: "SCAN",    role: "finding what moves",     c: "#ff4fd8", shape: "tri"},
+  {id: "vet",     name: "VET",     role: "chain risk, is it real", c: "#e2e8f0", shape: "round"},
+  {id: "social",  name: "SOCIAL",  role: "the project's X account", c: "#ef4444", shape: "square"},
+  {id: "size",    name: "SIZE",    role: "how much",               c: "#60a5fa", shape: "round"},
+  {id: "fills",   name: "FILLS",   role: "execution",              c: "#34d399", shape: "pill"},
+  {id: "risk",    name: "RISK",    role: "closing",                c: "#fb923c", shape: "hex"},
+  {id: "crawler", name: "CRAWLER", role: "reads first",            c: "#e040c8", shape: "tri"},
+];
+const $ = id => document.getElementById(id);
+const store = {get(k){try{return localStorage.getItem(k)}catch(e){return null}}, set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
+const num = v => (typeof v === "number" && Number.isFinite(v)) ? v : null;
+const usd = v => v === null ? "—" : (Math.abs(v) >= 1e6 ? "$" + (v/1e6).toFixed(2) + "M" : "$" + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}));
+const signed = v => v === null ? "—" : (v >= 0 ? "+" : "−") + usd(Math.abs(v)).slice(0);
+function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function ago(iso){ if (!iso) return ""; const s = (Date.now() - Date.parse(iso)) / 1000; if (!Number.isFinite(s)) return "";
+  return s < 60 ? Math.max(0, Math.round(s)) + "s" : s < 3600 ? Math.round(s/60) + "m" : Math.round(s/3600) + "h"; }
+
+function face(shape, c){
+  const s = "http://www.w3.org/2000/svg", svg = document.createElementNS(s, "svg");
+  svg.setAttribute("viewBox", "0 0 30 30"); svg.setAttribute("aria-hidden", "true");
+  const body = document.createElementNS(s, shape === "tri" ? "polygon" : shape === "hex" ? "polygon" : "rect");
+  if (shape === "tri") body.setAttribute("points", "15,3 28,27 2,27");
+  else if (shape === "hex") body.setAttribute("points", "15,2 27,9 27,22 15,28 3,22 3,9");
+  else { body.setAttribute("x", 3); body.setAttribute("y", 3); body.setAttribute("width", 24); body.setAttribute("height", 24);
+         body.setAttribute("rx", shape === "square" ? 5 : shape === "pill" ? 10 : 12); }
+  body.setAttribute("fill", c);
+  svg.appendChild(body);
+  [[11,15],[19,15]].forEach(([x,y]) => { const e = document.createElementNS(s, "circle"); e.setAttribute("cx", x); e.setAttribute("cy", y); e.setAttribute("r", 2.2);
+    e.setAttribute("fill", "#0a0e18"); svg.appendChild(e); });
+  return svg;
+}
+
+function renderAgents(agents){
+  const box = $("agents"), floor = $("stations");
+  box.textContent = ""; floor.textContent = "";
+  const newest = Math.max(...SEATS.map(s => Date.parse((agents[s.id] || {}).updated) || 0));
+  for (const s of SEATS){
+    const a = agents[s.id] || {};
+    const card = el("article", "agent"); card.style.setProperty("--c", s.c);
+    const top = el("div", "top"); const f = face(s.shape, s.c); f.classList.add("face"); top.appendChild(f);
+    const t = el("div"); const h = el("h3", "", s.name); h.style.color = s.c; t.append(h, el("div", "role", s.role)); top.appendChild(t);
+    card.appendChild(top);
+    card.appendChild(el("span", "ago", ago(a.updated)));
+    const kv = el("div", "kv"); kv.append(el("span", "", a.label || "—"), el("b", "", num(a.value) === null ? "—" :
+      (["ticket", "last fill"].includes(a.label) ? usd(a.value) : (Math.abs(a.value) < 10 ? a.value.toFixed(2) : String(Math.round(a.value))))));
+    card.appendChild(kv);
+    const m = el("div", "meter"); const mi = el("i"); mi.style.background = s.c;
+    const v = num(a.value); mi.style.width = (v !== null && v >= 0 && v <= 1 ? v * 100 : a.line ? 100 : 0) + "%"; m.appendChild(mi); card.appendChild(m);
+    card.appendChild(el("div", "line", a.line || "no data yet"));
+    box.appendChild(card);
+    const st = el("div", "station" + ((Date.parse(a.updated) || -1) === newest && newest > 0 ? " active" : "")); st.style.setProperty("--c", s.c);
+    const mon = el("div", "mon"); const bar = el("i"); bar.style.background = s.c; bar.style.height = (20 + Math.min(70, (a.line || "").length)) + "%"; mon.appendChild(bar);
+    const bot = el("div", "bot"); bot.appendChild(face(s.shape, s.c));
+    st.append(el("div", "name", s.name), el("div", "bubble", a.line || "…"), mon, el("div", "desk"), bot);
+    floor.appendChild(st);
+  }
+}
+
+function renderChart(points){
+  const svg = $("chart"); svg.textContent = "";
+  const s = "http://www.w3.org/2000/svg";
+  const pts = (points || []).filter(p => Array.isArray(p) && num(p[1]) !== null);
+  if (pts.length < 2){ const t = document.createElementNS(s, "text"); t.setAttribute("x", 10); t.setAttribute("y", 80); t.setAttribute("fill", "#8392aa");
+    t.setAttribute("font-size", "14"); t.setAttribute("font-family", "monospace"); t.textContent = "no balance history yet: one point per cycle"; svg.appendChild(t); return; }
+  const ys = pts.map(p => p[1]), lo = Math.min(...ys), hi = Math.max(...ys), span = hi - lo || 1;
+  const xy = pts.map((p, i) => [i / (pts.length - 1) * 600, 140 - (p[1] - lo) / span * 125]);
+  for (let i = 1; i < pts.length; i++){                               // volume-style bars: change per step
+    const d = pts[i][1] - pts[i-1][1], r = document.createElementNS(s, "rect");
+    const h = Math.min(30, Math.abs(d) / span * 60 + 1); r.setAttribute("x", xy[i][0] - 2); r.setAttribute("y", 150 - h);
+    r.setAttribute("width", Math.max(1, 600 / pts.length - 1)); r.setAttribute("height", h); r.setAttribute("fill", d >= 0 ? "#14532d" : "#7f1d1d"); svg.appendChild(r);
+  }
+  const area = document.createElementNS(s, "path");
+  area.setAttribute("d", "M" + xy.map(p => p.join(",")).join(" L") + ` L600,150 L0,150 Z`); area.setAttribute("fill", "rgba(52,211,153,.10)"); svg.appendChild(area);
+  const line = document.createElementNS(s, "path");
+  line.setAttribute("d", "M" + xy.map(p => p.join(",")).join(" L")); line.setAttribute("fill", "none"); line.setAttribute("stroke", "#34d399");
+  line.setAttribute("stroke-width", "2.5"); line.setAttribute("vector-effect", "non-scaling-stroke"); svg.appendChild(line);
+  [[lo, 140], [hi, 15]].forEach(([v, y]) => { const t = document.createElementNS(s, "text"); t.setAttribute("x", 4); t.setAttribute("y", y);
+    t.setAttribute("fill", "#64748b"); t.setAttribute("font-size", "11"); t.setAttribute("font-family", "monospace"); t.textContent = usd(v); svg.appendChild(t); });
+}
+
+function render(d){
+  const mode = $("mode");
+  mode.className = "mode " + (d.paused ? "paused" : d.mode);
+  mode.textContent = d.mode === "stopped" ? "STOPPED" : d.paused ? "PAUSED" : d.mode === "live" ? "LIVE · REAL MONEY" : "PAPER";
+  renderAgents(d.agents || {});
+  const eq = (d.equity || []).filter(p => num(p[1]) !== null);
+  renderChart(eq);
+  const first = eq.length ? eq[0][1] : null, last = eq.length ? eq[eq.length - 1][1] : null;
+  $("balanceNow").textContent = usd(last);
+  $("balanceNote").textContent = first !== null && last !== null && first > 0 ? ((last / first - 1) * 100).toFixed(2) + "% since start" : "";
+  const goal = num(d.goal_usd);                                        // GOAL_USD on the server; no goal, no bar
+  $("goalText").textContent = last === null ? "bank —" : goal ? usd(first) + " → " + usd(goal) : "bank " + usd(last);
+  const pct = goal && last !== null && first !== null && goal > first ? Math.max(0, Math.min(100, (last - first) / (goal - first) * 100)) : null;
+  document.querySelector(".bar").style.display = pct === null ? "none" : "";
+  $("goalBar").style.width = (pct || 0) + "%"; $("goalPct").textContent = pct === null ? "" : pct.toFixed(1) + "%";
+  const trades = d.trades || [];
+  const w = trades.filter(t => num(t.pnl_usd) > 0).length, l = trades.filter(t => num(t.pnl_usd) !== null && t.pnl_usd < 0).length;
+  $("record").textContent = trades.length ? `${w}W ${l}L` : "";
+  // floor screen: what the desk is doing now
+  const scr = $("screen"); scr.textContent = "";
+  const p = d.position;
+  if (p){
+    scr.append(el("div", "muted", "HOLDING · " + (p.mode === "live" ? "real money" : "paper")));
+    scr.append(el("div", "big", (p.ticker || "?") + "  " + (num(p.last_pnl_usd) === null ? "" : signed(p.last_pnl_usd))));
+    scr.append(el("div", "muted", "cost " + usd(num(p.cost_usd)) + " · value " + usd(num(p.last_value_usd)) +
+      " · volume ratio " + (num(p.last_ratio) === null ? "—" : p.last_ratio.toFixed(2)) + " (closes under 0.20)"));
+  } else {
+    const c = d.cycle;
+    scr.append(el("div", "muted", d.paused ? "PAUSED · " + (d.pause_reason || "") : "SCANNING · every " + Math.round((d.cycle_seconds || 900) / 60) + " min"));
+    scr.append(el("div", "big", c && c.order ? "last pick " + (c.order.ticker || c.order.address.slice(0, 6)) : "no pick yet"));
+    scr.append(el("div", "muted", c ? "last cycle " + ago(c.time) + " ago" : "first cycle starting"));
+  }
+  // position panel
+  $("posMode").textContent = p ? p.mode.toUpperCase() : "";
+  const pos = $("position"); pos.textContent = ""; pos.className = p ? "" : "empty";
+  if (p){
+    const tbl = el("table"); const rows = [["token", p.ticker || "?"], ["mint", p.mint], ["opened", p.opened_at || "unknown"],
+      ["cost", usd(num(p.cost_usd))], ["value now", usd(num(p.last_value_usd))], ["P&L", signed(num(p.last_pnl_usd))],
+      ["impact at entry", num(p.impact_pct) === null ? "—" : p.impact_pct.toFixed(2) + "%"], ["last check", p.last_check ? ago(p.last_check) + " ago" : "not yet"]];
+    for (const [k, v] of rows){ const tr = el("tr"); tr.append(el("td", "muted", k), el("td", k === "P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : "", v)); tbl.appendChild(tr); }
+    pos.appendChild(tbl);
+  } else pos.textContent = d.paused ? "no position · paused" : "no position: the desk is scanning";
+  // cycle pipeline
+  const c = d.cycle, pipe = $("pipe"); pipe.textContent = "";
+  const steps = [["free_kill", "free"], ["trade_kill", "trade"], ["chain_kill", "chain"], ["soft_kill", "soft"], ["pick", null]];
+  steps.forEach(([name, key], i) => {
+    if (i) pipe.appendChild(el("span", "arrow", "→"));
+    const k = c && c.kills ? c.kills[key] : null;
+    pipe.appendChild(el("span", "step" + (key && k ? " on" : !key && c && c.order ? " on" : ""), name + (key && c ? " " + (k || 0) : "")));
+  });
+  $("cycleTime").textContent = c ? ago(c.time) + " ago" : "";
+  const st = c ? c.stats || {} : {};
+  $("cycleLine").textContent = !c ? "no cycle yet" : st.stood_down ? "stood down: " + st.stood_down
+    : st.held ? "holding " + st.held + ": no scan" : `${st.seen || 0} seen · ${st.benched || 0} benched · ` + (st.no_order ? "no order: " + st.no_order : c.order ? "order placed" : "");
+  // judge feed
+  const jb = $("judge"); jb.textContent = "";
+  for (const j of (d.judge || []).slice(0, 8)){
+    const tr = el("tr"); const parts = Object.entries(j.answers || {}).map(([k, a]) =>
+      k + " " + (a.choice ?? (num(a.noul) !== null ? a.noul.toFixed(2) : num(a.score) !== null ? a.score.toFixed(1) : "—")));
+    tr.append(el("td", "", j.set), el("td", "", parts.join(" · ")), el("td", "muted", j.model || "—")); jb.appendChild(tr);
+  }
+  if (!(d.judge || []).length){ const tr = el("tr"); const td = el("td", "muted", "no judge calls yet"); td.colSpan = 3; tr.appendChild(td); jb.appendChild(tr); }
+  // thresholds
+  const th = $("thresholds"); th.textContent = "";
+  const T = d.thresholds || {};
+  th.append(el("div", "muted", "HARD · arithmetic, costs nothing"), el("div"));
+  for (const [k, v] of Object.entries(T.HARD || {})) th.append(el("div", "k", k), el("div", "v", String(v)));
+  th.append(el("div", "muted", "SOFT · applied to Jev's answers"), el("div"));
+  for (const [k, v] of Object.entries(T.SOFT || {})) th.append(el("div", "k", k), el("div", "v", v[0] + " " + v[1]));
+  th.append(el("div", "muted", "PICK and SIZE"), el("div"));
+  for (const k of ["PICK_MIN_WORTH", "PICK_MIN_CONF", "DARK_TICKET_CUT", "NO_SOCIAL_CUT"]) if (k in T) th.append(el("div", "k", k.toLowerCase()), el("div", "v", String(T[k])));
+  // trades
+  const tb = $("trades"); tb.textContent = "";
+  $("tradeCount").textContent = trades.length ? trades.length + " closed" : "";
+  for (const t of trades.slice(0, 30)){
+    const tr = el("tr"); const pnl = num(t.pnl_usd);
+    tr.append(el("td", "muted", (t.closed_at || "").slice(5, 16).replace("T", " ")), el("td", "", (t.ticker || "?") + (t.mode === "paper" ? " ·p" : "")),
+      el("td", "", usd(num(t.cost_usd))), el("td", "", usd(num(t.proceeds_usd))), el("td", pnl === null ? "" : pnl >= 0 ? "pos" : "neg", signed(pnl)), el("td", "muted", t.reason || ""));
+    tb.appendChild(tr);
+  }
+  if (!trades.length){ const tr = el("tr"); const td = el("td", "muted", "no closed trades yet"); td.colSpan = 6; tr.appendChild(td); tb.appendChild(tr); }
+  // desk
+  $("wallet").textContent = d.wallet ? "bot wallet " + d.wallet : d.mode === "stopped" ? "desk stopped: fix the variable named above" : "no bot wallet set (paper mode)";
+  $("walletMode").textContent = (d.nets || []).join(", ");
+  const errs = $("errors"); errs.textContent = "";
+  for (const e of (d.errors || []).slice(0, 5)) errs.appendChild(el("div", "err mono", ago(e.time) + " ago · " + e.text));
+}
+
+let failures = 0;
+async function refresh(){
+  try {
+    const r = await fetch("/api/status", {cache: "no-store"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    render(await r.json()); failures = 0;
+  } catch (e) {
+    failures++;
+    if (failures > 1) $("screen").textContent = "can't reach the desk (" + e.message + "): retrying";
+  }
+}
+async function admin(path){
+  let token = store.get("adminToken");
+  if (!token){ token = prompt("ADMIN_TOKEN (set on the server)"); if (!token) return; }
+  const r = await fetch(path, {method: "POST", headers: {"X-Admin-Token": token}});
+  if (r.status === 401){ store.set("adminToken", ""); alert("That admin token was refused."); return; }
+  store.set("adminToken", token); refresh();
+}
+$("pauseBtn").addEventListener("click", () => admin("/api/pause"));
+$("resumeBtn").addEventListener("click", () => admin("/api/resume"));
+setInterval(() => { $("clock").textContent = new Date().toISOString().slice(11, 16) + " UTC"; }, 1000);
+renderAgents({});
+refresh(); setInterval(refresh, 10000);
+</script>
+</body>
+</html>
