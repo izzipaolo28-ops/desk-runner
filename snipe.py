@@ -200,6 +200,7 @@ def gt_info(mint):
     return {"status": "ok" if a else "not indexed yet", "holders": int(n) if n else None, "top10": _num(dist.get("top_10")),
             "dev_pct": _num(a.get("developer_holding_percentage")), "x": collect.clean_handle(a.get("twitter_handle")),
             "developer": dev if isinstance(dev, str) and MINT_RE.match(dev) else None,
+            "categories": [c for c in (clean(x, 30) for x in a.get("categories") or [] if isinstance(x, str)) if c][:8],
             "gt_score": _num(a.get("gt_score")), "verified": a.get("gt_verified") is True}
 
 
@@ -479,6 +480,130 @@ class Buzz:
                 "platforms": platforms[:7], "linked_to": clean(verdict.get("linked_to"), 60),
                 "official": verdict.get("official_link_verified") is True, "scam": verdict.get("scam_warnings") is True,
                 "summary": clean(verdict.get("summary"), 240), "sources": sources[:6], "searches": searches}
+
+
+# ---------- the narrative: is there a story people are piling into right now ----------
+GENERIC_TAGS = {"pump fun", "pump.fun", "pumpfun", "solana", "solana ecosystem", "solana meme", "solana memes", "meme", "memes",
+                "memecoin", "memecoins", "meme token", "meme tokens", "bonk fun", "bonk.fun", "letsbonk", "letsbonk.fun", "moonshot",
+                "raydium", "launchlab", "boop", "believe", "bags", "pumpswap", "meteora", "orca", "jupiter", "new listings"}
+
+
+class Metas:
+    """DexScreener's trending narratives ("metas": a theme many coins share, like a person, an AI wave or a viral
+    character, with that theme's market cap move), read every 10 minutes: which stories are hot and which coins are in them."""
+    EVERY, TOP = 600, 8
+
+    def __init__(self):
+        self.at, self.list, self.by_mint, self.status = 0.0, [], {}, "not read yet"
+
+    def refresh(self, now=None):
+        now = now or time.time()
+        if now - self.at < self.EVERY:
+            return
+        self.at = now
+        try:
+            rows = collect._get_json(f"{DEXS}/metas/trending/v1")
+        except FetchFailed as exc:
+            self.status = f"unavailable ({exc.status or 'network'})"
+            return
+        metas = []
+        for m in rows if isinstance(rows, list) else []:
+            if not isinstance(m, dict) or not isinstance(m.get("slug"), str):
+                continue
+            ch = m.get("marketCapChange") if isinstance(m.get("marketCapChange"), dict) else {}
+            slug = re.sub(r"[^a-z0-9-]", "", m["slug"].lower())[:60]
+            if slug:
+                metas.append({"name": clean(m.get("name"), 40) or slug, "slug": slug, "h1": _num(ch.get("h1")), "h24": _num(ch.get("h24")),
+                              "mcap": _num(m.get("marketCap")), "volume": _num(m.get("volume")), "tokens": _num(m.get("tokenCount")), "coins": 0})
+        by = {}
+        for meta in metas[:self.TOP]:
+            try:
+                body = collect._get_json(f"{DEXS}/metas/meta/v1/{meta['slug']}")
+            except FetchFailed:
+                continue
+            for pr in ((body or {}).get("pairs") or []) if isinstance(body, dict) else []:
+                a = (pr.get("baseToken") or {}).get("address") if isinstance(pr, dict) and pr.get("chainId") == "solana" else None
+                if isinstance(a, str) and MINT_RE.match(a) and a not in NOT_COINS:
+                    names = by.setdefault(a, [])
+                    if meta["name"] not in names:
+                        names.append(meta["name"])
+                        meta["coins"] += 1
+        self.list, self.by_mint, self.status = metas[:12], by, "ok" if metas else "no narratives listed"
+
+    def of(self, mint):
+        names = self.by_mint.get(mint, [])
+        return [m for m in self.list if m["name"] in names]
+
+
+def narrative_read(F, metas_hit, categories, bz):
+    """A story, from three places: a trending DexScreener narrative it belongs to, a web search that says who or what
+    it's about with real talk around it, or a specific theme tag (not just "Pump Fun") plus socials of its own."""
+    why = []
+    hot = [m for m in metas_hit if (m.get("h24") is None or m["h24"] >= 0) or (m.get("h1") or 0) > 0]
+    if hot:
+        why.append("in the trending narrative " + ", ".join(f"'{m['name']}'" + (f" ({m['h24']:+.0f}% today)" if m.get("h24") is not None else "")
+                                                          for m in hot[:2]))
+    bz = bz or {}
+    if bz.get("status") == "ok" and bz.get("linked_to") and bz.get("mentions") in ("medium", "high"):
+        why.append(f"about {bz['linked_to']}, and people are talking about it ({bz['mentions']})")
+    tags = [c for c in categories or [] if c.lower() not in GENERIC_TAGS][:3]
+    if tags and ((F.get("socials") or {}) or F.get("sites")):
+        why.append("its theme: " + ", ".join(tags) + ", with its own socials")
+    return {"ok": bool(why), "why": why, "metas": [m["name"] for m in metas_hit][:3], "tags": tags}
+
+
+def hype_score(F, fl, growth, lists, metas_hit, bz):
+    """How fast the attention is growing, out of 100: new holders per hour, different wallets buying right now,
+    volume speeding up, the price climbing this hour, trending lists, and talk online. Each part says what it was for."""
+    parts = []
+
+    def add(label, n):
+        parts.append({"label": label, "pts": n})
+    b5 = (fl or {}).get("buyers5") if fl and fl.get("trades") else None
+    if b5 is not None:
+        if b5 >= 40:
+            add(f"{b5} different wallets bought in 5 min", 30)
+        elif b5 >= 20:
+            add(f"{b5} different wallets bought in 5 min", 20)
+        elif b5 >= 10:
+            add(f"{b5} different wallets bought in 5 min", 10)
+    else:
+        m5b = (F.get("buys") or {}).get("m5")
+        if m5b is not None and m5b >= 80:
+            add(f"{m5b} buys in 5 min", 20)
+        elif m5b is not None and m5b >= 40:
+            add(f"{m5b} buys in 5 min", 12)
+        elif m5b is not None and m5b >= 20:
+            add(f"{m5b} buys in 5 min", 6)
+    g = (growth or {}).get("per_hour")
+    if g is not None:
+        basis = (growth or {}).get("basis") or ""
+        if g >= 600:
+            add(f"+{g:,.0f} holders an hour ({basis})", 25)
+        elif g >= 200:
+            add(f"+{g:,.0f} holders an hour ({basis})", 15)
+        elif g >= 60:
+            add(f"+{g:,.0f} holders an hour ({basis})", 8)
+    vol = F.get("vol") or {}
+    if vol.get("m5") is not None and vol.get("h1"):
+        accel = vol["m5"] * 12 / vol["h1"]
+        if accel >= 2:
+            add(f"volume at {accel:.1f}x the hour's pace", 15)
+        elif accel >= 1.3:
+            add(f"volume at {accel:.1f}x the hour's pace", 8)
+    h1 = (F.get("chg") or {}).get("h1")
+    if h1 is not None and 20 <= h1 <= 400:
+        add(f"price {h1:+.0f}% this hour", 10)
+    elif h1 is not None and h1 > 400:
+        add(f"price {h1:+.0f}% this hour (already big)", 4)
+    if lists or metas_hit:
+        add("on " + ", ".join((list(lists) + [f"'{m['name']}'" for m in metas_hit])[:3]), 10)
+    bz = bz or {}
+    if bz.get("status") == "ok" and bz.get("mentions") == "high":
+        add("widely talked about online", 20)
+    elif bz.get("status") == "ok" and bz.get("mentions") == "medium":
+        add("talked about online", 10)
+    return {"score": min(100, sum(p["pts"] for p in parts)), "parts": parts, "per_hour": g}
 
 
 # ---------- the score ----------
@@ -766,6 +891,19 @@ def score_coin(r, cfg):
     else:
         check("jev", "Jev", None, jev.get("status") or "not asked")
 
+    nar, hy = r.get("narrative"), r.get("hype")
+    if nar is not None:
+        check("story", "narrative", nar["ok"], "; ".join(nar["why"]) if nar["ok"] else
+              "none found" + (f" (tags: {', '.join(nar['tags'])})" if nar.get("tags") else ""))
+    if hy is not None:
+        check("story", "hype, growing how fast", hy["score"] >= cfg.snipe_min_hype, f"{hy['score']}/100 (needs {cfg.snipe_min_hype:g})"
+              + (": " + "; ".join(f"{p['label']} +{p['pts']}" for p in hy["parts"]) if hy["parts"] else ": nothing yet"))
+    if r.get("gate", True) and not veto:
+        if cfg.snipe_need_narrative and nar is not None and not nar["ok"]:
+            wait.append("no narrative found: it only buys coins with a story people are piling into (a trending DexScreener "
+                        "narrative, or web-search buzz saying who or what it's about)")
+        if hy is not None and hy["score"] < cfg.snipe_min_hype:
+            wait.append(f"hype {hy['score']}/100 is under {cfg.snipe_min_hype:g}: not gaining fast enough yet")
     total = max(0, min(100, 25 + sum(p["pts"] for p in pts)))
     if veto:
         verdict = "SKIP"
@@ -799,6 +937,7 @@ class Sniper:
         self.buzz = Buzz(os.environ.get("ANTHROPIC_API_KEY"), os.environ.get("BUZZ_MODEL", "claude-haiku-5-5").strip() or
                          "claude-haiku-5-5", self.cfg.buzz_per_hour)
         self.queue, self.forced = deque(), deque()
+        self.metas, self.holders_seen = Metas(), {}
         self.again, self.seen = {}, {}          # mint -> {"next", "tries", "source"} / mint -> when it was last checked
         self.last_round, self.rounds, self.note = None, 0, {}
         self.env_wallets = parse_wallets(os.environ.get("SMART_WALLETS", ""))
@@ -827,6 +966,9 @@ class Sniper:
                 "buy_score": self.cfg.snipe_buy_score, "last_round": self.last_round and datetime.fromtimestamp(
                     self.last_round, timezone.utc).isoformat(timespec="seconds"), "rounds": self.rounds, "note": self.note,
                 "watching": len(self.again), "queued": len(self.queue),
+                "story": {"need_narrative": self.cfg.snipe_need_narrative, "min_hype": self.cfg.snipe_min_hype},
+                "metas": [{k: m.get(k) for k in ("name", "h1", "h24", "tokens", "coins")} for m in self.metas.list[:10]],
+                "metas_status": self.metas.status,
                 "buzz": {"enabled": self.buzz.enabled(), "model": self.buzz.model, "per_hour": self.buzz.per_hour,
                          "used_hour": len([t for t in self.buzz.used if time.time() - t < 3600])},
                 "wallets": [{"address": a, "label": l, "from": "variable" if a in self.env_wallets else "page"} for a, l in fol.items()],
@@ -900,6 +1042,7 @@ class Sniper:
             self.r.watch_if_due()                 # the coins already held keep being watched during a check
         try:
             work("crawler", "sniper: reading the coin")
+            self.metas.refresh()                     # the narratives trending now (read at most every 10 minutes)
             try:
                 mint, pairs, note = resolve(mint)
             except FetchFailed as exc:
@@ -936,6 +1079,8 @@ class Sniper:
                 smart.setdefault(h["wallet"], {"wallet": h["wallet"], "label": followed.get(h["wallet"], h.get("label"))})["sol"] = h.get("sol")
             rep.update(rug=rug, flow=flw, smart=list(smart.values()), followed_n=len(followed))
             rep["jev"] = self._jev(F)
+            rep["growth"] = self._growth(mint, F.get("holders"), F.get("age_min"))
+            metas_hit = self.metas.of(mint)
             rep["buzz"] = None
             if self.buzz.enabled() and (manual or self._worth_buzz(rep, F)) and self.buzz.room(manual):
                 work("social", "sniper: searching the web for buzz")
@@ -946,14 +1091,34 @@ class Sniper:
                 rep["buzz"] = {"status": f"skipped: {self.buzz.per_hour} web searches this hour already"}
             else:
                 rep["buzz"] = {"status": "skipped: the coin didn't score high enough to spend a search"}
+            rep["narrative"] = narrative_read(F, metas_hit, gi.get("categories"), rep["buzz"])
+            rep["hype"] = hype_score(F, flw, rep["growth"], [x for x in lists if "bought" not in x], metas_hit, rep["buzz"])
             work("chief", "sniper: verdict")
             return self._finish(rep, F)
         finally:
             st.set_working(None)
 
+    def _growth(self, mint, holders, age_min):
+        """New holders an hour: from this coin's own earlier reading (3 to 60 min ago) when there is one, else since launch."""
+        if not holders:
+            return {"per_hour": None, "basis": "holders unknown"}
+        now = time.time()
+        seen = [x for x in self.holders_seen.get(mint, []) if now - x[0] <= 3600]
+        self.holders_seen[mint] = (seen + [(now, holders)])[-6:]
+        if len(self.holders_seen) > 400:                         # forget the oldest coins
+            for m in list(self.holders_seen)[:100]:
+                self.holders_seen.pop(m, None)
+        old = [x for x in seen if now - x[0] >= 180]
+        if old:
+            t0, h0 = old[0]
+            return {"per_hour": round((holders - h0) / ((now - t0) / 3600), 1), "basis": f"last {(now - t0) / 60:.0f} min"}
+        if age_min and age_min >= 6:
+            return {"per_hour": round(holders / (min(age_min, 1440) / 60), 1), "basis": "since launch"}
+        return {"per_hour": None, "basis": "too new to measure"}
+
     def _worth_buzz(self, rep, F):
         """The fast lane spends a web search only on a coin that is already close to a BUY on everything else."""
-        trial = score_coin({**rep, "facts": F, "buzz": None}, self.cfg)
+        trial = score_coin({**rep, "facts": F, "buzz": None, "gate": False}, self.cfg)
         return trial["verdict"] != "SKIP" and not trial["wait"] and trial["score"] >= self.cfg.snipe_buy_score - 15
 
     def _jev(self, F):
@@ -1101,7 +1266,12 @@ class Sniper:
                 n += 1
                 add(b["mint"], f"{label} bought", 100, {"wallet": addr, "label": label, "sol": b["sol"]})
         note["followed buys"] = n
-        # 2. what is new or being promoted right now
+        # 2. coins inside the narratives trending right now
+        self.metas.refresh(now)
+        note["narratives"] = len(self.metas.list) if self.metas.status == "ok" else self.metas.status
+        for a, names in list(self.metas.by_mint.items())[:120]:
+            add(a, "narrative: " + names[0], 15)
+        # 3. what is new or being promoted right now
         for path, name in (("/token-profiles/latest/v1", "new profile"), ("/token-boosts/latest/v1", "boosted"),
                            ("/community-takeovers/latest/v1", "community takeover")):
             try:

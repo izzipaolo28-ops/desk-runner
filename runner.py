@@ -326,6 +326,10 @@ class Runner:
             ok, why = False, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"
         elif rep.get("momentum_ok") is False:
             ok, why = False, "sellers are ahead right now"
+        elif self.cfg.snipe_need_narrative and not (rep.get("narrative") or {}).get("ok"):
+            ok, why = False, "no narrative found"
+        elif ((rep.get("hype") or {}).get("score") or 0) < self.cfg.snipe_min_hype:
+            ok, why = False, f"hype {(rep.get('hype') or {}).get('score', 0)}/100 is under {self.cfg.snipe_min_hype:g}"
         elif (rep.get("score") or 0) < DESK_GATE_SCORE:
             ok, why = False, f"sniper score {rep.get('score')} is under {DESK_GATE_SCORE:g}"
         else:
@@ -371,6 +375,7 @@ class Runner:
                 done.append((4, "risk: closed") if trade else (2, "risk: holding"))
             if done:
                 self.snapshot()
+        ran_cycle = False
         if self.slots_free():
             if self.state.data.get("paused"):
                 if not holding:
@@ -378,8 +383,10 @@ class Runner:
                     done.append((0, "paused"))
             elif self.last_cycle is None or now - self.last_cycle >= CYCLE_SECONDS:
                 done.append((3, self.cycle(now)))
-            elif self.sniper.due(now):           # the fast lane: new launches, promoted coins, your wallets' buys
-                done.append((3, self.sniper.round(now)))
+                ran_cycle = True
+        if not ran_cycle and not self.state.data.get("paused") and self.sniper.due(now):
+            # the fast lane, every minute, full slots or not: hot narratives, new launches, promoted coins, your wallets
+            done.append((3, self.sniper.round(now)))
         if not done:
             return "holding" if holding else "waiting"
         return max(enumerate(done), key=lambda x: (x[1][0], x[0]))[1][1]

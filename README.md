@@ -136,12 +136,27 @@ and tap **Check**. Within a minute you get a report and a score out of 100:
 | attention | socials, paid DexScreener boosts, which lists it's on, and a web search for posts on X, Reddit, TikTok, YouTube and news (only with `ANTHROPIC_API_KEY`) |
 | Jev | the desk's read of the market shape, whether the move is spent, the holder exit risk |
 
+**Narrative and hype, or no buy.** It only buys a coin with a story people are piling into right now, and attention
+growing fast:
+
+- **narrative**: the coin is in one of the narratives trending on DexScreener right now (their "metas": a person, an AI
+  wave, a viral character, a meme family, with that theme's market cap move), or the web search says who or what it's
+  about and people are talking about it, or it carries a specific theme tag (not just "Pump Fun") plus its own socials.
+- **hype, out of 100** (needs 50, `SNIPE_MIN_HYPE`): different wallets buying in the last 5 minutes, new holders an
+  hour (between its own looks, or since launch), volume speeding up, the price climbing this hour, trending lists and
+  narratives, and talk online.
+
+A coin that's safe but has no story, or whose hype is still slow, is a WATCH: it gets looked at again every few
+minutes while it builds. `SNIPE_NEED_NARRATIVE=off` drops the narrative rule. The same rules apply to the desk's own
+picks.
+
 Any single rug-safety failure, a copycat, or "nobody can sell" is a **SKIP**, whatever the score. Unknown is never a
 pass: a check that couldn't be read is a **WATCH**. A **BUY** needs 70/100 (`SNIPE_BUY_SCORE`) and buyers ahead
 right now. With **buy if it looks good** ticked, a BUY is bought at once; untick it to only check, then **Buy it**
 buys at half size (never a SKIP).
 
-**The fast lane.** Every minute (`SNIPE_SCAN_SECONDS`) it looks at new pools, GeckoTerminal's 5-minute trending,
+**The fast lane.** Every minute (`SNIPE_SCAN_SECONDS`), even with every slot full, it looks at the coins inside the
+narratives trending now, new pools, GeckoTerminal's 5-minute trending,
 DexScreener's newest profiles, boosts and community takeovers, and every buy by a wallet you follow. A cheap first
 look decides which two get the full check. **OFF** = only your own checks, **WATCH** = finds and checks, never buys,
 **AUTO** = buys every BUY. Paper starts on AUTO, live starts on WATCH (`SNIPE_MODE` sets it).
@@ -287,6 +302,7 @@ stays paused until you tap **Resume**.
 | `SNIPE_STOP_LOSS_PCT`, `SNIPE_SCALE_OUT`, `SNIPE_TRAIL_ARM_PCT`, `SNIPE_TRAIL_PCT` | `25`, `50:50,100:25`, `30`, `20` | the sniper's exits |
 | `SNIPE_STALL_MINUTES` / `SNIPE_STALL_GAIN_PCT` | `20` / `10` | out if it hasn't made +10% within 20 min |
 | `SNIPE_MAX_HOLD_HOURS` / `SNIPE_RIDE_X` | `12` / `3` | max hold, and how much longer it rides while buyers lead |
+| `SNIPE_NEED_NARRATIVE` / `SNIPE_MIN_HYPE` | `on` / `50` | buy only coins with a narrative, and hype at least this |
 | `SMART_WALLETS` | none | wallets to follow: `address:name,address:name` (or add them on the page) |
 | `ANTHROPIC_API_KEY` | none | turns on the web search for buzz (X, Reddit, TikTok, news), from console.anthropic.com |
 | `BUZZ_PER_HOUR` / `BUZZ_MODEL` | `6` / `claude-haiku-5-5` | web-searched checks per hour (your own checks may use up to 30) |

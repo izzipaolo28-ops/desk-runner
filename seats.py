@@ -128,6 +128,12 @@ class Config:
         self.snipe_ride_x = _env_num(env, "SNIPE_RIDE_X", 3, low=1, high=10)
         self.snipe_lock_pct = _env_num(env, "SNIPE_TRAIL_LOCK_PCT", 10, high=100)   # still climbing at max hold: keep riding up to 3x
         self.buzz_per_hour = int(_env_num(env, "BUZZ_PER_HOUR", 6, high=120))
+        # only coins with a story people are piling into, and attention growing fast
+        need = str(env.get("SNIPE_NEED_NARRATIVE", "on")).strip().lower()
+        if need not in ("on", "off"):
+            raise ValueError("SNIPE_NEED_NARRATIVE must be on or off")
+        self.snipe_need_narrative = need == "on"
+        self.snipe_min_hype = _env_num(env, "SNIPE_MIN_HYPE", 50, high=100)
 
     def plan(self, pos=None):
         """The rules WATCH applies to one coin. A sniper buy gets the sniper's in-and-out plan; everything else the
