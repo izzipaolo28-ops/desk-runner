@@ -47,7 +47,7 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:4px 
 .panel h2{margin:0 0 8px;font:700 12px var(--mono);letter-spacing:.08em;color:#c9d3e4;display:flex;justify-content:space-between;gap:8px}
 .panel h2 span{color:var(--pink)}
 .floor{position:relative;background:radial-gradient(ellipse at 50% 10%,#16203a 0,#0b1020 60%,#080b14 100%);border:1px solid var(--line);border-radius:10px;
-  margin-top:10px;padding:12px;overflow:hidden}
+  margin-top:0;padding:12px;overflow:hidden}
 .floor .screen{background:#05070d;border:1px solid #2a3550;border-radius:6px;padding:10px;max-width:560px;margin:0 auto 12px;font:12px var(--mono)}
 .floor .screen .big{font:700 18px var(--mono)}
 .stations{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
@@ -64,6 +64,43 @@ header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;padding:4px 
 .station .name{position:absolute;left:8px;top:6px;font:700 10px var(--mono);color:var(--c)}
 .bubble{position:absolute;left:6px;right:6px;top:22px;font:10px var(--mono);color:#dfe6f2;background:rgba(5,7,13,.85);border:1px solid #2a3550;border-radius:5px;padding:3px 5px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.station .bot{animation:idle 4.5s ease-in-out infinite}
+@keyframes idle{0%,100%{transform:translate(-50%,0) rotate(0)}50%{transform:translate(-50%,-1px) rotate(-3deg)}}
+.station.busy{box-shadow:0 0 0 2px var(--c) inset,0 0 30px -6px var(--c)}
+.station.busy .bot{animation:type .45s ease-in-out infinite}
+@keyframes type{0%,100%{transform:translate(-50%,0)}50%{transform:translate(-50%,-4px)}}
+.station.busy .mon i{animation:flick .6s steps(3) infinite}
+@keyframes flick{0%{opacity:.4}50%{opacity:1}100%{opacity:.7}}
+.station.home .bot{visibility:hidden}
+.courier{position:absolute;left:0;top:0;width:34px;height:34px;z-index:3;pointer-events:none;
+  transition:transform 1.4s cubic-bezier(.45,.05,.35,1);will-change:transform}
+.courier .cbody{width:34px;height:34px;transform-origin:50% 90%}
+.courier.walk .cbody{animation:walk .3s steps(2) infinite}
+.courier.left .cbody svg{transform:scaleX(-1)}
+@keyframes walk{0%{transform:rotate(-8deg) translateY(0)}100%{transform:rotate(8deg) translateY(-3px)}}
+.courier .tagc{position:absolute;left:50%;bottom:38px;transform:translateX(-50%);font:700 10px var(--mono);background:var(--amber);color:#2a1a00;
+  border-radius:9px;padding:1px 6px;white-space:nowrap;box-shadow:0 0 12px rgba(251,191,36,.55)}
+.courier .tagc:empty{display:none}
+.screen .row1{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.screen .live{color:var(--pink);font-weight:700}
+.screen .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--pink);margin-right:6px;animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+.feed{max-height:420px;overflow-y:auto;font:12px var(--mono);-webkit-overflow-scrolling:touch}
+.frow{display:flex;flex-wrap:wrap;gap:2px 8px;padding:5px 0;border-top:1px solid var(--line);align-items:baseline}
+.frow .ft{color:var(--muted);flex:none;width:58px}
+.frow .fa{flex:none;font-weight:700;width:62px}
+.frow .fc{flex:none;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow .fx{flex:1 1 160px;min-width:0;overflow-wrap:anywhere;color:#b9c4d8}
+.frow.k-cut .fx{color:#8f9bb0} .frow.k-pass .fx{color:var(--green)} .frow.k-ask .fx{color:#f0abfc}
+.frow.k-pick{background:rgba(255,79,216,.08)} .frow.k-pick .fx{color:var(--pink);font-weight:700}
+.frow.k-buy{background:rgba(52,211,153,.10)} .frow.k-buy .fx{color:var(--green);font-weight:800}
+.frow.k-sell{background:rgba(251,191,36,.08)} .frow.k-sell .fx{color:var(--amber);font-weight:800}
+.frow.k-error .fx{color:var(--red)} .frow.k-test .fx{color:var(--blue);font-weight:700} .frow.k-info .fx{color:var(--muted)}
+a.coin{color:var(--amber);text-decoration:none;border-bottom:1px dotted rgba(251,191,36,.6)}
+span.coin{color:var(--amber)}
+a.tx{color:var(--blue);text-decoration:none;border-bottom:1px dotted rgba(96,165,250,.6);margin-right:8px}
+.msg{font:12px var(--mono);color:var(--amber);min-height:16px;margin-top:6px}
+@media (prefers-reduced-motion:reduce){.courier{transition:none}.courier.walk .cbody,.station .bot,.station.busy .bot,.station.busy .mon i,.screen .dot{animation:none}}
 .grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
 @media (max-width:820px){.grid2{grid-template-columns:minmax(0,1fr)}}
 .balance{display:flex;gap:12px;align-items:flex-end}
@@ -101,12 +138,18 @@ th{color:var(--muted);font-weight:500;border-top:0}
     <span class="clock" id="clock">--:--</span>
   </header>
 
-  <section class="agents" id="agents" aria-label="Seats"></section>
-
-  <section class="floor" aria-label="The floor">
+  <section class="floor" aria-label="The floor" id="floor">
     <div class="screen" id="screen"><div class="muted">waiting for the desk…</div></div>
     <div class="stations" id="stations"></div>
+    <div class="courier" id="courier" aria-hidden="true"><span class="tagc" id="courierTag"></span><div class="cbody" id="courierBody"></div></div>
   </section>
+
+  <section class="panel">
+    <h2>LIVE FEED <span id="feedNote">coins · cuts · trades</span></h2>
+    <div class="feed" id="feed"><div class="empty">nothing yet: the first scan fills this in</div></div>
+  </section>
+
+  <section class="agents" style="margin-top:10px" id="agents" aria-label="Seats"></section>
 
   <div class="grid2">
     <section class="panel">
@@ -146,11 +189,17 @@ th{color:var(--muted);font-weight:500;border-top:0}
     <div class="addr" id="wallet"></div>
     <div id="errors" style="margin-top:8px"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn" id="scanBtn" type="button">Scan now</button>
+      <button class="btn" id="testBtn" type="button">Test swap</button>
       <button class="btn warn" id="pauseBtn" type="button">Pause new trades</button>
       <button class="btn" id="resumeBtn" type="button">Resume</button>
     </div>
-    <p class="muted" style="font-size:12px">Pause stops new entries. An open position stays with RISK, which alone closes it.
-      Pause and resume need the ADMIN_TOKEN you set on the server. It's kept only on this phone.</p>
+    <div class="msg" id="adminMsg" role="status"></div>
+    <div id="tests" style="margin-top:6px"></div>
+    <p class="muted" style="font-size:12px"><b>Scan now</b> runs the next scan right away. <b>Test swap</b> proves the wallet can trade:
+      in paper mode it only asks Jupiter for quotes; in live mode it really swaps about $1 of SOL to USDC and back (a few cents in fees).
+      Pause stops new entries; an open position stays with RISK, which alone closes it.
+      All four need the ADMIN_TOKEN you set on the server. It's kept only on this phone.</p>
   </section>
 </div>
 
@@ -190,17 +239,77 @@ function face(shape, c){
   return svg;
 }
 
-function renderAgents(agents){
-  const box = $("agents"), floor = $("stations");
-  box.textContent = ""; floor.textContent = "";
-  const newest = Math.max(...SEATS.map(s => Date.parse((agents[s.id] || {}).updated) || 0));
+const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/, SIG_RE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
+const SEAT = Object.fromEntries(SEATS.map(s => [s.id, s]));
+const reduceMotion = (() => { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; } })();
+function coinLink(ticker, mint){
+  const label = ticker ? "$" + String(ticker).slice(0, 12) : (mint ? mint.slice(0, 4) + "…" + mint.slice(-4) : "");
+  if (!label) return el("span");
+  if (mint && MINT_RE.test(mint)){
+    const a = el("a", "coin", label); a.href = "https://dexscreener.com/solana/" + mint; a.target = "_blank"; a.rel = "noopener noreferrer";
+    return a;
+  }
+  return el("span", "coin", label);
+}
+function txLink(sig, label){
+  if (!sig || !SIG_RE.test(sig)) return el("span", "muted", label + " (no signature)");
+  const a = el("a", "tx", label); a.href = "https://solscan.io/tx/" + sig; a.target = "_blank"; a.rel = "noopener noreferrer"; return a;
+}
+function clockTime(iso){ const t = Date.parse(iso); return Number.isFinite(t) ? new Date(t).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false}) : ""; }
+
+// ---- the floor: desks are built once so the courier can walk between them ----
+const STN = {};
+function initFloor(){
+  const floor = $("stations");
+  for (const s of SEATS){
+    const st = el("div", "station" + (s.id === "crawler" ? " home" : "")); st.style.setProperty("--c", s.c);
+    const mon = el("div", "mon"), bar = el("i"); bar.style.background = s.c; mon.appendChild(bar);
+    const bot = el("div", "bot"); bot.appendChild(face(s.shape, s.c));
+    const bubble = el("div", "bubble", "…");
+    st.append(el("div", "name", s.name), bubble, mon, el("div", "desk"), bot);
+    floor.appendChild(st);
+    STN[s.id] = {st, bar, bubble};
+  }
+  $("courierBody").appendChild(face(SEAT.crawler.shape, SEAT.crawler.c));
+}
+const courier = {at: null, x: null, wanderTimer: null};
+function spot(id){
+  const st = STN[id] && STN[id].st; if (!st) return null;
+  const home = id === "crawler", cx = st.offsetLeft + st.offsetWidth / 2 - 17;
+  return {x: Math.round(home ? cx : cx + Math.min(30, st.offsetWidth / 4)), y: Math.round(st.offsetTop + st.offsetHeight - 42 - 33)};
+}
+function walkTo(id, tag){
+  const c = $("courier"), p = spot(id); if (!p) return;
+  $("courierTag").textContent = tag || "";
+  if (courier.at === id && courier.x === p.x) return;
+  if (courier.x !== null && !reduceMotion){
+    c.classList.toggle("left", p.x < courier.x); c.classList.add("walk");
+    clearTimeout(courier.walkEnd); courier.walkEnd = setTimeout(() => c.classList.remove("walk"), 1450);
+  }
+  c.style.transform = `translate(${p.x}px, ${p.y}px)`;
+  courier.at = id; courier.x = p.x;
+}
+function wander(){                                    // between scans the crawler drops by a desk, then goes home
+  if (reduceMotion || document.hidden || !lastStatus || lastStatus.working || lastStatus.position) return;
+  const others = SEATS.map(s => s.id).filter(i => i !== "crawler" && i !== courier.at);
+  courier.wandering = true;
+  walkTo(others[Math.floor(Math.random() * others.length)], "");
+  setTimeout(() => { courier.wandering = false; if (lastStatus && !lastStatus.working && !lastStatus.position) walkTo("crawler", ""); }, 4200);
+}
+
+function renderAgents(agents, working){
+  const box = $("agents");
+  box.textContent = "";
+  let newestId = null, newest = 0;                                       // one glowing desk: the latest to act
+  for (const s of SEATS){ const t = Date.parse((agents[s.id] || {}).updated) || 0; if (t > newest){ newest = t; newestId = s.id; } }
+  if (lastStatus && lastStatus.position) newestId = "risk";
   for (const s of SEATS){
     const a = agents[s.id] || {};
     const card = el("article", "agent"); card.style.setProperty("--c", s.c);
     const top = el("div", "top"); const f = face(s.shape, s.c); f.classList.add("face"); top.appendChild(f);
     const t = el("div"); const h = el("h3", "", s.name); h.style.color = s.c; t.append(h, el("div", "role", s.role)); top.appendChild(t);
     card.appendChild(top);
-    card.appendChild(el("span", "ago", ago(a.updated)));
+    card.appendChild(el("span", "ago", working && working.agent === s.id ? "now" : ago(a.updated)));
     const kv = el("div", "kv"); kv.append(el("span", "", a.label || "—"), el("b", "", num(a.value) === null ? "—" :
       (["ticket", "last fill"].includes(a.label) ? usd(a.value) : Number.isInteger(a.value) ? String(a.value) : (Math.abs(a.value) < 10 ? a.value.toFixed(2) : String(Math.round(a.value))))));
     card.appendChild(kv);
@@ -208,11 +317,12 @@ function renderAgents(agents){
     const v = num(a.value); mi.style.width = (v !== null && v >= 0 && v <= 1 ? v * 100 : a.line ? 100 : 0) + "%"; m.appendChild(mi); card.appendChild(m);
     card.appendChild(el("div", "line", a.line || "no data yet"));
     box.appendChild(card);
-    const st = el("div", "station" + ((Date.parse(a.updated) || -1) === newest && newest > 0 ? " active" : "")); st.style.setProperty("--c", s.c);
-    const mon = el("div", "mon"); const bar = el("i"); bar.style.background = s.c; bar.style.height = (20 + Math.min(70, (a.line || "").length)) + "%"; mon.appendChild(bar);
-    const bot = el("div", "bot"); bot.appendChild(face(s.shape, s.c));
-    st.append(el("div", "name", s.name), el("div", "bubble", a.line || "…"), mon, el("div", "desk"), bot);
-    floor.appendChild(st);
+    const stn = STN[s.id]; if (!stn) continue;
+    const busy = !!(working && working.agent === s.id);
+    stn.st.classList.toggle("busy", busy);
+    stn.st.classList.toggle("active", !working && s.id === newestId);
+    stn.bubble.textContent = busy ? (working.step || "working") + (working.ticker ? " · $" + working.ticker : "") : (a.line || "…");
+    stn.bar.style.height = (20 + Math.min(70, (a.line || "").length)) + "%";
   }
 }
 
@@ -242,7 +352,9 @@ function render(d){
   const mode = $("mode");
   mode.className = "mode " + (d.paused ? "paused" : d.mode);
   mode.textContent = d.mode === "stopped" ? "STOPPED" : d.paused ? "PAUSED" : d.mode === "live" ? "LIVE · REAL MONEY" : "PAPER";
-  renderAgents(d.agents || {});
+  lastStatus = d;
+  const srv = Date.parse(d.server_now); if (Number.isFinite(srv)) clockOffset = srv - Date.now();
+  renderAgents(d.agents || {}, d.working);
   const eq = (d.equity || []).filter(p => num(p[1]) !== null);
   renderChart(eq);
   const first = eq.length ? eq[0][1] : null, last = eq.length ? eq[eq.length - 1][1] : null;
@@ -256,28 +368,55 @@ function render(d){
   const trades = d.trades || [];
   const w = trades.filter(t => num(t.pnl_usd) > 0).length, l = trades.filter(t => num(t.pnl_usd) !== null && t.pnl_usd < 0).length;
   $("record").textContent = trades.length ? `${w}W ${l}L` : "";
-  // floor screen: what the desk is doing now
+  // floor screen: what the desk is doing now, and where the courier stands
   const scr = $("screen"); scr.textContent = "";
-  const p = d.position;
-  if (p){
-    scr.append(el("div", "muted", "HOLDING · " + (p.mode === "live" ? "real money" : "paper")));
-    scr.append(el("div", "big", (p.ticker || "?") + "  " + (num(p.last_pnl_usd) === null ? "" : signed(p.last_pnl_usd))));
-    scr.append(el("div", "muted", "cost " + usd(num(p.cost_usd)) + " · value " + usd(num(p.last_value_usd)) +
-      " · volume ratio " + (num(p.last_ratio) === null ? "—" : p.last_ratio.toFixed(2)) + " (closes under 0.20)"));
+  const p = d.position, wk = d.working, feed = d.feed || [];
+  const row1 = el("div", "row1");
+  if (wk){
+    const live = el("span", "live"); live.append(el("span", "dot"), document.createTextNode("SCANNING"));
+    row1.append(live, el("span", "muted", (wk.of ? `coin ${wk.n || 0} of ${wk.of}` : "listing pools") + " · " + (SEAT[wk.agent] ? SEAT[wk.agent].name : wk.agent)));
+    scr.append(row1);
+    const big = el("div", "big"); big.append(wk.ticker || wk.mint ? coinLink(wk.ticker, wk.mint) : document.createTextNode(wk.step || "working"));
+    scr.append(big, el("div", "muted", wk.step || ""));
+    walkTo(wk.agent === "crawler" ? "crawler" : wk.agent, wk.ticker ? "$" + wk.ticker : "");
+  } else if (p){
+    row1.append(el("span", "", "HOLDING · " + (p.mode === "live" ? "real money" : "paper")), el("span", "muted", "")); row1.lastChild.id = "countdown";
+    scr.append(row1);
+    const big = el("div", "big"); big.append(coinLink(p.ticker, p.mint), document.createTextNode("  " + (num(p.last_pnl_usd) === null ? "" : signed(p.last_pnl_usd))));
+    scr.append(big, el("div", "muted", "cost " + usd(num(p.cost_usd)) + " · value " + usd(num(p.last_value_usd)) +
+      " · volume ratio " + (num(p.last_ratio) === null ? "—" : p.last_ratio.toFixed(2)) + " (sells under 0.20)"));
+    walkTo("risk", p.ticker ? "$" + p.ticker : "");
   } else {
     const c = d.cycle;
-    scr.append(el("div", "muted", d.paused ? "PAUSED · " + (d.pause_reason || "") : "SCANNING · every " + Math.round((d.cycle_seconds || 900) / 60) + " min"));
-    scr.append(el("div", "big", c && c.order ? "last pick " + (c.order.ticker || c.order.address.slice(0, 6)) : "no pick yet"));
-    scr.append(el("div", "muted", c ? "last cycle " + ago(c.time) + " ago" : "first cycle starting"));
+    row1.append(el("span", "", d.mode === "stopped" ? "STOPPED" : d.paused ? "PAUSED · " + (d.pause_reason || "") : "IDLE"), el("span", "muted", ""));
+    row1.lastChild.id = "countdown";
+    scr.append(row1);
+    const big = el("div", "big");
+    if (c && c.order){ big.append(document.createTextNode("last pick "), coinLink(c.order.ticker, c.order.address)); } else big.textContent = "no pick yet";
+    const done = feed.find(f => (f.text || "").startsWith("scan done"));
+    scr.append(big, el("div", "muted", done ? "last scan " + ago(done.t) + " ago: " + done.text.replace(/^scan done: /, "") : c ? "last scan " + ago(c.time) + " ago" : "first scan starting"));
+    if (!courier.wandering) walkTo("crawler", "");
   }
+  tickCountdown();
+  // live feed
+  const fb = $("feed"); fb.textContent = "";
+  for (const f of feed.slice(0, 60)){
+    const r = el("div", "frow k-" + (f.kind || "info"));
+    const seat = SEAT[f.agent]; const ag = el("span", "fa", seat ? seat.name : (f.agent || "")); if (seat) ag.style.color = seat.c;
+    r.append(el("span", "ft", clockTime(f.t)), ag, f.ticker || f.mint ? coinLink(f.ticker, f.mint) : el("span", "fc"), el("span", "fx", f.text || ""));
+    if (r.children[2].classList) r.children[2].classList.add("fc");
+    fb.appendChild(r);
+  }
+  if (!feed.length) fb.appendChild(el("div", "empty", "nothing yet: the first scan fills this in"));
   // position panel
   $("posMode").textContent = p ? p.mode.toUpperCase() : "";
   const pos = $("position"); pos.textContent = ""; pos.className = p ? "" : "empty";
   if (p){
-    const tbl = el("table"); const rows = [["token", p.ticker || "?"], ["mint", p.mint], ["opened", p.opened_at || "unknown"],
+    const tbl = el("table"); const rows = [["token", coinLink(p.ticker, p.mint)], ["mint", p.mint], ["opened", p.opened_at || "unknown"],
       ["cost", usd(num(p.cost_usd))], ["value now", usd(num(p.last_value_usd))], ["P&L", signed(num(p.last_pnl_usd))],
       ["impact at entry", num(p.impact_pct) === null ? "—" : p.impact_pct.toFixed(2) + "%"], ["last check", p.last_check ? ago(p.last_check) + " ago" : "not yet"]];
-    for (const [k, v] of rows){ const tr = el("tr"); tr.append(el("td", "muted", k), el("td", k === "P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : "", v)); tbl.appendChild(tr); }
+    for (const [k, v] of rows){ const tr = el("tr"); const td = el("td", k === "P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : "");
+      if (v instanceof Node) td.appendChild(v); else td.textContent = v; tr.append(el("td", "muted", k), td); tbl.appendChild(tr); }
     pos.appendChild(tbl);
   } else pos.textContent = d.paused ? "no position · paused" : "no position: the desk is scanning";
   // cycle pipeline
@@ -315,7 +454,8 @@ function render(d){
   $("tradeCount").textContent = trades.length ? trades.length + " closed" : "";
   for (const t of trades.slice(0, 30)){
     const tr = el("tr"); const pnl = num(t.pnl_usd);
-    tr.append(el("td", "muted", (t.closed_at || "").slice(5, 16).replace("T", " ")), el("td", "", (t.ticker || "?") + (t.mode === "paper" ? " ·p" : "")),
+    const tk = el("td"); tk.append(coinLink(t.ticker || "?", t.mint), document.createTextNode(t.mode === "paper" ? " ·p" : ""));
+    tr.append(el("td", "muted", (t.closed_at || "").slice(5, 16).replace("T", " ")), tk,
       el("td", "", usd(num(t.cost_usd))), el("td", "", usd(num(t.proceeds_usd))), el("td", pnl === null ? "" : pnl >= 0 ? "pos" : "neg", signed(pnl)), el("td", "muted", t.reason || ""));
     tb.appendChild(tr);
   }
@@ -325,10 +465,31 @@ function render(d){
   $("walletMode").textContent = (d.nets || []).join(", ");
   const errs = $("errors"); errs.textContent = "";
   for (const e of (d.errors || []).slice(0, 5)) errs.appendChild(el("div", "err mono", ago(e.time) + " ago · " + e.text));
+  const tests = $("tests"); tests.textContent = "";
+  for (const t of (d.tests || []).slice(0, 3)){
+    const row = el("div", "mono", ""); row.style.fontSize = "12px"; row.style.margin = "4px 0";
+    const head = el("span", t.ok ? "pos" : "neg", `test swap ${t.ok ? "OK" : "FAILED"} · ${t.mode} · ${ago(t.time)} ago · `);
+    row.append(head);
+    if (num(t.usdc) !== null && num(t.sol_back) !== null) row.append(document.createTextNode(`${t.sol_in.toFixed(5)} SOL → ${t.usdc.toFixed(4)} USDC → ${t.sol_back.toFixed(5)} SOL `));
+    (t.sigs || []).forEach((sig, i) => row.append(txLink(sig, i ? "tx back" : "tx out")));
+    if (t.note) row.append(el("div", "muted", t.note));
+    tests.appendChild(row);
+  }
 }
 
-let failures = 0;
+let clockOffset = 0;
+function tickCountdown(){
+  const box = document.getElementById("countdown"), d = lastStatus; if (!box || !d) return;
+  const target = Date.parse(d.position ? d.next_risk_at : d.next_cycle_at);
+  if (!Number.isFinite(target)){ box.textContent = d.paused ? "" : ""; return; }
+  const left = Math.round((target - (Date.now() + clockOffset)) / 1000);
+  const mmss = left <= 0 ? "any second" : Math.floor(left / 60) + ":" + String(left % 60).padStart(2, "0");
+  box.textContent = (d.position ? "next RISK check " : "next scan ") + (left <= 0 ? mmss : "in " + mmss);
+}
+
+let failures = 0, lastStatus = null, fastUntil = 0, pollTimer = null;
 async function refresh(){
+  clearTimeout(pollTimer);
   try {
     const r = await fetch("/api/status", {cache: "no-store"});
     if (!r.ok) throw new Error("HTTP " + r.status);
@@ -337,19 +498,36 @@ async function refresh(){
     failures++;
     if (failures > 1) $("screen").textContent = "can't reach the desk (" + e.message + "): retrying";
   }
+  const fast = (lastStatus && lastStatus.working) || Date.now() < fastUntil;   // while scanning, watch closely
+  pollTimer = setTimeout(refresh, fast ? 2500 : 10000);
 }
 async function admin(path){
   let token = store.get("adminToken");
   if (!token){ token = prompt("ADMIN_TOKEN (set on the server)"); if (!token) return; }
-  const r = await fetch(path, {method: "POST", headers: {"X-Admin-Token": token}});
-  if (r.status === 401){ store.set("adminToken", ""); alert("That admin token was refused."); return; }
-  store.set("adminToken", token); refresh();
+  const msg = $("adminMsg"); msg.textContent = "…";
+  let r;
+  try { r = await fetch(path, {method: "POST", headers: {"X-Admin-Token": token}}); }
+  catch (e) { msg.textContent = "can't reach the desk: " + e.message; return; }
+  if (r.status === 401){ store.set("adminToken", ""); msg.textContent = "That admin token was refused."; return; }
+  store.set("adminToken", token);
+  let body = {}; try { body = await r.json(); } catch (e) {}
+  msg.textContent = body.detail || (body.paused === true ? "paused" : body.paused === false ? "running" : r.ok ? "done" : "HTTP " + r.status);
+  fastUntil = Date.now() + 30000; refresh();
 }
 $("pauseBtn").addEventListener("click", () => admin("/api/pause"));
 $("resumeBtn").addEventListener("click", () => admin("/api/resume"));
-setInterval(() => { $("clock").textContent = new Date().toISOString().slice(11, 16) + " UTC"; }, 1000);
-renderAgents({});
-refresh(); setInterval(refresh, 10000);
+$("scanBtn").addEventListener("click", () => admin("/api/scan-now"));
+$("testBtn").addEventListener("click", () => {
+  const live = lastStatus && lastStatus.mode === "live", amt = lastStatus && num(lastStatus.test_swap_usd) || 1;
+  if (live && !confirm(`REAL MONEY: swap about $${amt.toFixed(2)} of the bot wallet's SOL to USDC and straight back. Fees are a few cents. Go?`)) return;
+  admin("/api/test-swap");
+});
+setInterval(() => { $("clock").textContent = new Date().toISOString().slice(11, 16) + " UTC"; tickCountdown(); }, 1000);
+initFloor();
+renderAgents({}, null);
+addEventListener("resize", () => { const at = courier.at; courier.at = null; if (at) walkTo(at, $("courierTag").textContent); });
+setInterval(wander, 11000);
+refresh();
 </script>
 </body>
 </html>

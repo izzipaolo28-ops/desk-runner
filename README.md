@@ -77,6 +77,18 @@ and a real fill, aren't. Real results will be a little worse.
 The bot keeps 0.02 SOL in the wallet for fees (`FEE_RESERVE_SOL`). The bot's buys and sells show up in that Phantom
 account like any other swap, so you can see them there, or sell by hand.
 
+## The buttons (bottom of the page, need `ADMIN_TOKEN`)
+
+| button | what it does |
+|---|---|
+| **Scan now** | runs the next scan right away instead of waiting out the 15 minutes (not while holding, not twice a minute) |
+| **Test swap** | paper: asks Jupiter for real SOL→USDC→SOL quotes, sends nothing. Live: really swaps about `TEST_SWAP_USD` ($1) of SOL to USDC and back, with Solscan links for both transactions. Do this once after going live, before the bot trades a memecoin. |
+| **Pause / Resume** | stop / restart new buys. RISK keeps managing an open position. |
+
+The floor at the top shows the crawler carrying the coin being checked from desk to desk, a countdown to the next
+scan, and the live feed lists every coin: what was cut and why, what Jev was asked, what was bought and sold. Tap a
+coin to open its DexScreener chart.
+
 ## Stopping it
 
 | you want | do this |
@@ -128,6 +140,7 @@ stays paused until you tap **Resume**.
 | `TRENDING_PAGES` | `1` | pages of GeckoTerminal trending pools scanned first (0 to 3; 0 = new pools only) |
 | `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
+| `TEST_SWAP_USD` | `1` | size of the Test swap round trip, $0.50 to $20 |
 
 A variable that is set but isn't a valid number stops the desk and names the variable. It is never silently
 replaced with the default.

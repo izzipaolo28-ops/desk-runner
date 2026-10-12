@@ -16,11 +16,12 @@ from datetime import datetime, timezone
 
 import book
 import collect
-from jupiter import WSOL, JupiterError
+from jupiter import USDC, WSOL, JupiterError
 from main import TICKET_SHARE
 from solana_wallet import sign_transaction
 
 log = logging.getLogger("seats")
+FEED_MAX = 150
 MAX_POOL_SHARE = 0.02          # SIZE step 3: never more than 2% of the pool, or you are the exit
 LAMPORTS = 1_000_000_000
 
@@ -73,7 +74,8 @@ class State:
         self.path, self.lock = path, threading.RLock()
         self.data = {"position": None, "trades": [], "equity": [], "paused": False, "pause_reason": None,
                      "day": None, "day_start_bank": None, "realized_today": 0.0, "agents": {}, "errors": [],
-                     "judge": [], "cycle": None, "shadow": [], "started_at": _now()}
+                     "judge": [], "cycle": None, "shadow": [], "started_at": _now(),
+                     "feed": [], "working": None, "tests": []}
         try:
             with open(path) as fh:
                 self.data.update(json.load(fh))
@@ -94,6 +96,24 @@ class State:
     def agent(self, name, line, value=None, label=None):
         with self.lock:
             self.data["agents"][name] = {"line": str(line)[:160], "value": _f(value), "label": label, "updated": _now()}
+
+    def feed(self, agent, kind, text, ticker=None, mint=None):
+        """One line of the live feed: which coin, which seat, what happened. Newest first."""
+        row = {"t": _now(), "agent": agent, "kind": kind, "text": str(text)[:160]}
+        if ticker:
+            row["ticker"] = str(ticker)[:16]
+        if isinstance(mint, str) and 32 <= len(mint) <= 44:
+            row["mint"] = mint
+        with self.lock:
+            self.data["feed"] = ([row] + (self.data.get("feed") or []))[:FEED_MAX]
+
+    def set_working(self, agent=None, step=None, ticker=None, mint=None, n=None, of=None):
+        """What the desk is doing this second, for the floor. agent=None: nothing (between scans)."""
+        with self.lock:
+            self.data["working"] = None if agent is None else {
+                "agent": agent, "step": step, "ticker": str(ticker)[:16] if ticker else None,
+                "mint": mint if isinstance(mint, str) and 32 <= len(mint) <= 44 else None,
+                "n": n, "of": of, "since": _now()}
 
     def error(self, text):
         with self.lock:
@@ -249,22 +269,80 @@ class Seats:
     def send_to_seats(self, order, bank):
         """SIZE, then FILLS. If nothing is bought, RISK is told so and frees the book (it is still RISK's call)."""
         ticket, why = self.size(order, bank)
-        label = order["token"].get("ticker") or order["token"]["address"][:6]
+        tok = order["token"]
+        label = tok.get("ticker") or tok["address"][:6]
+        coin = {"ticker": tok.get("ticker"), "mint": tok.get("address")}
         if not ticket:
             self.state.agent("size", f"0 for {label}: {why}", 0, "ticket")
+            self.state.feed("size", "skip", f"no ticket: {why}", **coin)
             return self.release_unfilled(order, f"SIZE: {why}")
         self.state.agent("size", f"{label}: ${ticket:,.2f} ({100 * ticket / bank:.1f}% of bank)", ticket, "ticket")
+        self.state.feed("size", "info", f"ticket ${ticket:,.2f} ({100 * ticket / bank:.1f}% of bank)", **coin)
+        self.state.set_working("fills", "buying", **coin)
         try:
             pos = self.buy(order, ticket)
         except Exception as exc:
             self.state.agent("fills", f"no fill on {label}: {exc}", None, "last fill")
+            self.state.feed("fills", "error", f"no fill: {exc}", **coin)
             if (self.state.data.get("position") or {}).get("status") == "unconfirmed":
                 return None                         # RISK reconciles it from the wallet
             return self.release_unfilled(order, f"FILLS: {exc}")
         self.state.agent("fills", f"in ${pos['cost_usd']:,.2f} on {label}, impact {pos['impact_pct']:.2f}%"
                          + (" (paper)" if pos["mode"] == "paper" else ""), pos["cost_usd"], "last fill")
+        self.state.feed("fills", "buy", f"BOUGHT ${pos['cost_usd']:,.2f}"
+                        + (" (paper)" if pos["mode"] == "paper" else " with real SOL")
+                        + f", impact {pos['impact_pct']:.2f}%", **coin)
         self.state.agent("risk", f"watching {label}: first check in {int(self.cfg.risk_poll_seconds // 60)} min", None, "holding")
         return pos
+
+    def test_swap(self, usd):
+        """Proves the wallet can trade before any memecoin does: SOL -> USDC -> SOL for about `usd`.
+        Paper: two real Jupiter quotes, nothing signed. Live: two real swaps, signed with the bot key.
+        Returns a result row; raises only before anything was sent."""
+        sol_usd = self.sol_usd()
+        if sol_usd is None:
+            raise RuntimeError("SOL price unknown: can't size the test")
+        lamports = int(usd / sol_usd * LAMPORTS)
+        if lamports <= 0:
+            raise RuntimeError("test amount rounds to zero")
+        live = self.cfg.live
+        out = {"time": _now(), "mode": "live" if live else "paper", "usd": usd, "sol_in": lamports / LAMPORTS,
+               "usdc": None, "sol_back": None, "sigs": [], "ok": False, "note": ""}
+        if live:
+            have = self.rpc.sol_lamports(self.kp.address)
+            need = lamports + int(self.cfg.fee_reserve_sol * LAMPORTS)
+            if have < need:
+                raise RuntimeError(f"wallet holds {have / LAMPORTS:.4f} SOL; the test needs {need / LAMPORTS:.4f} "
+                                   "including the fee reserve")
+        taker = self.kp.address if live else None
+        q1 = self.jup.order(WSOL, USDC, lamports, taker=taker)
+        if not live:
+            usdc = int(q1["outAmount"])
+            q2 = self.jup.order(USDC, WSOL, usdc)
+            out.update(usdc=usdc / 1e6, sol_back=int(q2["outAmount"]) / LAMPORTS, ok=True,
+                       note="paper: real Jupiter quotes both ways, nothing signed or sent")
+            return out
+        r1 = self.jup.execute(sign_transaction(q1["transaction"], self.kp), q1["requestId"])
+        out["sigs"].append(r1.get("signature"))
+        try:
+            usdc = int(r1.get("totalOutputAmount") or 0) or self.rpc.token_balance(self.kp.address, USDC)[0]
+        except Exception:
+            usdc = 0
+        out["usdc"] = usdc / 1e6 if usdc else None
+        if not usdc:
+            out["note"] = "SOL -> USDC landed but the USDC amount couldn't be read: it is in the bot wallet"
+            return out
+        try:
+            q2 = self.jup.order(USDC, WSOL, usdc, taker=taker)
+            r2 = self.jup.execute(sign_transaction(q2["transaction"], self.kp), q2["requestId"])
+        except Exception as exc:
+            out["note"] = f"SOL -> USDC worked; USDC -> SOL failed ({exc}). The USDC is in the bot wallet."
+            return out
+        out["sigs"].append(r2.get("signature"))
+        back = int(r2.get("totalOutputAmount") or 0)
+        out.update(sol_back=back / LAMPORTS if back else None, ok=True,
+                   note="live: both swaps landed. The wallet can trade.")
+        return out
 
     def release_unfilled(self, order, why):
         self.state.agent("risk", f"nothing filled, desk released ({why})", None, "released")
@@ -375,6 +453,9 @@ class Seats:
         losses = sum(1 for t in self.state.data["trades"] if (t.get("pnl_usd") or 0) < 0)
         self.state.agent("risk", f"closed {label}: {why}" + (f", ${pnl:+,.2f}" if pnl is not None else ", P&L unknown"),
                          pnl, f"{wins}W {losses}L")
+        self.state.feed("risk", "sell", ("SOLD " + (f"{pnl:+,.2f} USD" if pnl is not None else "(P&L unknown)")
+                                         + (" (paper)" if pos["mode"] == "paper" else "") + f": {why}"),
+                        pos.get("ticker"), pos.get("mint"))
         book.release()                               # the seat that closed the position frees the book
         self.data_misses = 0
         return trade

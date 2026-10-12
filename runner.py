@@ -36,7 +36,9 @@ os.environ.setdefault("JUDGE_URL", f"http://127.0.0.1:{DESK_PORT}")
 
 import book  # noqa: E402
 import collect  # noqa: E402
+import filter as desk_filter  # noqa: E402  (the desk's filter.py, not the builtin)
 import main  # noqa: E402
+import pick as desk_pick  # noqa: E402
 import thresholds  # noqa: E402
 from jupiter import Jupiter  # noqa: E402
 from public_list import PublicList  # noqa: E402
@@ -55,6 +57,11 @@ try:
     TRENDING_PAGES = max(0, min(3, int(os.environ.get("TRENDING_PAGES", "1"))))
 except ValueError:
     TRENDING_PAGES = 1
+try:
+    TEST_SWAP_USD = min(20.0, max(0.5, float(os.environ.get("TEST_SWAP_USD", "1"))))
+except ValueError:
+    TEST_SWAP_USD = 1.0
+SCAN_NOW_COOLDOWN = 60          # seconds: "Scan now" can't fire twice inside a minute (GeckoTerminal, Jev credits)
 
 
 def _f(v):
@@ -88,16 +95,106 @@ def why(stats):
     return " · ".join(parts)
 
 
+def _iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds") if ts is not None else None
+
+
+def _coin(t):
+    return {"ticker": t.get("ticker"), "mint": t.get("addr") or t.get("address")}
+
+
 class Runner:
     def __init__(self, cfg, seats, state, judge, lister, clock=time.time):
         self.cfg, self.seats, self.state, self._judge, self.lister, self.clock = cfg, seats, state, judge, lister, clock
         self.last_cycle = self.last_risk = None
         self.last_bank = None
+        self.test_requested = False
+        self.coin, self.seen_n, self.seen_of = {}, 0, None
         main.universe = universe                  # trade only what Jupiter can, trending first
+        self._instrument()
+
+    # ---------- the live feed: main.run_once is the desk's code, unchanged; each step it calls is wrapped ----------
+    def _instrument(self):
+        st, R = self.state, self
+
+        def shortlist(fomo, ids):
+            listed = collect.shortlist(fomo, ids)
+            R.seen_n, R.seen_of = 0, len(listed)
+            st.feed("crawler", "info", f"scan started: {len(ids)} pools listed, {len(listed)} with market data")
+            return listed
+
+        def step(agent, name, t):
+            R.coin = _coin(t)
+            st.set_working(agent, name, n=R.seen_n, of=R.seen_of, **R.coin)
+
+        def free_kill(t):
+            R.seen_n += 1
+            step("crawler", "free_kill", t)
+            k = desk_filter.free_kill(t)
+            st.feed("crawler", "cut" if k else "pass", f"cut: {k}" if k else "passed the free checks", **_coin(t))
+            return k
+
+        def trade_counts(t):
+            step("crawler", "trade data", t)
+            return collect.trade_counts(t)
+
+        def trade_kill(t):
+            k = desk_filter.trade_kill(t)
+            if k:
+                st.feed("crawler", "cut", f"cut: {k}", **_coin(t))
+            else:
+                st.feed("crawler", "pass", f"trades ok: {t.get('trades_h24')} in 24h", **_coin(t))
+            return k
+
+        def dossier(t):
+            step("vet", "dossier", t)
+            try:
+                return collect.dossier(t)
+            except collect.DossierFailed as exc:
+                st.feed("vet", "error", f"dossier failed: {str(exc)[:80]}", **_coin(t))
+                raise
+
+        def chain_kill(d):
+            step("vet", "chain_kill", d)
+            k = desk_filter.chain_kill(d)
+            if k:
+                st.feed("vet", "cut", f"cut: {k}", **_coin(d))
+            else:
+                tw = d.get("top_wallet_percent")
+                st.feed("vet", "pass", "chain ok" + (f": top wallet {tw:.1f}%" if isinstance(tw, (int, float)) else ""),
+                        **_coin(d))
+            return k
+
+        def soft_kill(ans, d=None, asked=()):
+            k = desk_filter.soft_kill(ans, d, asked)
+            coin = _coin(d or {})
+            st.feed("chief" if not k else "vet", "cut" if k else "pass",
+                    f"Jev says no: {k}" if k else "survived every check: goes to the pick", **coin)
+            return k
+
+        def pick(ask, survivors):
+            if survivors:
+                st.set_working("chief", "pick", n=len(survivors), of=len(survivors))
+            order, why = desk_pick.pick(ask, survivors)
+            if order:
+                tok = order["token"]
+                st.feed("chief", "pick", f"PICK, confidence {_fmt(order.get('confidence'))}",
+                        tok.get("ticker"), tok.get("address"))
+            elif survivors:
+                st.feed("chief", "cut", f"no pick: {why}")
+            return order, why
+
+        main.shortlist, main.free_kill, main.trade_counts, main.trade_kill = shortlist, free_kill, trade_counts, trade_kill
+        main.dossier, main.chain_kill, main.soft_kill, main.pick = dossier, chain_kill, soft_kill, pick
 
     # the judge, with every answer kept for the dashboard's agent cards
     def judge(self, set_name, state):
+        seat = {"market": "scan", "social": "social", "pick": "chief"}.get(set_name, "vet")
+        if set_name != "pick":
+            self.state.set_working(seat, f"asking Jev: {set_name}", n=self.seen_n, of=self.seen_of, **self.coin)
         r = self._judge(set_name, state)
+        if set_name != "pick":
+            self.state.feed(seat, "ask", f"Jev answered the {set_name} questions", **self.coin)
         answers = r.get("answers") or {}
         row = {"time": _now(), "set": set_name, "model": r.get("model"),
                "answers": {k: {f: v.get(f) for f in ("choice", "noul", "score", "confidence")} for k, v in answers.items()
@@ -127,11 +224,19 @@ class Runner:
     def tick(self):
         """One step of the loop. Returns what it did (for the log and the tests)."""
         now = self.clock()
+        if self.test_requested:                   # asked for from the dashboard; runs here, never beside a trade
+            self.test_requested = False
+            return self.run_test_swap()
         holding = self.state.data.get("position") is not None or book.held() is not None
         if holding:
             if self.last_risk is None or now - self.last_risk >= self.cfg.risk_poll_seconds:
                 self.last_risk = now
-                trade = self.seats.risk_poll()
+                pos = self.state.data.get("position") or {}
+                self.state.set_working("risk", "checking volume", pos.get("ticker"), pos.get("mint"))
+                try:
+                    trade = self.seats.risk_poll()
+                finally:
+                    self.state.set_working(None)
                 self.snapshot()
                 return "risk: closed" if trade else "risk: holding"
             return "holding"
@@ -145,17 +250,63 @@ class Runner:
         if bank is not None and not self.seats.daily_guard(bank):
             return "paused"
         collect.RPC_FAILURES.clear()
-        order, stats = main.run_once(self.lister, self.judge, self, bank, shadow=False)
+        self.coin, self.seen_n, self.seen_of = {}, 0, None
+        self.state.set_working("crawler", "listing pools")
+        try:
+            order, stats = main.run_once(self.lister, self.judge, self, bank, shadow=False)
+        finally:
+            self.state.set_working(None)
         if collect.RPC_FAILURES:                 # a token cut for *_unknown because Solana refused: say so
             stats["rpc_failed"] = len(collect.RPC_FAILURES)
             self.state.error(f"Solana RPC refused {len(collect.RPC_FAILURES)} call(s) this cycle, last: "
                              f"{collect.RPC_FAILURES[-1][:200]}. A free key from helius.dev in SOLANA_RPC_URL fixes this.")
         self.report(order, stats)
         if order:
-            self.seats.send_to_seats(order, bank)
+            try:
+                self.seats.send_to_seats(order, bank)
+            finally:
+                self.state.set_working(None)
             self.last_risk = now                 # first RISK check one poll interval after the fill
         self.snapshot()
         return "cycle: order" if order else "cycle: no order"
+
+    # ---------- dashboard requests (admin token checked by the handler) ----------
+    def request_scan(self):
+        """'Scan now': the next tick runs a cycle instead of waiting out CYCLE_SECONDS."""
+        now = self.clock()
+        if self.state.data.get("position") is not None or book.held() is not None:
+            return 409, "holding a position: no scan until RISK closes it"
+        if self.state.data.get("paused"):
+            return 409, "the desk is paused: tap Resume first"
+        if self.last_cycle is not None and now - self.last_cycle < SCAN_NOW_COOLDOWN:
+            return 429, f"a scan started {int(now - self.last_cycle)}s ago: wait a minute"
+        self.last_cycle = None
+        self.state.feed("chief", "info", "scan requested from the dashboard")
+        return 200, "scan starts within 5 seconds"
+
+    def request_test(self):
+        self.test_requested = True
+        return 200, ("test swap queued: real ~$%.2f SOL -> USDC -> SOL" % TEST_SWAP_USD if self.cfg.live
+                     else "test queued: paper mode, quotes only")
+
+    def run_test_swap(self):
+        self.state.set_working("fills", "test swap")
+        try:
+            res = self.seats.test_swap(TEST_SWAP_USD)
+        except Exception as exc:
+            res = {"time": _now(), "mode": "live" if self.cfg.live else "paper", "usd": TEST_SWAP_USD, "ok": False,
+                   "sigs": [], "note": f"not sent: {exc}"}
+        finally:
+            self.state.set_working(None)
+        line = (f"test swap {'OK' if res['ok'] else 'FAILED'} ({res['mode']}): "
+                + (f"{res['sol_in']:.5f} SOL -> {res['usdc']:.4f} USDC -> {res['sol_back']:.5f} SOL"
+                   if res.get("usdc") is not None and res.get("sol_back") is not None else res["note"]))
+        self.state.feed("fills", "test" if res["ok"] else "error", line)
+        self.state.agent("fills", line, None, "test")
+        with self.state.lock:
+            self.state.data["tests"] = ([res] + (self.state.data.get("tests") or []))[:10]
+        self.state.save()
+        return "test: ok" if res["ok"] else "test: failed"
 
     # the desk interface main.run_once expects
     def read_x(self, handle):
@@ -180,6 +331,9 @@ class Runner:
                              order.get("confidence"), "confidence")
         self.state.agent("crawler", f"{stats.get('seen', 0)} seen, {stats.get('benched', 0)} benched · "
                                     + (why(stats) or "nothing cut"), stats.get("seen"), "seen")
+        self.state.feed("chief", "info", f"scan done: {stats.get('seen', 0)} coins, "
+                        + ("stood down: " + str(stats["stood_down"])[:80] if stats.get("stood_down")
+                           else "order placed" if order else f"no order ({stats.get('no_order') or 'nothing survived'})"))
         self.state.save()
 
     def snapshot(self):
@@ -204,6 +358,11 @@ class Runner:
                  thresholds={"HARD": thresholds.HARD, "SOFT": {k: list(v) for k, v in thresholds.SOFT.items()},
                              "PICK_MIN_WORTH": thresholds.PICK_MIN_WORTH, "PICK_MIN_CONF": thresholds.PICK_MIN_CONF,
                              "DARK_TICKET_CUT": thresholds.DARK_TICKET_CUT, "NO_SOCIAL_CUT": thresholds.NO_SOCIAL_CUT})
+        holding = d.get("position") is not None
+        d.update(next_cycle_at=None if holding or d.get("paused") else
+                 _iso(self.clock() if self.last_cycle is None else self.last_cycle + CYCLE_SECONDS),
+                 next_risk_at=_iso(self.last_risk + self.cfg.risk_poll_seconds) if holding and self.last_risk else None,
+                 server_now=_iso(self.clock()), test_swap_usd=TEST_SWAP_USD)
         d.pop("shadow", None)
         return d
 
@@ -254,13 +413,19 @@ def make_handler(runner, admin_token):
             return self._send(404, {"detail": "not found"})
 
         def do_POST(self):
-            if self.path not in ("/api/pause", "/api/resume"):
+            if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap"):
                 return self._send(404, {"detail": "not found"})
             given = self.headers.get("X-Admin-Token", "")
             if len(admin_token) < MIN_ADMIN_TOKEN or not hmac.compare_digest(given.encode(), admin_token.encode()):
                 return self._send(401, {"detail": "wrong or missing admin token"})
+            if self.path == "/api/scan-now":
+                code, msg = runner.request_scan()
+                return self._send(code, {"detail": msg})
+            if self.path == "/api/test-swap":
+                code, msg = runner.request_test()
+                return self._send(code, {"detail": msg})
             runner.set_paused(self.path == "/api/pause", "paused from the dashboard")
-            return self._send(200, {"paused": runner.state.data["paused"]})
+            return self._send(200, {"paused": bool(runner.status().get("paused"))})
 
     return Handler
 
@@ -300,6 +465,12 @@ class Stopped:
 
     def set_paused(self, paused, reason=None):
         pass
+
+    def request_scan(self):
+        return 409, self.reason
+
+    def request_test(self):
+        return 409, self.reason
 
     def tick(self):
         return "stopped"
