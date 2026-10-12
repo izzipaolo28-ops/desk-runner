@@ -168,6 +168,12 @@ a.tx{color:var(--blue);text-decoration:none;border-bottom:1px dotted rgba(96,165
 .err{color:#fca5a5}
 .addr{font:11px var(--mono);color:var(--muted);overflow-wrap:anywhere}
 .empty{color:var(--muted);font:12px var(--mono);padding:8px 0}
+.plan td:first-child{width:44%}
+.rungs{display:flex;flex-wrap:wrap;gap:5px}
+.rung{font:11px var(--mono);border:1px solid #2a3244;border-radius:3px;padding:2px 6px;color:#9aa6bd}
+.rung.hit{border-color:#34d399;color:#34d399} .rung.next{border-color:#ff5fd2;color:#ffd6f6}
+.money{margin-top:12px;border-top:1px solid #161c2a;padding-top:10px}
+.money h3{margin:0 0 6px;font:700 11px var(--mono);letter-spacing:.14em;color:#9aa6bd}
 </style>
 </head>
 <body>
@@ -233,7 +239,7 @@ a.tx{color:var(--blue);text-decoration:none;border-bottom:1px dotted rgba(96,165
 
   <div class="grid2">
     <section class="panel">
-      <h2>POSITION <span id="posMode"></span></h2>
+      <h2>POSITION · TRADE PLAN <span id="posMode"></span></h2>
       <div id="position" class="empty">no position</div>
     </section>
     <section class="panel">
@@ -598,6 +604,13 @@ function eventsFrom(feed){
 }
 
 // ---------- the floor's live layers ----------
+function record(trades){                     // wins/losses per position: a ladder of sales is one result
+  const by = new Map();
+  (trades || []).forEach((t, i) => { const k = t.order_id || "row" + i, b = by.get(k) || {pnl: 0, closed: false};
+    b.pnl += num(t.pnl_usd) || 0; b.closed = b.closed || t.final !== false; by.set(k, b); });
+  const closed = [...by.values()].filter(b => b.closed);
+  return [closed.filter(b => b.pnl > 0).length, closed.filter(b => b.pnl < 0).length];
+}
 function dayNo(d){ const t = Date.parse(d.started_at); return Number.isFinite(t) ? Math.max(1, Math.floor((Date.now() - t) / 86400000) + 1) : 1; }
 function floorRender(d){
   const feed = d.feed || [], wk = d.working, p = d.position, lens = d.lens, tot = d.totals || {};
@@ -684,7 +697,9 @@ function monitorsRender(d){
   const p = d.position, note = (g, text, color) => T(g, 0, 18, text, {style: `font:8px var(--mono);fill:${color || "#4b5569"}`});
   const put = (label, fn) => { const box = F.monitors[label]; box.textContent = ""; const st = STATIONS.find(s => s.label === label); fn(S("g", {transform: `translate(${st.x + 32},${st.y + 22})`}, box)); };
   put("TAPE", g => eq.length > 1 ? spark(g, eq, "#60a5fa") : note(g, "no balance yet"));
-  put("RISK", g => { if (p && num(p.last_ratio) !== null){ T(g, 0, 14, "ratio " + p.last_ratio.toFixed(2), {style: `font:700 12px var(--mono);fill:${p.last_ratio < .2 ? "#f87171" : "#fb923c"}`}); T(g, 0, 28, "sells < 0.20", {style: "font:8px var(--mono);fill:#6b7489"}); }
+  put("RISK", g => { if (p && num(p.gain_pct) !== null){ T(g, 0, 14, (p.gain_pct >= 0 ? "+" : "") + p.gain_pct.toFixed(1) + "%", {style: `font:700 13px var(--mono);fill:${p.gain_pct >= 0 ? "#34d399" : "#f87171"}`});
+      T(g, 0, 28, "peak " + (num(p.peak_gain_pct) !== null ? (p.peak_gain_pct >= 0 ? "+" : "") + p.peak_gain_pct.toFixed(1) + "%" : "—"), {style: "font:8px var(--mono);fill:#6b7489"}); }
+    else if (p && num(p.last_ratio) !== null){ T(g, 0, 14, "ratio " + p.last_ratio.toFixed(2), {style: `font:700 12px var(--mono);fill:${p.last_ratio < .2 ? "#f87171" : "#fb923c"}`}); T(g, 0, 28, "sells < 0.20", {style: "font:8px var(--mono);fill:#6b7489"}); }
     else note(g, p ? "first check soon" : "flat", "#fb923c"); });
   put("FILLS", g => trades.length ? spark(g, trades.map(t => t.proceeds_usd), "#34d399", true) : note(g, "no fills yet"));
   put("SIZE", g => trades.length ? spark(g, trades.map(t => t.cost_usd), "#60a5fa", true) : note(g, num(((d.agents || {}).size || {}).value) !== null ? "next ≤ " + usd(d.agents.size.value) : "no ticket yet", "#60a5fa"));
@@ -693,24 +708,43 @@ function monitorsRender(d){
 }
 
 // ---------- candles: GeckoTerminal, fetched by this phone; real or nothing ----------
-const candleCache = new Map();
+const candleCache = new Map(), poolOf = new Map();
+// GeckoTerminal from this phone, one request at a time, a couple of seconds apart: ten at once got refused
+const gtQueue = []; let gtBusy = false, gtNext = 0;
+function gtFetch(url){ return new Promise((res, rej) => { gtQueue.push({url, res, rej}); gtPump(); }); }
+async function gtPump(){
+  if (gtBusy || !gtQueue.length) return;
+  gtBusy = true;
+  const wait = Math.max(0, gtNext - Date.now()); if (wait) await new Promise(r => setTimeout(r, wait));
+  const job = gtQueue.shift();
+  try {
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 9000);
+    const r = await fetch(job.url, {signal: ctl.signal, headers: {Accept: "application/json"}}); clearTimeout(to);
+    if (r.status === 429){ gtNext = Date.now() + 25000; throw new Error("busy (rate limited)"); }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    job.res(await r.json());
+  } catch (e){
+    if (e instanceof TypeError) gtNext = Date.now() + 25000;          // Safari's "Load failed" is usually a refused (429) request
+    job.rej(e.name === "AbortError" ? new Error("timed out") : e instanceof TypeError ? new Error("busy, retrying") : e);
+  } finally { gtNext = Math.max(gtNext, Date.now() + 2200); gtBusy = false; gtPump(); }
+}
+const pairOf = mint => (lastStatus && lastStatus.pairs && lastStatus.pairs[mint]) || poolOf.get(mint) || null;
 async function loadCandles(mint){
   const prev = candleCache.get(mint);
   if (prev && prev.loading) return prev;
   const entry = {at: Date.now(), list: prev ? prev.list : null, err: null, loading: true}; candleCache.set(mint, entry);
   try {
-    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 9000);
     const base = "https://api.geckoterminal.com/api/v2/networks/solana";
-    const pr = await fetch(`${base}/tokens/${mint}/pools?page=1`, {signal: ctl.signal, headers: {Accept: "application/json"}});
-    if (!pr.ok) throw new Error("pools HTTP " + pr.status);
-    const pools = (await pr.json()).data || [], pool = pools[0] && pools[0].attributes && pools[0].attributes.address;
-    if (!pool) throw new Error("no pool listed");
-    const cr = await fetch(`${base}/pools/${pool}/ohlcv/minute?aggregate=5&limit=60`, {signal: ctl.signal, headers: {Accept: "application/json"}});
-    clearTimeout(to);
-    if (!cr.ok) throw new Error("candles HTTP " + cr.status);
-    const list = (((await cr.json()).data || {}).attributes || {}).ohlcv_list;
+    let pool = pairOf(mint);
+    if (!pool){
+      const pools = (await gtFetch(`${base}/tokens/${mint}/pools?page=1`)).data || [];
+      pool = pools[0] && pools[0].attributes && pools[0].attributes.address;
+      if (!pool) throw new Error("no pool listed");
+      poolOf.set(mint, pool);
+    }
+    const list = ((((await gtFetch(`${base}/pools/${pool}/ohlcv/minute?aggregate=5&limit=60`)).data) || {}).attributes || {}).ohlcv_list;
     entry.list = Array.isArray(list) ? list.filter(c => Array.isArray(c) && c.slice(1, 5).every(v => num(v) !== null)).reverse() : [];
-  } catch (e) { entry.err = e.name === "AbortError" ? "timed out" : e.message; entry.list = null; }
+  } catch (e) { entry.err = e.message || "failed"; entry.at = Date.now() - 30000; }     // a failure retries sooner
   entry.loading = false;
   return entry;
 }
@@ -718,15 +752,15 @@ function drawCandles(focus){
   const mint = focus && focus.mint;
   if (!mint){ F.monChart.textContent = ""; T(F.monChart, 635, 230, "the crawler hasn't read a coin yet", {"text-anchor": "middle", style: "font:12px var(--mono);fill:#4b5569"}); return; }
   const hit = candleCache.get(mint);
-  if (!hit || (!hit.loading && Date.now() - hit.at > 60000)) loadCandles(mint).then(() => { if (view.focus && view.focus.mint === mint) paintCandles(mint); });
+  if (!hit || (!hit.loading && Date.now() - hit.at > 75000)) loadCandles(mint).then(() => { if (view.focus && view.focus.mint === mint) paintCandles(mint); });
   paintCandles(mint);
 }
 function paintCandles(mint){
   const g = F.monChart; g.textContent = "";
   const hit = candleCache.get(mint);
   if (!hit || (!hit.list && !hit.err && hit.loading)){ T(g, 635, 230, "loading the chart…", {"text-anchor": "middle", style: "font:12px var(--mono);fill:#4b5569"}); return; }
-  if (hit.err || !hit.list.length){ T(g, 635, 222, "no chart from GeckoTerminal right now", {"text-anchor": "middle", style: "font:12px var(--mono);fill:#4b5569"});
-    T(g, 635, 240, hit.err ? "(" + clip(hit.err, 40) + ")" : "(no 5-minute candles yet)", {"text-anchor": "middle", style: "font:10px var(--mono);fill:#3b4357"}); return; }
+  if ((hit.err && !hit.list) || !hit.list || !hit.list.length){ T(g, 635, 222, hit.err ? "chart: GeckoTerminal " + clip(hit.err, 30) : "no 5-minute candles yet", {"text-anchor": "middle", style: "font:12px var(--mono);fill:#4b5569"});
+    T(g, 635, 240, "tries again in a minute · never drawn from guesses", {"text-anchor": "middle", style: "font:10px var(--mono);fill:#3b4357"}); return; }
   const c = hit.list, lo = Math.min(...c.map(x => x[3])), hi = Math.max(...c.map(x => x[2])), span = hi - lo || hi || 1;
   const X0 = 360, W = 550, Y0 = 130, H = 190, n = c.length, cw = W / n, y = v => Y0 + H - (v - lo) / span * H;
   for (let i = 0; i <= 4; i++) S("line", {x1: X0, x2: X0 + W, y1: Y0 + i * H / 4, y2: Y0 + i * H / 4, stroke: "#0f1524"}, g);
@@ -824,9 +858,11 @@ function analysisRender(d){
   $("scannedCount").textContent = ((d.totals || {}).coins || 0) + " SCANNED";
   const f = anFocus(d), box = $("dexBox");
   if (f && f.mint && MINT_RE.test(f.mint)){
-    if (dexMint !== f.mint){ dexMint = f.mint; box.textContent = "";
+    const want = f.mint + "|" + (pairOf(f.mint) || "");
+    if (dexMint !== want){ dexMint = want; box.textContent = "";
       const fr = el("iframe", "dexframe"); fr.title = "DexScreener chart"; fr.loading = "lazy"; fr.referrerPolicy = "no-referrer";
-      fr.src = `https://dexscreener.com/solana/${f.mint}?embed=1&loadChartSettings=0&trades=0&tabs=0&info=0&chartLeftToolbar=0&chartTheme=dark&theme=dark&chartStyle=1&chartType=usd&interval=1`;
+      const where = pairOf(f.mint) || f.mint;
+      fr.src = `https://dexscreener.com/solana/${where}?embed=1&loadChartSettings=0&trades=0&tabs=0&info=0&chartLeftToolbar=0&chartTheme=dark&theme=dark&chartStyle=1&chartType=usd&interval=5`;
       box.append(fr); }
   } else if (dexMint !== "none"){ dexMint = "none"; box.textContent = ""; box.appendChild(el("div", "nochart", "no coin under the lens yet: the first scan picks one")); }
   // the checks overlay: the lens coin's real results, "...." where the desk hasn't looked yet
@@ -865,7 +901,7 @@ function analysisRender(d){
 function paintMini(m, c){
   if (!c) return;
   const hit = candleCache.get(c.mint);
-  if (!hit || (!hit.loading && Date.now() - hit.at > 180000)) loadCandles(c.mint).then(() => paintMini(m, c));
+  if (!hit || (!hit.loading && Date.now() - hit.at > 240000)) loadCandles(c.mint).then(() => paintMini(m, c));
   m.textContent = "";
   const svg = document.createElementNS(NS, "svg"); svg.setAttribute("viewBox", "0 0 200 84"); svg.setAttribute("preserveAspectRatio", "none"); m.appendChild(svg);
   m.appendChild(el("b", "", "$" + clip(c.ticker || c.mint.slice(0, 5), 9)));
@@ -915,7 +951,7 @@ function render(d){
   if (d.title) $("title").textContent = d.title;
   if (typeof d.tagline === "string") $("tagline").textContent = d.tagline;
   const mode = $("mode"); mode.className = "mode " + (d.mode === "stopped" ? "stopped" : d.paused ? "paused" : d.mode);
-  mode.textContent = d.mode === "stopped" ? "STOPPED" : d.paused ? "PAUSED" : d.mode === "live" ? "LIVE · REAL MONEY" : "PAPER";
+  mode.textContent = d.mode === "stopped" ? "STOPPED" : d.paused ? "PAUSED" : d.mode === "live" ? "LIVE · REAL MONEY" : d.practice ? "PAPER · PRACTICE" : "PAPER";
   $("pauseBar").hidden = !d.paused;
   $("pauseText").textContent = d.mode === "stopped" ? "STOPPED · " + (d.pause_reason || "") : "PAUSED · " + (d.pause_reason || "") + " · no scans or buys until you resume";
   $("pauseResume").hidden = d.mode === "stopped";
@@ -932,7 +968,7 @@ function render(d){
   $("balanceNow").textContent = usd(last);
   $("balanceNote").textContent = first !== null && last !== null && first > 0 ? (last >= first ? "+" : "") + ((last / first - 1) * 100).toFixed(2) + "% since start" : "";
   const trades = d.trades || [], p = d.position;
-  const w = trades.filter(t => num(t.pnl_usd) > 0).length, l = trades.filter(t => num(t.pnl_usd) !== null && t.pnl_usd < 0).length;
+  const [w, l] = record(trades);
   $("balTitle").textContent = "BALANCE · DAY " + dayNo(d) + (view.focus && view.focus.ticker ? " · " + clip(view.focus.ticker, 12).toUpperCase() : "");
   $("balRight").textContent = `${w}W ${l}L` + (p && num(p.last_pnl_usd) !== null && num(p.cost_usd) ? ` · HOLD ${(p.last_pnl_usd / p.cost_usd * 100).toFixed(2)}%` : p ? " · HOLDING" : "");
   analysisRender(d);
@@ -946,17 +982,50 @@ function render(d){
     fb.appendChild(r);
   }
   if (!(d.feed || []).length) fb.appendChild(el("div", "empty", "nothing yet: the first scan fills this in"));
-  $("posMode").textContent = p ? p.mode.toUpperCase() : "";
+  $("posMode").textContent = p ? p.mode.toUpperCase() + (d.watch && d.watch.enabled ? " · WATCHED EVERY " + Math.round(d.watch.seconds) + "s" : "") : "";
   const pos = $("position"); pos.textContent = ""; pos.className = p ? "" : "empty";
+  const W = d.watch || {}, pc = v => num(v) === null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+  const px = v => num(v) === null ? "—" : "$" + (v < 0.01 ? v.toPrecision(3) : v.toFixed(4));
   if (p){
-    const tbl = el("table");
-    const rows = [["token", coinLink(p.ticker, p.mint)], ["opened", p.opened_at ? ago(p.opened_at) + " ago" : "unknown"], ["cost", usd(num(p.cost_usd))], ["value now", usd(num(p.last_value_usd))],
-      ["P&L", signed(num(p.last_pnl_usd))], ["impact at entry", num(p.impact_pct) === null ? "—" : p.impact_pct.toFixed(2) + "%"],
-      ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells under 0.20)"], ["next RISK check", ""]];
-    for (const [k, v] of rows){ const tr = el("tr"), td = el("td", k === "P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : "");
+    const tbl = el("table", "plan"), entry = num(p.entry_price_usd), peak = num(p.peak_price);
+    const left = num(p.tokens_raw) !== null && num(p.tokens_raw_initial) ? p.tokens_raw / p.tokens_raw_initial * 100 : null;
+    const armed = num(p.peak_gain_pct) !== null && num(W.trail_arm_pct) !== null && p.peak_gain_pct >= W.trail_arm_pct;
+    const trail = !W.trail_pct ? "off" : armed && peak !== null ? `armed: sells the rest under ${px(peak * (1 - W.trail_pct / 100))} (-${W.trail_pct}% off the peak)` : `arms at +${W.trail_arm_pct}%, then sells ${W.trail_pct}% off the peak`;
+    const stop = !W.stop_loss_pct ? "off" : entry !== null ? `sells all under ${px(entry * (1 - W.stop_loss_pct / 100))} (-${W.stop_loss_pct}%)` : `-${W.stop_loss_pct}%`;
+    const held = num(p.opened_ts) !== null ? (Date.now() / 1000 - p.opened_ts) / 3600 : null;
+    const rungs = el("div", "rungs"), done = new Set((p.rungs_done || []).map(Number));
+    let marked = false;
+    (W.ladder || []).forEach(([g, sh]) => { const hit = done.has(Number(g)), next = !hit && !marked; if (next) marked = true;
+      rungs.appendChild(el("span", "rung" + (hit ? " hit" : next ? " next" : ""), `+${g}% → sell ${sh}%` + (hit ? " ✓" : ""))); });
+    if (!(W.ladder || []).length) rungs.appendChild(el("span", "rung", "no ladder (SCALE_OUT=off)"));
+    const flow = num(p.m5_buys) !== null && num(p.m5_sells) !== null ? `${pc(num(p.m5_change))} · ${Math.round(p.m5_buys)} buys / ${Math.round(p.m5_sells)} sells` : num(p.m5_change) !== null ? pc(p.m5_change) : "—";
+    const rows = [["token", coinLink(p.ticker, p.mint)], ["opened", p.opened_at ? ago(p.opened_at) + " ago" : "unknown"],
+      ["entry → now", `${px(entry)} → ${px(num(p.last_price))}`], ["gain now", pc(num(p.gain_pct))], ["best so far", pc(num(p.peak_gain_pct))],
+      ["last 5 min", flow], ["bag left", left === null ? "—" : left.toFixed(0) + "% of what it bought"],
+      ["cost left · value now", usd(num(p.cost_usd)) + " · " + usd(num(p.last_value_usd))], ["open P&L", signed(num(p.last_pnl_usd))],
+      ["banked from this coin", signed(num(p.realized_usd))], ["take-profit ladder", rungs],
+      ["take-profit (all)", W.take_profit_pct ? "+" + W.take_profit_pct + "%" : "off"], ["trailing stop", trail], ["stop-loss", stop],
+      ["max hold", W.max_hold_hours ? (held === null ? W.max_hold_hours + "h" : Math.max(0, W.max_hold_hours - held).toFixed(1) + "h left of " + W.max_hold_hours + "h") : "off"],
+      ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells all under 0.20)"], ["next RISK check", ""]];
+    for (const [k, v] of rows){ const tr = el("tr"), td = el("td", k === "open P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : k === "gain now" ? (num(p.gain_pct) >= 0 ? "pos" : "neg") : "");
       if (k === "next RISK check") td.id = "countdown"; if (v instanceof Node) td.appendChild(v); else td.textContent = v; tr.append(el("td", "muted", k), td); tbl.appendChild(tr); }
     pos.appendChild(tbl);
-  } else { pos.textContent = d.paused ? "no position · paused" : "no position · "; const c = el("span"); c.id = "countdown"; pos.appendChild(c); }
+  } else { pos.textContent = d.paused ? "no position · paused" : "no position · "; const c = el("span"); c.id = "countdown"; pos.appendChild(c);
+    if (W.enabled){ const plan = el("div", "muted mono"); plan.style.fontSize = "11px"; plan.style.marginTop = "8px";
+      plan.textContent = "when it buys: " + ((W.ladder || []).map(([g, sh]) => `+${g}%→${sh}%`).join(", ") || "no ladder") + ` · trail ${W.trail_pct ? W.trail_pct + "% off the peak after +" + W.trail_arm_pct + "%" : "off"}` +
+        ` · stop ${W.stop_loss_pct ? "-" + W.stop_loss_pct + "%" : "off"} · max ${W.max_hold_hours ? W.max_hold_hours + "h" : "—"} · trims ${W.derisk_pct}% when it turns down`;
+      pos.appendChild(plan); } }
+  // money management: what's at stake right now, what the worst case is, how much of today's limit is used
+  const money = el("div", "money"); money.appendChild(el("h3", "", "MONEY"));
+  const mt = el("table", "plan"), bank = num(d.bank_usd), atRisk = p ? num(p.cost_usd) : 0;
+  const worst = p && num(p.cost_usd) !== null && W.stop_loss_pct ? p.cost_usd * W.stop_loss_pct / 100 : null;
+  const today = num(d.realized_today) || 0, start = num(d.day_start_bank), lim = num(d.max_daily_loss_pct);
+  const room = start !== null && lim ? start * lim / 100 + Math.min(0, today) : null;
+  [["cash (bank)", usd(bank)], ["in the coin now", p ? usd(atRisk) + (bank ? ` (${(atRisk / (bank + atRisk) * 100).toFixed(1)}% of everything)` : "") : "nothing"],
+   ["worst case to the stop", worst === null ? (p ? "no stop set" : "—") : "−" + usd(worst)], ["banked today", signed(today)],
+   ["daily loss limit left", room === null ? "—" : usd(Math.max(0, room)) + ` (pauses at −${lim}% of the day's start)`]].forEach(([k, v]) => {
+    const tr = el("tr"); tr.append(el("td", "muted", k), el("td", k === "banked today" ? (today >= 0 ? "pos" : "neg") : "", v)); mt.appendChild(tr); });
+  money.appendChild(mt); pos.appendChild(money);
   tickCountdown();
   const jb = $("judge"); jb.textContent = "";
   for (const j of (d.judge || []).slice(0, 8)){
@@ -966,7 +1035,8 @@ function render(d){
   if (!(d.judge || []).length){ const tr = el("tr"), td = el("td", "muted", "no judge calls yet"); td.colSpan = 3; tr.appendChild(td); jb.appendChild(tr); }
   const tb = $("trades"); tb.textContent = ""; $("tradeCount").textContent = trades.length ? trades.length + " closed" : "";
   for (const t of trades.slice(0, 30)){
-    const tr = el("tr"), pnl = num(t.pnl_usd), tk = el("td"); tk.append(coinLink(t.ticker || "?", t.mint), document.createTextNode(t.mode === "paper" ? " ·p" : ""));
+    const tr = el("tr"), pnl = num(t.pnl_usd), tk = el("td");
+    tk.append(coinLink(t.ticker || "?", t.mint), document.createTextNode((t.mode === "paper" ? " ·p" : "") + (t.final === false && num(t.sold_pct) !== null ? " ·" + Math.round(t.sold_pct) + "%" : "")));
     tr.append(el("td", "muted", (t.closed_at || "").slice(5, 16).replace("T", " ")), tk, el("td", "", usd(num(t.cost_usd))), el("td", "", usd(num(t.proceeds_usd))),
       el("td", pnl === null ? "" : pnl >= 0 ? "pos" : "neg", signed(pnl)), el("td", "muted", t.reason || ""));
     tb.appendChild(tr);

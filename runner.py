@@ -43,6 +43,7 @@ import thresholds  # noqa: E402
 from jupiter import Jupiter  # noqa: E402
 from public_list import PublicList  # noqa: E402
 from seats import Config, Seats, State, _now  # noqa: E402
+from seats import record as seats_record  # noqa: E402
 from solana_wallet import RPC, Keypair, WalletKeyError  # noqa: E402
 
 log = logging.getLogger("runner")
@@ -108,7 +109,7 @@ def _coin(t):
 class Runner:
     def __init__(self, cfg, seats, state, judge, lister, clock=time.time):
         self.cfg, self.seats, self.state, self._judge, self.lister, self.clock = cfg, seats, state, judge, lister, clock
-        self.last_cycle = self.last_risk = None
+        self.last_cycle = self.last_risk = self.last_watch = None
         self.last_bank = None
         self.test_requested = False
         self.coin, self.seen_n, self.seen_of, self.coin_no, self.judge_ms = {}, 0, None, None, 0
@@ -267,6 +268,21 @@ class Runner:
             return self.run_test_swap()
         holding = self.state.data.get("position") is not None or book.held() is not None
         if holding:
+            watched = None
+            if self.cfg.watch and (self.last_watch is None or now - self.last_watch >= self.cfg.watch_seconds):
+                self.last_watch = now                # WATCH: the price, every minute
+                pos = self.state.data.get("position") or {}
+                self.state.set_working("risk", "watching price", pos.get("ticker"), pos.get("mint"))
+                try:
+                    trade = self.seats.watch_poll(clock=self.clock)
+                finally:
+                    self.state.set_working(None)
+                if trade is not None:
+                    self.snapshot()
+                    return "watch: sold all" if trade.get("final") else "watch: sold part"
+                watched = "watch: holding"
+                if self.state.data.get("position") is None and book.held() is None:
+                    return watched
             if self.last_risk is None or now - self.last_risk >= self.cfg.risk_poll_seconds:
                 self.last_risk = now
                 pos = self.state.data.get("position") or {}
@@ -277,7 +293,7 @@ class Runner:
                     self.state.set_working(None)
                 self.snapshot()
                 return "risk: closed" if trade else "risk: holding"
-            return "holding"
+            return watched or "holding"
         if self.state.data.get("paused"):
             self.state.agent("chief", f"paused: {self.state.data.get('pause_reason') or 'by you'}", None, "paused")
             return "paused"
@@ -304,7 +320,7 @@ class Runner:
                 self.seats.send_to_seats(order, bank)
             finally:
                 self.state.set_working(None)
-            self.last_risk = now                 # first RISK check one poll interval after the fill
+            self.last_risk = self.last_watch = now   # first checks one interval after the fill
         self.snapshot()
         return "cycle: order" if order else "cycle: no order"
 
@@ -325,8 +341,7 @@ class Runner:
             self.state.agent("fills", f"{mode}: Jupiter quoting, 1 SOL = ${sol:,.2f}" if sol is not None else
                              f"{mode}: Jupiter not answering right now (see errors)", sol, "1 SOL $")
             trades = self.state.data.get("trades") or []
-            w = sum(1 for t in trades if (t.get("pnl_usd") or 0) > 0)
-            l = sum(1 for t in trades if (t.get("pnl_usd") or 0) < 0)
+            w, l = seats_record(trades)
             today = _f(self.state.data.get("realized_today")) or 0.0
             self.state.agent("risk", f"flat. Sells a position when volume ratio < 0.20; stops the day at "
                                      f"-{self.cfg.max_daily_loss_pct:g}% (today {today:+,.2f} USD)", None, f"{w}W {l}L")
@@ -418,7 +433,8 @@ class Runner:
             d = json.loads(json.dumps(self.state.data, default=str))
         d.update(mode="live" if self.cfg.live else "paper", wallet=self.seats.kp.address if self.seats.kp else None,
                  now=_now(), held=book.held(), nets=list(NETS), cycle_seconds=CYCLE_SECONDS,
-                 risk_poll_seconds=self.cfg.risk_poll_seconds, bank_usd=self.last_bank, goal_usd=_goal(),
+                 risk_poll_seconds=self.cfg.risk_poll_seconds, goal_usd=_goal(),
+                 bank_usd=self.seats.bank() if not self.cfg.live else self.last_bank,   # paper: arithmetic, no network
                  thresholds={"HARD": thresholds.HARD, "SOFT": {k: list(v) for k, v in thresholds.SOFT.items()},
                              "PICK_MIN_WORTH": thresholds.PICK_MIN_WORTH, "PICK_MIN_CONF": thresholds.PICK_MIN_CONF,
                              "DARK_TICKET_CUT": thresholds.DARK_TICKET_CUT, "NO_SOCIAL_CUT": thresholds.NO_SOCIAL_CUT})
@@ -428,6 +444,8 @@ class Runner:
                  next_risk_at=_iso(self.last_risk + self.cfg.risk_poll_seconds) if holding and self.last_risk else None,
                  server_now=_iso(self.clock()), test_swap_usd=TEST_SWAP_USD, title=DESK_TITLE, tagline=DESK_TAGLINE,
                  start_bank=self.cfg.paper_bank_usd if not self.cfg.live else None, overrides=OVERRIDES,
+                 practice=PRACTICE["active"], practice_note=PRACTICE["note"], watch=self.cfg.watch_plan(),
+                 max_daily_loss_pct=self.cfg.max_daily_loss_pct,
                  thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD})
         d.pop("shadow", None)
         return d
@@ -470,6 +488,7 @@ def make_handler(runner, admin_token):
             self.wfile.write(data)
 
         def do_GET(self):
+            self.path = self.path.split("?", 1)[0]          # ?anything is ignored (cache-busting links still work)
             if self.path in ("/", "/index.html"):
                 return self._send(200, page, "text/html; charset=utf-8")
             if self.path == "/api/status":
@@ -514,6 +533,28 @@ def start_desk(state):
 
 
 OVERRIDES = {}
+PRACTICE = {"active": False, "note": None}
+# PRACTICE_MODE=true (paper only): the gates that kept every coin out, opened up so the whole loop can be watched.
+# The preset wins over the same variables set by hand (practice is one known setting); other variables still apply.
+# Paper results under these numbers say nothing about the real rules. Ignored the moment LIVE_MODE=true.
+PRACTICE_PRESET = {"SHAPE_MIN_CROWD": "0.25", "PICK_MIN_WORTH": "0.20", "PICK_MIN_CONF": "0.30",
+                   "SOFT_MOMENTUM_ALREADY_SPENT": "0.90", "SOFT_CONCENTRATION_IS_EXIT_RISK": "0.80",
+                   "SOFT_DEV_STILL_LOADED": "0.80", "SOFT_LIQUIDITY_FITS_TICKET": "0.35",
+                   "HARD_MAX_AGE_HOURS": "168", "HARD_MAX_TOP_WALLET": "0.12", "HARD_MAX_TOP_10": "0.80"}
+
+
+def practice_env(env):
+    """The variables with the practice preset under them (a variable you set yourself still wins)."""
+    want = str(env.get("PRACTICE_MODE", "")).strip().lower() == "true"
+    live = str(env.get("LIVE_MODE", "")).strip().lower() == "true"
+    PRACTICE.update(active=False, note=None)
+    if not want:
+        return env
+    if live:
+        PRACTICE["note"] = "PRACTICE_MODE is ignored in live mode: the real rules apply"
+        return env
+    PRACTICE.update(active=True, note="practice mode: looser gates, paper only")
+    return {**dict(env), **PRACTICE_PRESET}
 
 
 def apply_overrides(env):
@@ -587,7 +628,7 @@ def build(env=os.environ):
         raise SetupProblem("LIVE_MODE=true on Railway needs a volume first: without one, a redeploy forgets the open "
                            "position while the tokens are still in the wallet")
     cfg = Config(env)
-    apply_overrides(env)
+    apply_overrides(practice_env(env))
     state = State(os.path.join(DATA_DIR, "state.json"))
     key = env.get("BOT_WALLET_KEY", "").strip()
     kp = Keypair.from_env(key) if key else None
@@ -620,6 +661,11 @@ def serve():
     else:
         if os.environ.get("PAUSED", "").strip().lower() == "true":
             runner.set_paused(True, "PAUSED=true in the variables")
+        if PRACTICE["note"] and not PRACTICE["active"]:
+            runner.state.error(PRACTICE["note"])
+        elif PRACTICE["active"]:
+            runner.state.feed("chief", "info", "PRACTICE MODE: looser gates so trades happen; paper only. "
+                                               "Results here say nothing about the real rules.")
         if len(admin) < MIN_ADMIN_TOKEN:
             runner.state.error(f"ADMIN_TOKEN is missing or shorter than {MIN_ADMIN_TOKEN} characters: "
                                "the pause button is off")

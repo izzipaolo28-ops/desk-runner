@@ -237,7 +237,8 @@ def normalise(tid: str, m: dict) -> dict:
             # units as FOMO returns them (Codex documents decimals: 0.05 = +5%)
             "change": {"5m": _num(change.get(300)), "1h": _num(change.get(3600)),
                        "4h": _num(change.get(14400)), "24h": _num(change.get(86400))},
-            "age_minutes": age_minutes(m.get("created"))}
+            "age_minutes": age_minutes(m.get("created")),
+            "pair_address": m.get("pair") if isinstance(m.get("pair"), str) else None}   # display only: the chart
 
 
 def shortlist(fomo, ids: list[str]) -> list[dict]:

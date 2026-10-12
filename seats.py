@@ -63,9 +63,52 @@ class Config:
         self.max_impact_pct = _env_num(env, "MAX_IMPACT_PCT", 3, high=50)
         self.fee_reserve_sol = _env_num(env, "FEE_RESERVE_SOL", 0.02)
         self.max_daily_loss_pct = _env_num(env, "MAX_DAILY_LOSS_PCT", 20, high=100)
-        self.stop_loss_pct = _env_num(env, "STOP_LOSS_PCT", 0, high=100)    # 0 = off: RISK's volume rule only
+        self.stop_loss_pct = _env_num(env, "STOP_LOSS_PCT", 30, high=100)   # sell everything at -30%; 0 = off
         self.risk_poll_seconds = _env_num(env, "RISK_POLL_SECONDS", 300, low=30)
         self.data_dir = env.get("DATA_DIR", "data")
+        # WATCH: the price manager that runs while a position is open (all percentages, all 0 = that rule off)
+        watch = str(env.get("WATCH", "on")).strip().lower()
+        if watch not in ("on", "off"):
+            raise ValueError("WATCH must be on or off")
+        self.watch = watch == "on"
+        self.watch_seconds = _env_num(env, "WATCH_SECONDS", 60, low=15)
+        self.take_profit_pct = _env_num(env, "TAKE_PROFIT_PCT", 0)           # sell everything at +X%
+        self.scale_out = parse_ladder(env.get("SCALE_OUT", "30:25,60:25,100:25"))
+        self.trail_arm_pct = _env_num(env, "TRAIL_ARM_PCT", 20)              # trailing stop arms once up this much
+        self.trail_pct = _env_num(env, "TRAIL_PCT", 15, high=100)            # ...then sells all this far off the peak
+        self.drop_m5_pct = _env_num(env, "WATCH_DROP_M5_PCT", 8, high=100)   # "turning down": 5-min drop, sellers ahead
+        self.derisk_pct = _env_num(env, "WATCH_DERISK_PCT", 50, high=100)    # ...sell this share of what's left
+        self.pump_m5_pct = _env_num(env, "WATCH_PUMP_M5_PCT", 20)            # "spike": 5-min jump while in profit
+        self.pump_sell_pct = _env_num(env, "WATCH_PUMP_SELL_PCT", 30, high=100)
+        self.max_hold_hours = _env_num(env, "MAX_HOLD_HOURS", 24)
+
+    def watch_plan(self):
+        return {"enabled": self.watch, "seconds": self.watch_seconds, "stop_loss_pct": self.stop_loss_pct,
+                "take_profit_pct": self.take_profit_pct, "ladder": [list(r) for r in self.scale_out],
+                "trail_arm_pct": self.trail_arm_pct, "trail_pct": self.trail_pct, "drop_m5_pct": self.drop_m5_pct,
+                "derisk_pct": self.derisk_pct, "pump_m5_pct": self.pump_m5_pct, "pump_sell_pct": self.pump_sell_pct,
+                "max_hold_hours": self.max_hold_hours}
+
+
+def parse_ladder(raw):
+    """SCALE_OUT="30:25,60:25,100:25": at +30% sell 25% of the original position, at +60% another 25%, ...
+    "off" or empty = no ladder. The shares may not add up to more than 100%."""
+    raw = str(raw or "").strip().lower()
+    if raw in ("", "off", "0", "none"):
+        return []
+    rungs = []
+    for part in raw.split(","):
+        try:
+            g, pct = (float(x) for x in part.split(":"))
+        except ValueError:
+            raise ValueError("SCALE_OUT must look like 30:25,60:25,100:25 (gain%:sell%, ...)") from None
+        if not (math.isfinite(g) and math.isfinite(pct) and g > 0 and 0 < pct <= 100):
+            raise ValueError("SCALE_OUT: each step is gain% > 0 : sell% between 1 and 100")
+        rungs.append((g, pct))
+    rungs.sort()
+    if sum(p for _, p in rungs) > 100.0001:
+        raise ValueError("SCALE_OUT sells more than 100% in total")
+    return rungs
 
 
 class State:
@@ -76,7 +119,7 @@ class State:
         self.data = {"position": None, "trades": [], "equity": [], "paused": False, "pause_reason": None,
                      "day": None, "day_start_bank": None, "realized_today": 0.0, "agents": {}, "errors": [],
                      "judge": [], "cycle": None, "shadow": [], "started_at": _now(),
-                     "feed": [], "working": None, "tests": [], "totals": {}, "lens": None}
+                     "feed": [], "working": None, "tests": [], "totals": {}, "lens": None, "pairs": {}}
         try:
             with open(path) as fh:
                 self.data.update(json.load(fh))
@@ -156,12 +199,19 @@ class State:
             v = _f(a.get("noul", a.get("score"))) if isinstance(a, dict) else None
             ok = None if v is None else (v <= limit if direction == "max" else v >= limit)
             soft.append({"k": k, "dir": direction, "limit": limit, "v": v, "ok": ok})
+        pair = t.get("pair_address")
         with self.lock:
+            if isinstance(pair, str) and 32 <= len(pair) <= 44 and t.get("addr"):
+                pairs = self.data.setdefault("pairs", {})
+                pairs[t["addr"]] = pair
+                if len(pairs) > 300:
+                    for k in list(pairs)[:len(pairs) - 300]:
+                        pairs.pop(k, None)
             prev = self.data.get("lens") or {}
             if prev.get("mint") == t.get("addr") and answers is None:
                 soft = prev.get("soft") or soft            # keep Jev's numbers while the same coin moves on
             self.data["lens"] = {"time": _now(), "no": no, "ticker": str(t.get("ticker") or "")[:16] or None,
-                                 "mint": t.get("addr"), "stage": stage, "verdict": killed or "passed",
+                                 "mint": t.get("addr"), "pair": pair if isinstance(pair, str) else None, "stage": stage, "verdict": killed or "passed",
                                  "facts": facts, "hard": hard, "soft": soft}
 
     def set_working(self, agent=None, step=None, ticker=None, mint=None, n=None, of=None):
@@ -176,6 +226,18 @@ class State:
         with self.lock:
             self.data["errors"] = ([{"time": _now(), "text": str(text)[:300]}] + self.data["errors"])[:20]
         log.warning("%s", text)
+
+
+def record(trades):
+    """Wins and losses per position: the sales of one order (its ladder steps and its last sale) add up to one result."""
+    by = {}
+    for i, t in enumerate(trades or []):
+        key = t.get("order_id") or f"row{i}"
+        b = by.setdefault(key, {"pnl": 0.0, "closed": False})
+        b["pnl"] += t.get("pnl_usd") or 0.0
+        b["closed"] = b["closed"] or t.get("final", True)
+    closed = [b["pnl"] for b in by.values() if b["closed"]]
+    return sum(1 for x in closed if x > 0), sum(1 for x in closed if x < 0)
 
 
 def volume_ratio(volume: dict, age_minutes):
@@ -318,6 +380,8 @@ class Seats:
         cost_usd = position["spent_lamports"] / LAMPORTS * sol_usd
         position["cost_usd"] = round(cost_usd, 2)
         position["entry_price_usd"] = cost_usd / (position["tokens_raw"] / 10 ** decimals) if position["tokens_raw"] else None
+        position.update(tokens_raw_initial=position["tokens_raw"], cost_usd_initial=position["cost_usd"], realized_usd=0.0,
+                        peak_price=position["entry_price_usd"], rungs_done=[], sells=0)
         with self.state.lock:
             self.state.data["position"] = position
             self.state.save()
@@ -471,52 +535,172 @@ class Seats:
         return None
 
     def close(self, pos, why):
+        return self.sell(pos, 1.0, why)
+
+    def sell(self, pos, fraction, why):
+        """Sell `fraction` of what is held now (1.0 = everything, which closes the position and frees the book).
+        Each sale is its own row in trades, with the share of cost it used up; the rest of the cost stays on the
+        position. A part sale that would leave dust sells everything instead. Returns the trade row, or None
+        when nothing could be sold (it is tried again on the next check)."""
         label = pos.get("ticker") or pos["mint"][:6]
+        held = int(pos.get("tokens_raw") or 0)
+        full = fraction >= 0.999
+        if not full:
+            left = _f(pos.get("last_value_usd"))
+            if held <= 0 or int(held * fraction) <= 0 or (left is not None and left * (1 - fraction) < max(1.0, self.cfg.min_ticket_usd / 2)):
+                full = True
         sol_usd = self.sol_usd()
         if sol_usd is None and pos["mode"] == "paper":   # a paper P&L can't be known without the SOL price: wait,
-            self.state.agent("risk", f"close of {label} waits: SOL price unknown", None, "closing")   # don't book 0
+            self.state.agent("risk", f"sale of {label} waits: SOL price unknown", None, "closing")   # don't book 0
             return None
         try:
             if pos["mode"] == "live":
-                amount, _ = self.rpc.token_balance(self.kp.address, pos["mint"])
+                balance, _ = self.rpc.token_balance(self.kp.address, pos["mint"])
+                amount = balance if full else min(balance, int(balance * fraction))
                 if amount <= 0:
                     proceeds_lamports = 0
                 else:
                     q = self.jup.order(pos["mint"], WSOL, amount, taker=self.kp.address)
                     res = self.jup.execute(sign_transaction(q["transaction"], self.kp), q["requestId"])
                     proceeds_lamports = int(res.get("totalOutputAmount") or res.get("outputAmountResult") or 0)
+                held = max(held, balance)
             else:
-                q = self.jup.order(pos["mint"], WSOL, int(pos["tokens_raw"]))
+                amount = held if full else int(held * fraction)
+                q = self.jup.order(pos["mint"], WSOL, int(amount))
                 proceeds_lamports = int(q["outAmount"])
         except Exception as exc:
-            self.state.agent("risk", f"close of {label} failed, retrying: {exc}", None, "closing")
-            self.state.error(f"RISK close failed for {label}: {exc}")
-            return None                              # still held; next poll tries again
+            self.state.agent("risk", f"sale of {label} failed, retrying: {exc}", None, "closing")
+            self.state.error(f"RISK sale failed for {label}: {exc}")
+            return None                              # still held; the next check tries again
+        share = 1.0 if full or not held else amount / held
         proceeds_usd = proceeds_lamports / LAMPORTS * sol_usd if sol_usd is not None else None
-        cost = _f(pos.get("cost_usd"))
-        pnl = round(proceeds_usd - cost, 2) if proceeds_usd is not None and cost is not None else None
+        basis = _f(pos.get("cost_usd"))
+        cost_part = basis * share if basis is not None else None
+        pnl = round(proceeds_usd - cost_part, 2) if proceeds_usd is not None and cost_part is not None else None
+        initial = int(pos.get("tokens_raw_initial") or held or 1)
         trade = {"order_id": pos.get("order_id"), "mode": pos["mode"], "ticker": pos.get("ticker"), "mint": pos["mint"],
-                 "opened_at": pos.get("opened_at"), "closed_at": _now(), "cost_usd": cost,
+                 "opened_at": pos.get("opened_at"), "closed_at": _now(),
+                 "cost_usd": round(cost_part, 2) if cost_part is not None else None,
                  "proceeds_usd": round(proceeds_usd, 2) if proceeds_usd is not None else None, "pnl_usd": pnl,
-                 "proceeds_sol": proceeds_lamports / LAMPORTS,
-                 "reason": why, "model": pos.get("model")}
+                 "proceeds_sol": proceeds_lamports / LAMPORTS, "reason": why, "model": pos.get("model"),
+                 "final": full, "sold_pct": round(100 * amount / initial, 1) if initial else None}
         with self.state.lock:
             d = self.state.data
             d["trades"] = ([trade] + d["trades"])[:200]
-            d["position"] = None
+            if full:
+                d["position"] = None
+            else:
+                p = d.get("position") or pos
+                p["tokens_raw"] = held - amount
+                p["cost_usd"] = round(basis - cost_part, 2) if basis is not None else None
+                p["realized_usd"] = round((p.get("realized_usd") or 0.0) + (pnl or 0.0), 2)
+                p["sells"] = int(p.get("sells") or 0) + 1
+                if _f(p.get("last_value_usd")) is not None:
+                    p["last_value_usd"] = round(p["last_value_usd"] * (1 - share), 2)
+                if p.get("cost_usd") is not None and _f(p.get("last_value_usd")) is not None:
+                    p["last_pnl_usd"] = round(p["last_value_usd"] - p["cost_usd"], 2)
             if pnl is not None and d.get("day") == datetime.now(timezone.utc).date().isoformat():
                 d["realized_today"] = (d.get("realized_today") or 0.0) + pnl
             self.state.save()
-        wins = sum(1 for t in self.state.data["trades"] if (t.get("pnl_usd") or 0) > 0)
-        losses = sum(1 for t in self.state.data["trades"] if (t.get("pnl_usd") or 0) < 0)
-        self.state.agent("risk", f"closed {label}: {why}" + (f", ${pnl:+,.2f}" if pnl is not None else ", P&L unknown"),
-                         pnl, f"{wins}W {losses}L")
+        wins, losses = record(self.state.data["trades"])
+        part = "" if full else f" on {round(100 * share)}% of the bag"
+        money = f"{pnl:+,.2f} USD" if pnl is not None else "(P&L unknown)"
+        self.state.agent("risk", (f"closed {label}: {why}" if full else f"sold {round(100 * share)}% of {label}: {why}")
+                         + (f", ${pnl:+,.2f}" if pnl is not None else ", P&L unknown"), pnl, f"{wins}W {losses}L")
         self.state.bump("sells")
-        self.state.feed("risk", "sell", ("SOLD " + (f"{pnl:+,.2f} USD" if pnl is not None else "(P&L unknown)")
-                                         + (" (paper)" if pos["mode"] == "paper" else "") + f": {why}"),
+        self.state.feed("risk", "sell", f"SOLD {money}{part}" + (" (paper)" if pos["mode"] == "paper" else "") + f": {why}",
                         pos.get("ticker"), pos.get("mint"))
-        book.release()                               # the seat that closed the position frees the book
-        self.data_misses = 0
+        if full:
+            book.release()                           # the seat that closed the position frees the book
+            self.data_misses = 0
+        return trade
+
+    # ---------- WATCH: the price manager, every WATCH_SECONDS while a position is open ----------
+    def watch_poll(self, clock=time.time):
+        """Reads the coin's real price and its last five minutes of buys and sells, keeps the peak since entry, and
+        applies the rules in this order: stop-loss, take-profit, max hold, trailing stop, the profit ladder,
+        breaking down, turning down, spike. One action per check. A number it can't read means no action."""
+        if not self.cfg.watch:
+            return None
+        with self.state.lock:
+            pos = self.state.data.get("position")
+        if not pos or pos.get("status") != "open" or not pos.get("tokens_raw"):
+            return None
+        label = pos.get("ticker") or pos["mint"][:6]
+        try:
+            pair = self._pair(pos["mint"])
+        except collect.FetchFailed as exc:
+            self.state.agent("risk", f"watch {label}: no price right now ({exc})", None, "watching")
+            return None
+        price = collect._num((pair or {}).get("priceUsd"))
+        entry = _f(pos.get("entry_price_usd"))
+        if price is None or entry is None or entry <= 0:
+            self.state.agent("risk", f"watch {label}: price unknown, no action", None, "watching")
+            return None
+        c = self.cfg
+        now = clock()
+        peak = max(_f(pos.get("peak_price")) or price, price)
+        gain, peak_gain = (price / entry - 1) * 100, (peak / entry - 1) * 100
+        off_peak = (1 - price / peak) * 100 if peak > 0 else 0.0
+        m5 = collect._num(((pair.get("priceChange") or {}).get("m5")))
+        tx = ((pair.get("txns") or {}).get("m5") or {})
+        buys, sells = collect._num(tx.get("buys")), collect._num(tx.get("sells"))
+        tokens = int(pos["tokens_raw"]) / 10 ** pos["decimals"]
+        value = price * tokens
+        basis = _f(pos.get("cost_usd"))
+        with self.state.lock:
+            p = self.state.data.get("position") or pos
+            p.update(last_price=price, peak_price=peak, gain_pct=round(gain, 2), peak_gain_pct=round(peak_gain, 2),
+                     off_peak_pct=round(off_peak, 2), m5_change=m5, m5_buys=buys, m5_sells=sells,
+                     last_value_usd=round(value, 2), last_pnl_usd=round(value - basis, 2) if basis is not None else None,
+                     watched_at=_now())
+        age_h = (now - (pos.get("opened_ts") or now)) / 3600
+        done = set(pos.get("rungs_done") or [])
+        sellers = buys is not None and sells is not None
+        act = None
+        if c.stop_loss_pct > 0 and gain <= -c.stop_loss_pct:
+            act = (1.0, f"stop-loss at {gain:+.1f}% (limit -{c.stop_loss_pct:g}%)", None)
+        elif c.take_profit_pct > 0 and gain >= c.take_profit_pct:
+            act = (1.0, f"take-profit at {gain:+.1f}% (target +{c.take_profit_pct:g}%)", None)
+        elif c.max_hold_hours > 0 and age_h >= c.max_hold_hours:
+            act = (1.0, f"held {age_h:.1f}h, the {c.max_hold_hours:g}h limit, at {gain:+.1f}%", None)
+        elif c.trail_pct > 0 and peak_gain >= c.trail_arm_pct and off_peak >= c.trail_pct:
+            act = (1.0, f"trailing stop: {off_peak:.1f}% off the peak (best {peak_gain:+.1f}%, now {gain:+.1f}%): looks like the top", None)
+        else:
+            for g, pct in c.scale_out:
+                if g not in done and gain >= g:
+                    share = min(1.0, pct / 100 * int(pos.get("tokens_raw_initial") or pos["tokens_raw"]) / int(pos["tokens_raw"]))
+                    act = (share, f"take profit at +{g:g}% (now {gain:+.1f}%): {pct:g}% of the original bag", ("rung", g))
+                    break
+        if act is None and sellers and m5 is not None:
+            if gain <= 0 and c.drop_m5_pct > 0 and m5 <= -2 * c.drop_m5_pct and sells > buys * 1.5:
+                act = (1.0, f"breaking down: {m5:+.1f}% in 5 min, {int(sells)} sells vs {int(buys)} buys, at {gain:+.1f}%", None)
+            elif (gain > 0 and c.drop_m5_pct > 0 and c.derisk_pct > 0 and m5 <= -c.drop_m5_pct and sells > buys * 1.3
+                  and now - (pos.get("derisk_ts") or 0) > 600):
+                act = (c.derisk_pct / 100, f"turning down: {m5:+.1f}% in 5 min, {int(sells)} sells vs {int(buys)} buys: "
+                                           f"locking in {c.derisk_pct:g}% at {gain:+.1f}%", ("derisk", now))
+            elif (gain >= 20 and c.pump_m5_pct > 0 and c.pump_sell_pct > 0 and m5 >= c.pump_m5_pct
+                  and now - (pos.get("spike_ts") or 0) > 900):
+                act = (c.pump_sell_pct / 100, f"spike: {m5:+.1f}% in 5 min at {gain:+.1f}%: taking {c.pump_sell_pct:g}% off",
+                       ("spike", now))
+        if act is None:
+            nxt = next((g for g, _ in c.scale_out if g not in done), None)
+            trail = (f"trail armed, sells at -{c.trail_pct:g}% off the peak" if peak_gain >= c.trail_arm_pct
+                     else f"trail arms at +{c.trail_arm_pct:g}%")
+            self.state.agent("risk", f"watching {label}: {gain:+.1f}% (peak {peak_gain:+.1f}%) · {trail}"
+                             + (f" · next take-profit at +{nxt:g}%" if nxt is not None else ""), gain / 100, "gain")
+            return None
+        share, why, mark = act
+        trade = self.sell(pos, share, why)
+        if trade is not None and mark is not None and not trade.get("final"):
+            with self.state.lock:
+                p = self.state.data.get("position")
+                if p is not None:
+                    if mark[0] == "rung":
+                        p["rungs_done"] = sorted(set(p.get("rungs_done") or []) | {mark[1]})
+                    else:
+                        p[f"{mark[0]}_ts"] = mark[1]
+                    self.state.save()
         return trade
 
     def _rebuild(self, held):

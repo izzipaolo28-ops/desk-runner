@@ -92,6 +92,33 @@ desk monitors show the balance, fills, tickets, P&L and coins per scan. threshol
 lens with its real value next to every rule, ✓ or ✗. The live feed lists every coin: what was cut and why, what Jev
 was asked, what was bought and sold. Tap a coin to open its DexScreener chart.
 
+## Taking profit and cutting losses (RISK + WATCH)
+
+While a coin is held, **WATCH** reads its real price and the last five minutes of buys and sells from DexScreener
+every minute, keeps the best price since the buy, and acts on the first rule that applies (one action per check,
+no action on a number it can't read):
+
+| rule | default | what it does |
+|---|---|---|
+| stop-loss | `STOP_LOSS_PCT=30` | down 30% from the buy → sell everything |
+| take-profit (all) | `TAKE_PROFIT_PCT=0` (off) | up X% → sell everything |
+| max hold | `MAX_HOLD_HOURS=24` | held this long → sell everything |
+| trailing stop | `TRAIL_ARM_PCT=20`, `TRAIL_PCT=15` | once it has been up 20%, a 15% drop from its best price sells everything: "looks like the top" |
+| profit ladder | `SCALE_OUT=30:25,60:25,100:25` | at +30% sell 25% of the original bag, at +60% another 25%, at +100% another 25%; the last 25% rides on the trailing stop |
+| breaking down | `WATCH_DROP_M5_PCT=8` | in a loss and down 16%+ in 5 minutes with sellers 1.5× buyers → sell everything |
+| turning down | `WATCH_DROP_M5_PCT=8`, `WATCH_DERISK_PCT=50` | in profit, down 8%+ in 5 minutes with sellers 1.3× buyers → sell half of what's left (at most every 10 minutes) |
+| spike | `WATCH_PUMP_M5_PCT=20`, `WATCH_PUMP_SELL_PCT=30` | up 20%+ in 5 minutes while 20%+ in profit → take 30% off (at most every 15 minutes) |
+
+RISK's volume rule still runs every 5 minutes on top (volume ratio under 0.20 → sell everything). `WATCH=off`
+turns the price manager off; `0` turns a single rule off; `SCALE_OUT=off` removes the ladder. Every sale is its
+own row in TRADES (part sales are marked with the % sold); wins and losses count per coin, not per sale.
+The POSITION · TRADE PLAN panel shows the plan live: entry and price now, best so far, which ladder steps are done,
+the exact price the trailing stop and the stop-loss sell at, and MONEY: cash, what's in the coin, the worst case to
+the stop, what's banked today and how much of the daily loss limit is left.
+
+These are rules, not predictions: a coin can gap through a stop, and a trailing stop can sell just before a
+second leg up. Test them in paper first.
+
 ## Stopping it
 
 | you want | do this |
@@ -136,7 +163,7 @@ stays paused until you tap **Resume**.
 | `MIN_TICKET_USD` | `5` | no buy smaller than this |
 | `MAX_IMPACT_PCT` | `3` | refuse fills with more price impact |
 | `MAX_DAILY_LOSS_PCT` | `20` | pause the desk after losing this % of the day's opening bank |
-| `STOP_LOSS_PCT` | `0` (off) | also sell if the position is down this much |
+| `STOP_LOSS_PCT` | `30` | sell everything if the position is down this much (`0` = off) |
 | `FEE_RESERVE_SOL` | `0.02` | SOL the bot never spends |
 | `RISK_POLL_SECONDS` | `300` | how often RISK checks an open position (at least 30) |
 | `CYCLE_SECONDS` | `300` | time between scans (5 minutes) |
@@ -149,6 +176,8 @@ stays paused until you tap **Resume**.
 | `HARD_<NAME>` | thresholds.py | override one HARD number, e.g. `HARD_MAX_AGE_HOURS=168` |
 | `SOFT_<NAME>` | thresholds.py | override one SOFT limit, e.g. `SOFT_MOMENTUM_ALREADY_SPENT=0.75` |
 | `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
+
+| `PRACTICE_MODE` | none | `true` (paper only): opens the gates that keep most coins out, so you can watch the desk buy and sell. It sets `SHAPE_MIN_CROWD=0.25`, `PICK_MIN_WORTH=0.20`, `PICK_MIN_CONF=0.30`, momentum 0.90, concentration 0.80, dev 0.80, liquidity fit 0.35, age 168h, top wallet 12%, top 10 80%. Ignored in live mode. Paper results under it say nothing about the real rules. |
 
 Overrides change the desk's rules, in paper and in live alike. The thresholds.py panel on the page shows the
 numbers in force and lists which ones came from the variables.

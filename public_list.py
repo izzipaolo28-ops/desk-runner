@@ -77,4 +77,5 @@ def _row(p):
             "holders": None,
             "change": {300: _pct_to_ratio(change.get("m5")), 3600: _pct_to_ratio(change.get("h1")),
                        14400: None, 86400: _pct_to_ratio(change.get("h24"))},
-            "created": p.get("pairCreatedAt")}
+            "created": p.get("pairCreatedAt"),
+            "pair": p.get("pairAddress") if isinstance(p.get("pairAddress"), str) else None}
