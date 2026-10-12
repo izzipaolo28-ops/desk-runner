@@ -202,7 +202,7 @@ function renderAgents(agents){
     card.appendChild(top);
     card.appendChild(el("span", "ago", ago(a.updated)));
     const kv = el("div", "kv"); kv.append(el("span", "", a.label || "—"), el("b", "", num(a.value) === null ? "—" :
-      (["ticket", "last fill"].includes(a.label) ? usd(a.value) : (Math.abs(a.value) < 10 ? a.value.toFixed(2) : String(Math.round(a.value))))));
+      (["ticket", "last fill"].includes(a.label) ? usd(a.value) : Number.isInteger(a.value) ? String(a.value) : (Math.abs(a.value) < 10 ? a.value.toFixed(2) : String(Math.round(a.value))))));
     card.appendChild(kv);
     const m = el("div", "meter"); const mi = el("i"); mi.style.background = s.c;
     const v = num(a.value); mi.style.width = (v !== null && v >= 0 && v <= 1 ? v * 100 : a.line ? 100 : 0) + "%"; m.appendChild(mi); card.appendChild(m);

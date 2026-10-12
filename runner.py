@@ -77,6 +77,9 @@ def universe(pages):
 def why(stats):
     """'free: age 31, volume 9 · trade: no_sells 2'. The counts alone can't tell a bug from a quiet market."""
     parts = []
+    failed = stats.get("universe_failed") or []
+    if failed:                                    # a short list is GeckoTerminal refusing, not a quiet market
+        parts.append(f"list failed ({len(failed)}): " + "; ".join(f[:90] for f in failed[:2]))
     for stage in ("free", "trade", "chain", "soft"):
         reasons = stats.get(stage) or {}
         if reasons:
