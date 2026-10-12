@@ -1,7 +1,7 @@
 # Desk Runner
 
 The desk, the bot and the DESK FLOOR dashboard in one Railway service. It scans Solana tokens, asks Jev through your
-question sets, buys the pick through Jupiter, then RISK sells it when the volume dies. One position at a time.
+question sets, buys the pick through Jupiter, then RISK sells it when the volume dies. Up to 5 coins at once (`MAX_POSITIONS`).
 
 It starts in **paper mode**: real Jupiter quotes, nothing sent, no wallet needed. Real money only after you set
 `LIVE_MODE=true` and give it a bot wallet.
@@ -92,6 +92,17 @@ desk monitors show the balance, fills, tickets, P&L and coins per scan. threshol
 lens with its real value next to every rule, ✓ or ✗. The live feed lists every coin: what was cut and why, what Jev
 was asked, what was bought and sold. Tap a coin to open its DexScreener chart.
 
+## Several coins at once
+
+The desk holds up to `MAX_POSITIONS` coins (default **5**) and keeps scanning while it has a free slot. Each coin
+gets its own plan below. All coins together stay under `MAX_EXPOSURE_PCT` (default **25**%) of everything (cash +
+what's in coins): a ticket that would go over is cut to the room left, or skipped. A coin it already holds is
+skipped by the scan, and a coin it just sold is set aside for an hour, so it never buys straight back in.
+`MAX_POSITIONS=1` gives back the one-coin desk.
+
+Prices are shown as **market caps** everywhere (DexScreener's market cap, never FDV): what it bought at, where it
+is now, its best, and the market cap at which each ladder step, the trailing stop and the stop-loss sell.
+
 ## Taking profit and cutting losses (RISK + WATCH)
 
 While a coin is held, **WATCH** reads its real price and the last five minutes of buys and sells from DexScreener
@@ -170,6 +181,8 @@ stays paused until you tap **Resume**.
 | `TRENDING_PAGES` | `1` | pages of GeckoTerminal trending pools scanned first (0 to 3; 0 = new pools only) |
 | `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
+| `MAX_POSITIONS` | `5` | coins held at once (1 to 10) |
+| `MAX_EXPOSURE_PCT` | `25` | all coins together, as % of cash + coins |
 | `TEST_SWAP_USD` | `1` | size of the Test swap round trip, $0.50 to $20 |
 
 | `DESK_TITLE` / `DESK_TAGLINE` | `GROKBOT + JEV` / `JEV PICKS, CODE TRADES` | the page's name and tagline |
@@ -207,7 +220,7 @@ Your first deploy is the first real run of those, which is one more reason to st
 - Solana only, because that's what Jupiter swaps.
 - X lookups are off, so every ticket takes the ×0.60 no-X cut.
 - SIZE has no Kelly step: nothing measures an edge yet.
-- One position at a time.
+- Up to 5 coins at once (`MAX_POSITIONS`).
 - The dashboard link is public, but read-only. Anyone with it can see the bot wallet's address and trades. They
   can't pause it or move funds.
 - **FOMO:** it has no public trading API, and its terms forbid bots, so this desk trades through Jupiter instead.

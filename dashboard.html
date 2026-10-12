@@ -604,6 +604,41 @@ function eventsFrom(feed){
 }
 
 // ---------- the floor's live layers ----------
+const mcap = v => num(v) === null ? "MC unknown" : "$" + compact(v);
+function planBlock(p, W, i, n){
+  const box = el("div"); if (i) { box.style.borderTop = "1px solid #161c2a"; box.style.marginTop = "10px"; box.style.paddingTop = "8px"; }
+  const head = el("div", "mono"); head.style.cssText = "display:flex;justify-content:space-between;gap:8px;font-size:13px;margin-bottom:4px";
+  const left = el("span"); left.append(el("span", "muted", n > 1 ? `${i + 1}/${n} ` : ""), coinLink(p.ticker, p.mint));
+  const g = num(p.gain_pct); head.append(left, el("b", g === null ? "" : g >= 0 ? "pos" : "neg", g === null ? "—" : (g >= 0 ? "+" : "") + g.toFixed(1) + "%")); box.appendChild(head);
+  const pc = v => num(v) === null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+  const sup = num(p.supply), entryMC = num(p.entry_mcap), nowMC = num(p.mcap_now), peakMC = num(p.peak_mcap) ?? (sup && num(p.peak_price) ? p.peak_price * sup : null);
+  const tbl = el("table", "plan");
+  const leftBag = num(p.tokens_raw) !== null && num(p.tokens_raw_initial) ? p.tokens_raw / p.tokens_raw_initial * 100 : null;
+  const armed = num(p.peak_gain_pct) !== null && num(W.trail_arm_pct) !== null && p.peak_gain_pct >= W.trail_arm_pct;
+  const trail = !W.trail_pct ? "off" : armed ? (peakMC !== null ? `armed: sells the rest under ${mcap(peakMC * (1 - W.trail_pct / 100))} MC (-${W.trail_pct}% off the best)` : `armed: sells ${W.trail_pct}% off the best`)
+    : `arms at +${W.trail_arm_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 + W.trail_arm_pct / 100))} MC)` : "") + `, then sells ${W.trail_pct}% off the best`;
+  const stop = !W.stop_loss_pct ? "off" : entryMC !== null ? `sells all under ${mcap(entryMC * (1 - W.stop_loss_pct / 100))} MC (-${W.stop_loss_pct}%)` : `-${W.stop_loss_pct}%`;
+  const held = num(p.opened_ts) !== null ? (Date.now() / 1000 - p.opened_ts) / 3600 : null;
+  const rungs = el("div", "rungs"), done = new Set((p.rungs_done || []).map(Number));
+  let marked = false;
+  (W.ladder || []).forEach(([gg, sh]) => { const hit = done.has(Number(gg)), next = !hit && !marked; if (next) marked = true;
+    rungs.appendChild(el("span", "rung" + (hit ? " hit" : next ? " next" : ""), `+${gg}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 + gg / 100))})` : "") + ` → sell ${sh}%` + (hit ? " ✓" : ""))); });
+  if (!(W.ladder || []).length) rungs.appendChild(el("span", "rung", "no ladder (SCALE_OUT=off)"));
+  const flow = num(p.m5_buys) !== null && num(p.m5_sells) !== null ? `${pc(num(p.m5_change))} · ${Math.round(p.m5_buys)} buys / ${Math.round(p.m5_sells)} sells` : num(p.m5_change) !== null ? pc(p.m5_change) : "—";
+  const rows = [["opened", p.opened_at ? ago(p.opened_at) + " ago" : "unknown"],
+    ["MC at buy → now", `${mcap(entryMC)} → ${mcap(nowMC)}`], ["best so far", pc(num(p.peak_gain_pct)) + (peakMC !== null ? ` (${mcap(peakMC)} MC)` : "")],
+    ["last 5 min", flow], ["bag left", leftBag === null ? "—" : leftBag.toFixed(0) + "% of what it bought"],
+    ["cost left · value now", usd(num(p.cost_usd)) + " · " + usd(num(p.last_value_usd))], ["open P&L", signed(num(p.last_pnl_usd))],
+    ["banked from this coin", signed(num(p.realized_usd))], ["take-profit ladder", rungs],
+    ["take-profit (all)", W.take_profit_pct ? "+" + W.take_profit_pct + "%" + (entryMC !== null ? ` (${mcap(entryMC * (1 + W.take_profit_pct / 100))} MC)` : "") : "off"],
+    ["trailing stop", trail], ["stop-loss", stop],
+    ["max hold", W.max_hold_hours ? (held === null ? W.max_hold_hours + "h" : Math.max(0, W.max_hold_hours - held).toFixed(1) + "h left of " + W.max_hold_hours + "h") : "off"],
+    ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells all under 0.20)"]];
+  for (const [k, v] of rows){ const tr = el("tr"), td = el("td", k === "open P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : "");
+    if (v instanceof Node) td.appendChild(v); else td.textContent = v; tr.append(el("td", "muted", k), td); tbl.appendChild(tr); }
+  box.appendChild(tbl);
+  return box;
+}
 function record(trades){                     // wins/losses per position: a ladder of sales is one result
   const by = new Map();
   (trades || []).forEach((t, i) => { const k = t.order_id || "row" + i, b = by.get(k) || {pnl: 0, closed: false};
@@ -622,12 +657,15 @@ function floorRender(d){
     `JEV ASKS ${tot.jev || 0}`, `RUGS KILLED ${tot.rugs || 0}`, `DAY ${dayNo(d)}`, "CRAWLER READS, JEV PICKS, CODE TRADES"].join("  ·  ") + "  ·  ";
   if (F.tape.textContent !== tape + tape) F.tape.textContent = tape + tape;
   F.monHead.textContent = "";
-  const facts = lens && focus && lens.mint === focus.mint ? lens.facts || {} : {};
+  const facts = Object.assign({}, lens && focus && lens.mint === focus.mint ? lens.facts || {} : {});
+  const heldNow = focus ? (d.positions || []).find(q => q.mint === focus.mint) : null;
+  if (heldNow && num(heldNow.mcap_now) !== null) facts.mcap_usd = heldNow.mcap_now;           // the held coin: live MC
+  view.supply = heldNow && num(heldNow.supply) ? heldNow.supply : num(facts.mcap_usd) && num(facts.price_usd) ? facts.mcap_usd / facts.price_usd : null;
   T(F.monHead, 358, 98, focus ? "$" + clip(focus.ticker || focus.mint.slice(0, 6), 12) : "no coin yet", {style: "font:800 16px var(--mono);fill:#fbbf24"});
   T(F.monHead, 358, 114, focus ? clip(focus.mint, 26) : "the first scan picks one", {style: "font:9px var(--mono);fill:#4b5569"});
   const ch = num(facts.change_1h);
   const cells = [["Market cap", num(facts.mcap_usd) !== null ? "$" + compact(facts.mcap_usd) : "—"],
-    ["Price", num(facts.price_usd) !== null ? "$" + (facts.price_usd < 0.01 ? facts.price_usd.toPrecision(3) : facts.price_usd.toFixed(4)) : "—"],
+    heldNow && num(heldNow.entry_mcap) !== null ? ["Bought at", "$" + compact(heldNow.entry_mcap)] : ["Age", num(facts.age_minutes) !== null ? (facts.age_minutes >= 120 ? (facts.age_minutes / 60).toFixed(1) + "h" : Math.round(facts.age_minutes) + "m") : "—"],
     ["1h", ch !== null ? (ch >= 0 ? "+" : "") + (ch * 100).toFixed(1) + "%" : "—"],
     ["24h vol", num(facts.volume_h24) !== null ? "$" + compact(facts.volume_h24) : "—"],
     ["Liquidity", num(facts.liquidity_usd) !== null ? "$" + compact(facts.liquidity_usd) : "—"],
@@ -654,7 +692,7 @@ function floorRender(d){
   });
   F.mandate.textContent = "";
   const H = (d.thresholds || {}).HARD || {};
-  ["DAY " + dayNo(d) + " MANDATE", "- jev picks the token", "- one position at a time", "- ticket ≤ 6% of bank", `- age ${H.min_age_minutes ?? "?"}m to ${H.max_age_hours ?? "?"}h`,
+  ["DAY " + dayNo(d) + " MANDATE", "- jev picks the token", `- up to ${num(d.max_positions) || 1} coins at once`, "- ticket ≤ 6% of bank", `- age ${H.min_age_minutes ?? "?"}m to ${H.max_age_hours ?? "?"}h`,
    `- liquidity ≥ $${compact(H.min_liquidity_usd ?? null)}`, "- sell when vol ratio", "  drops under 0.20", "- crawler reads first"].forEach((line, i) =>
     T(F.mandate, 1183, 162 + i * 14, line, {style: `font:${i ? 400 : 700} ${i ? 7.6 : 8.5}px var(--mono);fill:${i ? "#9aa6bd" : "#e8edf6"}`}));
   F.shredCount.textContent = (tot.cut || 0) + " cut";
@@ -761,6 +799,7 @@ function paintCandles(mint){
   if (!hit || (!hit.list && !hit.err && hit.loading)){ T(g, 635, 230, "loading the chart…", {"text-anchor": "middle", style: "font:12px var(--mono);fill:#4b5569"}); return; }
   if ((hit.err && !hit.list) || !hit.list || !hit.list.length){ T(g, 635, 222, hit.err ? "chart: GeckoTerminal " + clip(hit.err, 30) : "no 5-minute candles yet", {"text-anchor": "middle", style: "font:12px var(--mono);fill:#4b5569"});
     T(g, 635, 240, "tries again in a minute · never drawn from guesses", {"text-anchor": "middle", style: "font:10px var(--mono);fill:#3b4357"}); return; }
+  const k = num(view.supply);                      // price x supply = market cap; without the supply, no number at all
   const c = hit.list, lo = Math.min(...c.map(x => x[3])), hi = Math.max(...c.map(x => x[2])), span = hi - lo || hi || 1;
   const X0 = 360, W = 550, Y0 = 130, H = 190, n = c.length, cw = W / n, y = v => Y0 + H - (v - lo) / span * H;
   for (let i = 0; i <= 4; i++) S("line", {x1: X0, x2: X0 + W, y1: Y0 + i * H / 4, y2: Y0 + i * H / 4, stroke: "#0f1524"}, g);
@@ -771,8 +810,10 @@ function paintCandles(mint){
     S("rect", {x: x - cw * .32, y: Math.min(y(k[1]), y(k[4])), width: cw * .64, height: Math.max(1.2, Math.abs(y(k[1]) - y(k[4]))), fill: col}, g); });
   const lastC = c[c.length - 1][4];
   S("line", {x1: X0, x2: X0 + W, y1: y(lastC), y2: y(lastC), stroke: "#f87171", "stroke-dasharray": "4 4", opacity: .7}, g);
-  T(g, X0 + W - 2, y(lastC) - 4, lastC < 0.01 ? lastC.toPrecision(3) : lastC.toFixed(4), {"text-anchor": "end", style: "font:9px var(--mono);fill:#fca5a5"});
-  T(g, X0 + 2, Y0 + 10, "5m candles · GeckoTerminal", {style: "font:8px var(--mono);fill:#3b4357"});
+  if (k) { T(g, X0 + W - 2, y(lastC) - 4, "MC $" + compact(lastC * k), {"text-anchor": "end", style: "font:9px var(--mono);fill:#fca5a5"});
+    T(g, X0 + W - 2, Y0 + 10, "$" + compact(hi * k), {"text-anchor": "end", style: "font:8px var(--mono);fill:#4b5569"});
+    T(g, X0 + W - 2, Y0 + H - 2, "$" + compact(lo * k), {"text-anchor": "end", style: "font:8px var(--mono);fill:#4b5569"}); }
+  T(g, X0 + 2, Y0 + 10, "5m candles · market cap · GeckoTerminal", {style: "font:8px var(--mono);fill:#3b4357"});
 }
 
 // ---------- animation ----------
@@ -982,47 +1023,24 @@ function render(d){
     fb.appendChild(r);
   }
   if (!(d.feed || []).length) fb.appendChild(el("div", "empty", "nothing yet: the first scan fills this in"));
-  $("posMode").textContent = p ? p.mode.toUpperCase() + (d.watch && d.watch.enabled ? " · WATCHED EVERY " + Math.round(d.watch.seconds) + "s" : "") : "";
-  const pos = $("position"); pos.textContent = ""; pos.className = p ? "" : "empty";
-  const W = d.watch || {}, pc = v => num(v) === null ? "—" : (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
-  const px = v => num(v) === null ? "—" : "$" + (v < 0.01 ? v.toPrecision(3) : v.toFixed(4));
-  if (p){
-    const tbl = el("table", "plan"), entry = num(p.entry_price_usd), peak = num(p.peak_price);
-    const left = num(p.tokens_raw) !== null && num(p.tokens_raw_initial) ? p.tokens_raw / p.tokens_raw_initial * 100 : null;
-    const armed = num(p.peak_gain_pct) !== null && num(W.trail_arm_pct) !== null && p.peak_gain_pct >= W.trail_arm_pct;
-    const trail = !W.trail_pct ? "off" : armed && peak !== null ? `armed: sells the rest under ${px(peak * (1 - W.trail_pct / 100))} (-${W.trail_pct}% off the peak)` : `arms at +${W.trail_arm_pct}%, then sells ${W.trail_pct}% off the peak`;
-    const stop = !W.stop_loss_pct ? "off" : entry !== null ? `sells all under ${px(entry * (1 - W.stop_loss_pct / 100))} (-${W.stop_loss_pct}%)` : `-${W.stop_loss_pct}%`;
-    const held = num(p.opened_ts) !== null ? (Date.now() / 1000 - p.opened_ts) / 3600 : null;
-    const rungs = el("div", "rungs"), done = new Set((p.rungs_done || []).map(Number));
-    let marked = false;
-    (W.ladder || []).forEach(([g, sh]) => { const hit = done.has(Number(g)), next = !hit && !marked; if (next) marked = true;
-      rungs.appendChild(el("span", "rung" + (hit ? " hit" : next ? " next" : ""), `+${g}% → sell ${sh}%` + (hit ? " ✓" : ""))); });
-    if (!(W.ladder || []).length) rungs.appendChild(el("span", "rung", "no ladder (SCALE_OUT=off)"));
-    const flow = num(p.m5_buys) !== null && num(p.m5_sells) !== null ? `${pc(num(p.m5_change))} · ${Math.round(p.m5_buys)} buys / ${Math.round(p.m5_sells)} sells` : num(p.m5_change) !== null ? pc(p.m5_change) : "—";
-    const rows = [["token", coinLink(p.ticker, p.mint)], ["opened", p.opened_at ? ago(p.opened_at) + " ago" : "unknown"],
-      ["entry → now", `${px(entry)} → ${px(num(p.last_price))}`], ["gain now", pc(num(p.gain_pct))], ["best so far", pc(num(p.peak_gain_pct))],
-      ["last 5 min", flow], ["bag left", left === null ? "—" : left.toFixed(0) + "% of what it bought"],
-      ["cost left · value now", usd(num(p.cost_usd)) + " · " + usd(num(p.last_value_usd))], ["open P&L", signed(num(p.last_pnl_usd))],
-      ["banked from this coin", signed(num(p.realized_usd))], ["take-profit ladder", rungs],
-      ["take-profit (all)", W.take_profit_pct ? "+" + W.take_profit_pct + "%" : "off"], ["trailing stop", trail], ["stop-loss", stop],
-      ["max hold", W.max_hold_hours ? (held === null ? W.max_hold_hours + "h" : Math.max(0, W.max_hold_hours - held).toFixed(1) + "h left of " + W.max_hold_hours + "h") : "off"],
-      ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells all under 0.20)"], ["next RISK check", ""]];
-    for (const [k, v] of rows){ const tr = el("tr"), td = el("td", k === "open P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : k === "gain now" ? (num(p.gain_pct) >= 0 ? "pos" : "neg") : "");
-      if (k === "next RISK check") td.id = "countdown"; if (v instanceof Node) td.appendChild(v); else td.textContent = v; tr.append(el("td", "muted", k), td); tbl.appendChild(tr); }
-    pos.appendChild(tbl);
-  } else { pos.textContent = d.paused ? "no position · paused" : "no position · "; const c = el("span"); c.id = "countdown"; pos.appendChild(c);
+  const ps = d.positions || (p ? [p] : []), W = d.watch || {}, slots = num(d.max_positions) || 1;
+  $("posMode").textContent = (p ? p.mode.toUpperCase() + " · " : "") + `${ps.length} OF ${slots} SLOTS` + (ps.length && W.enabled ? " · WATCHED EVERY " + Math.round(W.seconds) + "s" : "");
+  const pos = $("position"); pos.textContent = ""; pos.className = ps.length ? "" : "empty";
+  ps.forEach((q, i) => pos.appendChild(planBlock(q, W, i, ps.length)));
+  if (!ps.length){ pos.append(document.createTextNode(d.paused ? "no coins held · paused" : "no coins held · ")); const c = el("span"); c.id = "countdown"; pos.appendChild(c);
     if (W.enabled){ const plan = el("div", "muted mono"); plan.style.fontSize = "11px"; plan.style.marginTop = "8px";
-      plan.textContent = "when it buys: " + ((W.ladder || []).map(([g, sh]) => `+${g}%→${sh}%`).join(", ") || "no ladder") + ` · trail ${W.trail_pct ? W.trail_pct + "% off the peak after +" + W.trail_arm_pct + "%" : "off"}` +
+      plan.textContent = `up to ${slots} coins at once · each: ` + ((W.ladder || []).map(([g, sh]) => `+${g}%→sell ${sh}%`).join(", ") || "no ladder") + ` · trail ${W.trail_pct ? W.trail_pct + "% off the best MC after +" + W.trail_arm_pct + "%" : "off"}` +
         ` · stop ${W.stop_loss_pct ? "-" + W.stop_loss_pct + "%" : "off"} · max ${W.max_hold_hours ? W.max_hold_hours + "h" : "—"} · trims ${W.derisk_pct}% when it turns down`;
       pos.appendChild(plan); } }
+  else { const c = el("div", "muted mono"); c.style.fontSize = "11px"; c.style.marginTop = "6px"; c.append(document.createTextNode("next RISK check ")); const cd = el("span"); cd.id = "countdown"; c.appendChild(cd); pos.appendChild(c); }
   // money management: what's at stake right now, what the worst case is, how much of today's limit is used
   const money = el("div", "money"); money.appendChild(el("h3", "", "MONEY"));
-  const mt = el("table", "plan"), bank = num(d.bank_usd), atRisk = p ? num(p.cost_usd) : 0;
-  const worst = p && num(p.cost_usd) !== null && W.stop_loss_pct ? p.cost_usd * W.stop_loss_pct / 100 : null;
+  const mt = el("table", "plan"), bank = num(d.bank_usd), atRisk = ps.reduce((a, q) => a + (num(q.cost_usd) || 0), 0);
+  const worst = ps.length && W.stop_loss_pct ? atRisk * W.stop_loss_pct / 100 : null, cap = num(d.max_exposure_pct);
   const today = num(d.realized_today) || 0, start = num(d.day_start_bank), lim = num(d.max_daily_loss_pct);
   const room = start !== null && lim ? start * lim / 100 + Math.min(0, today) : null;
-  [["cash (bank)", usd(bank)], ["in the coin now", p ? usd(atRisk) + (bank ? ` (${(atRisk / (bank + atRisk) * 100).toFixed(1)}% of everything)` : "") : "nothing"],
-   ["worst case to the stop", worst === null ? (p ? "no stop set" : "—") : "−" + usd(worst)], ["banked today", signed(today)],
+  [["cash (bank)", usd(bank)], ["in coins now", ps.length ? usd(atRisk) + ` in ${ps.length} coin${ps.length > 1 ? "s" : ""}` + (bank !== null ? ` (${(atRisk / (bank + atRisk) * 100).toFixed(1)}% of everything, cap ${cap ?? "?"}%)` : "") : "nothing"],
+   ["worst case to the stops", worst === null ? (ps.length ? "no stop set" : "—") : "−" + usd(worst)], ["banked today", signed(today)],
    ["daily loss limit left", room === null ? "—" : usd(Math.max(0, room)) + ` (pauses at −${lim}% of the day's start)`]].forEach(([k, v]) => {
     const tr = el("tr"); tr.append(el("td", "muted", k), el("td", k === "banked today" ? (today >= 0 ? "pos" : "neg") : "", v)); mt.appendChild(tr); });
   money.appendChild(mt); pos.appendChild(money);
@@ -1037,6 +1055,7 @@ function render(d){
   for (const t of trades.slice(0, 30)){
     const tr = el("tr"), pnl = num(t.pnl_usd), tk = el("td");
     tk.append(coinLink(t.ticker || "?", t.mint), document.createTextNode((t.mode === "paper" ? " ·p" : "") + (t.final === false && num(t.sold_pct) !== null ? " ·" + Math.round(t.sold_pct) + "%" : "")));
+    if (num(t.mcap_in) !== null || num(t.mcap_out) !== null){ const m = el("div", "muted"); m.style.fontSize = "10px"; m.textContent = `MC ${mcap(num(t.mcap_in))} → ${mcap(num(t.mcap_out))}`; tk.appendChild(m); }
     tr.append(el("td", "muted", (t.closed_at || "").slice(5, 16).replace("T", " ")), tk, el("td", "", usd(num(t.cost_usd))), el("td", "", usd(num(t.proceeds_usd))),
       el("td", pnl === null ? "" : pnl >= 0 ? "pos" : "neg", signed(pnl)), el("td", "muted", t.reason || ""));
     tb.appendChild(tr);

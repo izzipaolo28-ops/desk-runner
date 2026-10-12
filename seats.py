@@ -3,7 +3,8 @@
 
 Paper mode (LIVE_MODE=false, the default): the whole loop runs on real Jupiter quotes and real prices, but
 nothing is signed or sent. Live mode signs with the bot's own wallet and lets Jupiter land the swap.
-One position at a time. RISK alone closes it and alone calls book.release().
+Up to MAX_POSITIONS coins at once (default 5), each with its own plan; RISK alone sells. The book is released
+when the last one is sold.
 Never an invented number: a seat that lacks a figure it needs refuses and says which one.
 """
 import json
@@ -52,6 +53,20 @@ def _f(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
 
 
+def mc(v):
+    """$458.2K / $1.58M: market caps the way people read them. Unknown stays unknown."""
+    v = _f(v)
+    if v is None:
+        return "MC unknown"
+    return f"${v / 1e9:.2f}B" if v >= 1e9 else f"${v / 1e6:.2f}M" if v >= 1e6 else f"${v / 1e3:.1f}K" if v >= 1e3 else f"${v:.0f}"
+
+
+def supply_from(mcap, price):
+    """Market cap / price = the supply the market cap is counted on (DexScreener's marketCap, never FDV)."""
+    mcap, price = _f(mcap), _f(price)
+    return mcap / price if mcap and price and mcap > 0 and price > 0 else None
+
+
 class Config:
     def __init__(self, env=os.environ):
         live = str(env.get("LIVE_MODE", "false")).strip().lower()
@@ -81,6 +96,8 @@ class Config:
         self.pump_m5_pct = _env_num(env, "WATCH_PUMP_M5_PCT", 20)            # "spike": 5-min jump while in profit
         self.pump_sell_pct = _env_num(env, "WATCH_PUMP_SELL_PCT", 30, high=100)
         self.max_hold_hours = _env_num(env, "MAX_HOLD_HOURS", 24)
+        self.max_positions = int(_env_num(env, "MAX_POSITIONS", 5, low=1, high=10))
+        self.max_exposure_pct = _env_num(env, "MAX_EXPOSURE_PCT", 25, low=1, high=100)   # all coins together
 
     def watch_plan(self):
         return {"enabled": self.watch, "seconds": self.watch_seconds, "stop_loss_pct": self.stop_loss_pct,
@@ -116,7 +133,7 @@ class State:
 
     def __init__(self, path):
         self.path, self.lock = path, threading.RLock()
-        self.data = {"position": None, "trades": [], "equity": [], "paused": False, "pause_reason": None,
+        self.data = {"position": None, "positions": [], "trades": [], "equity": [], "paused": False, "pause_reason": None,
                      "day": None, "day_start_bank": None, "realized_today": 0.0, "agents": {}, "errors": [],
                      "judge": [], "cycle": None, "shadow": [], "started_at": _now(),
                      "feed": [], "working": None, "tests": [], "totals": {}, "lens": None, "pairs": {}}
@@ -125,6 +142,45 @@ class State:
                 self.data.update(json.load(fh))
         except (OSError, ValueError):
             pass
+        if not self.data.get("positions") and self.data.get("position"):   # a state file from the one-coin desk
+            self.data["positions"] = [self.data["position"]]
+        self.sync()
+
+    def sync(self):
+        """data["position"] is the first open position, kept for everything that shows one coin."""
+        with self.lock:
+            ps = self.data.setdefault("positions", [])
+            self.data["position"] = ps[0] if ps else None
+
+    def positions(self):
+        with self.lock:
+            return list(self.data.get("positions") or [])
+
+    def find(self, pos):
+        """The stored position for `pos` (same order, else same mint)."""
+        with self.lock:
+            for p in self.data.get("positions") or []:     # one coin is one position: the mint decides
+                if p.get("mint") == pos.get("mint"):
+                    return p
+        return None
+
+    def put(self, pos):
+        with self.lock:
+            ps = self.data.setdefault("positions", [])
+            cur = self.find(pos)
+            if cur is None:
+                ps.append(pos)
+            elif cur is not pos:
+                ps[ps.index(cur)] = pos
+            self.sync()
+
+    def drop(self, pos):
+        with self.lock:
+            cur = self.find(pos)
+            if cur is not None:
+                self.data["positions"].remove(cur)
+            self.sync()
+            return not self.data["positions"]
 
     def save(self):
         with self.lock:
@@ -267,7 +323,6 @@ class Seats:
         self.cfg, self.jup, self.rpc, self.kp, self.state, self._sleep = cfg, jupiter, rpc, keypair, state, sleep
         if cfg.live and keypair is None:
             raise ValueError("LIVE_MODE=true needs BOT_WALLET_KEY")
-        self.data_misses = 0
 
     # ---------- the bank ----------
     def sol_usd(self):
@@ -282,8 +337,8 @@ class Seats:
         if not self.cfg.live:                    # paper cash: start + realized P&L - what the open position cost
             with self.state.lock:
                 realized = sum(t.get("pnl_usd") or 0.0 for t in self.state.data["trades"] if t.get("mode") == "paper")
-                pos = self.state.data.get("position") or {}
-                open_cost = pos.get("cost_usd") or 0.0 if pos.get("mode") == "paper" else 0.0
+                open_cost = sum((p.get("cost_usd") or 0.0) for p in self.state.data.get("positions") or []
+                                if p.get("mode") == "paper")
             return round(self.cfg.paper_bank_usd + realized - open_cost, 2)
         price = self.sol_usd()
         try:
@@ -321,6 +376,13 @@ class Seats:
         if factor is None:
             return 0.0, "no size factor on the order"
         ticket = min(bank * TICKET_SHARE * factor, liq * MAX_POOL_SHARE)
+        open_cost = sum(_f(p.get("cost_usd")) or 0.0 for p in self.state.positions())
+        room = (bank + open_cost) * self.cfg.max_exposure_pct / 100 - open_cost
+        if ticket > room:                        # all coins together stay under MAX_EXPOSURE_PCT of everything
+            if room < self.cfg.min_ticket_usd:
+                return 0.0, (f"${open_cost:,.2f} already in coins: the {self.cfg.max_exposure_pct:g}% exposure cap "
+                             "leaves no room")
+            ticket = room
         if ticket < self.cfg.min_ticket_usd:
             return 0.0, f"ticket ${ticket:,.2f} is under the ${self.cfg.min_ticket_usd:g} floor"
         return round(ticket, 2), None
@@ -356,8 +418,8 @@ class Seats:
                     "model": order.get("model"), "size_factor": order.get("size_factor")}
         if self.cfg.live:
             with self.state.lock:                    # write-ahead: a crash after sending is never a lost position
-                self.state.data["position"] = {**position, "status": "sending", "tokens_raw": None,
-                                               "spent_lamports": lamports, "request_id": q.get("requestId")}
+                self.state.put({**position, "status": "sending", "tokens_raw": None,
+                                "spent_lamports": lamports, "request_id": q.get("requestId")})
                 self.state.save()
             signed = sign_transaction(q["transaction"], self.kp)
             try:
@@ -366,9 +428,9 @@ class Seats:
                 definite = isinstance(exc, JupiterError) and (exc.code is not None or exc.status in (400, 401, 403, 429))
                 with self.state.lock:
                     if definite:                     # Jupiter says it did not happen
-                        self.state.data["position"] = None
+                        self.state.drop(position)
                     else:                            # timeout, network, 5xx: it may have landed. RISK reads the chain.
-                        self.state.data["position"]["status"] = "unconfirmed"
+                        self.state.find(position)["status"] = "unconfirmed"
                     self.state.save()
                 raise RuntimeError(f"swap not filled: {exc}" if definite
                                    else f"swap outcome unknown, RISK will check the wallet: {exc}") from None
@@ -382,8 +444,12 @@ class Seats:
         position["entry_price_usd"] = cost_usd / (position["tokens_raw"] / 10 ** decimals) if position["tokens_raw"] else None
         position.update(tokens_raw_initial=position["tokens_raw"], cost_usd_initial=position["cost_usd"], realized_usd=0.0,
                         peak_price=position["entry_price_usd"], rungs_done=[], sells=0)
+        supply = supply_from(facts.get("mcap_usd"), facts.get("price_usd"))
+        entry = position["entry_price_usd"]
+        position.update(supply=supply, entry_mcap=entry * supply if supply and entry else None,
+                        mcap_now=_f(facts.get("mcap_usd")), peak_mcap=entry * supply if supply and entry else None)
         with self.state.lock:
-            self.state.data["position"] = position
+            self.state.put(position)
             self.state.save()
         return position
 
@@ -405,7 +471,7 @@ class Seats:
         except Exception as exc:
             self.state.agent("fills", f"no fill on {label}: {exc}", None, "last fill")
             self.state.feed("fills", "error", f"no fill: {exc}", **coin)
-            if (self.state.data.get("position") or {}).get("status") == "unconfirmed":
+            if (self.state.find({"order_id": order["order_id"], "mint": tok["address"]}) or {}).get("status") == "unconfirmed":
                 return None                         # RISK reconciles it from the wallet
             return self.release_unfilled(order, f"FILLS: {exc}")
         self.state.agent("fills", f"in ${pos['cost_usd']:,.2f} on {label}, impact {pos['impact_pct']:.2f}%"
@@ -467,8 +533,9 @@ class Seats:
         return out
 
     def release_unfilled(self, order, why):
-        self.state.agent("risk", f"nothing filled, desk released ({why})", None, "released")
-        book.release()
+        if not self.state.positions():
+            self.state.agent("risk", f"nothing filled, desk released ({why})", None, "released")
+            book.release()
         return None
 
     # ---------- RISK ----------
@@ -481,17 +548,22 @@ class Seats:
         return max(pairs, key=liq)
 
     def risk_poll(self):
-        """One RISK check: close on the volume rule (or stop-loss, if set), or when the position can't be measured
-        three times running. Returns the closed trade, or None while still holding."""
-        with self.state.lock:
-            pos = self.state.data.get("position")
-        held = book.held()
-        if pos is None and held is None:
-            return None
-        if pos is None:                              # state lost (redeploy without a volume): rebuild from the chain
-            pos = self._rebuild(held)
-            if pos is None:
+        """One RISK check of every open position. Returns the first sale it made, or None."""
+        ps = self.state.positions()
+        if not ps:
+            held = book.held()
+            if held is None:
                 return None
+            pos = self._rebuild(held)                # state lost (redeploy without a volume): rebuild from the chain
+            ps = [pos] if pos is not None else []
+        sold = None
+        for pos in ps:
+            t = self.risk_one(pos)
+            sold = sold or t
+        return sold
+
+    def risk_one(self, pos):
+        """Close on the volume rule (or stop-loss), or when the position can't be measured three times running."""
         if pos.get("status") in ("unconfirmed", "sending"):
             return self._reconcile(pos)
         label = pos.get("ticker") or pos["mint"][:6]
@@ -502,12 +574,12 @@ class Seats:
         else:
             err = "no pair on DexScreener"
         if pair is None:
-            self.data_misses += 1
-            if self.data_misses < 3:                 # no answer: retry twice, then close anyway
-                self.state.agent("risk", f"{label}: no data ({err}), retry {self.data_misses}/2", None, "holding")
+            pos["misses"] = int(pos.get("misses") or 0) + 1
+            if pos["misses"] < 3:                    # no answer: retry twice, then close anyway
+                self.state.agent("risk", f"{label}: no data ({err}), retry {pos['misses']}/2", None, "holding")
                 return None
             return self.close(pos, "can't measure the position three times running")
-        self.data_misses = 0
+        pos["misses"] = 0
         age = None
         created = collect._num(pair.get("pairCreatedAt"))
         if created:
@@ -516,13 +588,16 @@ class Seats:
         price = collect._num(pair.get("priceUsd"))
         value = price * pos["tokens_raw"] / 10 ** pos["decimals"] if price is not None and pos.get("tokens_raw") else None
         pnl = (value - pos["cost_usd"]) if value is not None and _f(pos.get("cost_usd")) is not None else None
+        supply = supply_from(pair.get("marketCap"), price)
         with self.state.lock:
-            p = self.state.data.get("position") or {}
+            p = self.state.find(pos) or pos
             p.update(last_value_usd=value, last_pnl_usd=pnl, last_ratio=ratio, last_check=_now())
+            if supply:
+                p.update(supply=supply, mcap_now=round(price * supply, 2))
         if ratio is None:
-            self.data_misses += 1
-            if self.data_misses < 3:
-                self.state.agent("risk", f"{label}: {window}, retry {self.data_misses}/2", None, "holding")
+            pos["misses"] = int(pos.get("misses") or 0) + 1
+            if pos["misses"] < 3:
+                self.state.agent("risk", f"{label}: {window}, retry {pos['misses']}/2", None, "holding")
                 return None
             return self.close(pos, f"can't measure volume three times running ({window})")
         line = f"{label}: volume ratio {ratio:.2f} ({window})" + (f", P&L ${pnl:+,.2f}" if pnl is not None else "")
@@ -583,14 +658,19 @@ class Seats:
                  "cost_usd": round(cost_part, 2) if cost_part is not None else None,
                  "proceeds_usd": round(proceeds_usd, 2) if proceeds_usd is not None else None, "pnl_usd": pnl,
                  "proceeds_sol": proceeds_lamports / LAMPORTS, "reason": why, "model": pos.get("model"),
-                 "final": full, "sold_pct": round(100 * amount / initial, 1) if initial else None}
+                 "final": full, "sold_pct": round(100 * amount / initial, 1) if initial else None,
+                 "mcap_in": _f(pos.get("entry_mcap")),
+                 "mcap_out": (round(proceeds_usd / (amount / 10 ** pos["decimals"]) * pos["supply"], 2)
+                              if proceeds_usd is not None and amount and _f(pos.get("supply")) and pos.get("decimals") is not None
+                              else None)}
         with self.state.lock:
             d = self.state.data
             d["trades"] = ([trade] + d["trades"])[:200]
+            flat = False
             if full:
-                d["position"] = None
+                flat = self.state.drop(pos)
             else:
-                p = d.get("position") or pos
+                p = self.state.find(pos) or pos
                 p["tokens_raw"] = held - amount
                 p["cost_usd"] = round(basis - cost_part, 2) if basis is not None else None
                 p["realized_usd"] = round((p.get("realized_usd") or 0.0) + (pnl or 0.0), 2)
@@ -611,8 +691,9 @@ class Seats:
         self.state.feed("risk", "sell", f"SOLD {money}{part}" + (" (paper)" if pos["mode"] == "paper" else "") + f": {why}",
                         pos.get("ticker"), pos.get("mint"))
         if full:
-            book.release()                           # the seat that closed the position frees the book
-            self.data_misses = 0
+            book.sit(f"{pos['mint']}:{collect.FOMO_NET['solana']}", "sold")   # no buying straight back in
+            if flat:
+                book.release()                       # the last coin sold frees the book
         return trade
 
     # ---------- WATCH: the price manager, every WATCH_SECONDS while a position is open ----------
@@ -622,8 +703,13 @@ class Seats:
         breaking down, turning down, spike. One action per check. A number it can't read means no action."""
         if not self.cfg.watch:
             return None
-        with self.state.lock:
-            pos = self.state.data.get("position")
+        sold = None
+        for pos in self.state.positions():
+            t = self.watch_one(pos, clock)
+            sold = sold or t
+        return sold
+
+    def watch_one(self, pos, clock=time.time):
         if not pos or pos.get("status") != "open" or not pos.get("tokens_raw"):
             return None
         label = pos.get("ticker") or pos["mint"][:6]
@@ -648,8 +734,13 @@ class Seats:
         tokens = int(pos["tokens_raw"]) / 10 ** pos["decimals"]
         value = price * tokens
         basis = _f(pos.get("cost_usd"))
+        supply = supply_from((pair or {}).get("marketCap"), price) or _f(pos.get("supply"))
         with self.state.lock:
-            p = self.state.data.get("position") or pos
+            p = self.state.find(pos) or pos
+            if supply:
+                p.update(supply=supply, mcap_now=round(price * supply, 2), peak_mcap=round(peak * supply, 2))
+                if not _f(p.get("entry_mcap")):
+                    p["entry_mcap"] = round(entry * supply, 2)
             p.update(last_price=price, peak_price=peak, gain_pct=round(gain, 2), peak_gain_pct=round(peak_gain, 2),
                      off_peak_pct=round(off_peak, 2), m5_change=m5, m5_buys=buys, m5_sells=sells,
                      last_value_usd=round(value, 2), last_pnl_usd=round(value - basis, 2) if basis is not None else None,
@@ -687,14 +778,15 @@ class Seats:
             nxt = next((g for g, _ in c.scale_out if g not in done), None)
             trail = (f"trail armed, sells at -{c.trail_pct:g}% off the peak" if peak_gain >= c.trail_arm_pct
                      else f"trail arms at +{c.trail_arm_pct:g}%")
-            self.state.agent("risk", f"watching {label}: {gain:+.1f}% (peak {peak_gain:+.1f}%) · {trail}"
+            self.state.agent("risk", f"watching {label}: MC {mc(price * supply) if supply else 'unknown'} "
+                                     f"({gain:+.1f}%, best {peak_gain:+.1f}%) · {trail}"
                              + (f" · next take-profit at +{nxt:g}%" if nxt is not None else ""), gain / 100, "gain")
             return None
         share, why, mark = act
         trade = self.sell(pos, share, why)
         if trade is not None and mark is not None and not trade.get("final"):
             with self.state.lock:
-                p = self.state.data.get("position")
+                p = self.state.find(pos)
                 if p is not None:
                     if mark[0] == "rung":
                         p["rungs_done"] = sorted(set(p.get("rungs_done") or []) | {mark[1]})
@@ -715,7 +807,7 @@ class Seats:
             book.release()
             return None
         with self.state.lock:
-            self.state.data["position"] = pos
+            self.state.put(pos)
             self.state.save()
         return pos
 
@@ -723,13 +815,14 @@ class Seats:
         amount, decimals = self.rpc.token_balance(self.kp.address, pos["mint"])
         with self.state.lock:
             if amount > 0:
-                pos.update(status="open", tokens_raw=amount, decimals=decimals or pos.get("decimals"), cost_usd=None)
-                self.state.data["position"] = pos
+                pos.update(status="open", tokens_raw=amount, decimals=decimals or pos.get("decimals"), cost_usd=None,
+                           tokens_raw_initial=amount)
+                self.state.put(pos)
                 self.state.agent("risk", f"{pos.get('ticker')}: swap landed after all, holding (entry cost unknown)", None, "holding")
             else:
-                self.state.data["position"] = None
-                self.state.agent("risk", f"{pos.get('ticker')}: swap never landed, desk released", None, "released")
-                book.release()
+                if self.state.drop(pos):
+                    book.release()
+                self.state.agent("risk", f"{pos.get('ticker')}: swap never landed, nothing held", None, "released")
             self.state.save()
         return None
 

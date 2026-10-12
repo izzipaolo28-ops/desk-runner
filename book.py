@@ -33,6 +33,10 @@ BENCH_MINUTES = {
     "sellable_by_evidence_no_evidence": 25, "liquidity_fits_ticket_no_evidence": 25,
     # the dossier call failed (rate limit, network): not the token's fault, but it cost a slot
     "dossier_failed": 20,
+    # held right now: look again soon, RISK may have sold it
+    "already_held": 5,
+    # just sold: not straight back into the coin RISK got out of
+    "sold": 60,
 }
 DEFAULT_BENCH = 45      # anything not listed, e.g. "<question>_missing"
 

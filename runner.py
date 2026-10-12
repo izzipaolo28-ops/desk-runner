@@ -98,6 +98,20 @@ def why(stats):
     return " · ".join(parts)
 
 
+class SlotBook:
+    """book.py, as main.run_once sees it: "held" only when every slot is full, so the desk keeps scanning while it
+    holds fewer than MAX_POSITIONS coins. Bench and everything else is the real book."""
+
+    def __init__(self, runner):
+        self.runner = runner
+
+    def held(self):
+        return None if self.runner.slots_free() else book.held()
+
+    def __getattr__(self, name):
+        return getattr(book, name)
+
+
 def _iso(ts):
     return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds") if ts is not None else None
 
@@ -114,6 +128,7 @@ class Runner:
         self.test_requested = False
         self.coin, self.seen_n, self.seen_of, self.coin_no, self.judge_ms = {}, 0, None, None, 0
         main.universe = universe                  # trade only what Jupiter can, trending first
+        main.book = SlotBook(self)                # main stands down only when every slot is full
         self._instrument()
 
     # ---------- the live feed: main.run_once is the desk's code, unchanged; each step it calls is wrapped ----------
@@ -145,6 +160,9 @@ class Runner:
             R.seen_n += 1
             R.coin_no = st.bump("coins")
             step("crawler", "free_kill", t)
+            if t.get("addr") in {p.get("mint") for p in st.positions()}:
+                st.feed("crawler", "info", "already held: RISK is managing it", **_coin(t))
+                return "already_held"
             k = timed(desk_filter.free_kill, t)
             st.lens(t, "free_kill", k, R.coin_no)
             feed("crawler", "cut" if k else "pass", f"cut: {k}" if k else "passed the free checks", t, "free_kill",
@@ -260,29 +278,28 @@ class Runner:
                              a.get("worth_trading_at_all", {}).get("noul"), "worth")
         return r
 
+    def slots_free(self):
+        return len(self.state.positions()) < self.cfg.max_positions
+
     def tick(self):
-        """One step of the loop. Returns what it did (for the log and the tests)."""
+        """One step of the loop: WATCH and RISK manage every open coin on their clocks, and while a slot is free
+        (MAX_POSITIONS) the desk keeps scanning for the next one. Returns the most important thing it did."""
         now = self.clock()
         if self.test_requested:                   # asked for from the dashboard; runs here, never beside a trade
             self.test_requested = False
             return self.run_test_swap()
-        holding = self.state.data.get("position") is not None or book.held() is not None
+        done = []                                 # (weight, what): a sale > a scan > a RISK check > a WATCH check
+        holding = bool(self.state.positions()) or book.held() is not None
         if holding:
-            watched = None
             if self.cfg.watch and (self.last_watch is None or now - self.last_watch >= self.cfg.watch_seconds):
-                self.last_watch = now                # WATCH: the price, every minute
+                self.last_watch = now                # WATCH: the price of every coin held, every minute
                 pos = self.state.data.get("position") or {}
                 self.state.set_working("risk", "watching price", pos.get("ticker"), pos.get("mint"))
                 try:
                     trade = self.seats.watch_poll(clock=self.clock)
                 finally:
                     self.state.set_working(None)
-                if trade is not None:
-                    self.snapshot()
-                    return "watch: sold all" if trade.get("final") else "watch: sold part"
-                watched = "watch: holding"
-                if self.state.data.get("position") is None and book.held() is None:
-                    return watched
+                done.append((4, ("watch: sold all" if trade.get("final") else "watch: sold part")) if trade else (1, "watch: holding"))
             if self.last_risk is None or now - self.last_risk >= self.cfg.risk_poll_seconds:
                 self.last_risk = now
                 pos = self.state.data.get("position") or {}
@@ -291,14 +308,21 @@ class Runner:
                     trade = self.seats.risk_poll()
                 finally:
                     self.state.set_working(None)
+                done.append((4, "risk: closed") if trade else (2, "risk: holding"))
+            if done:
                 self.snapshot()
-                return "risk: closed" if trade else "risk: holding"
-            return watched or "holding"
-        if self.state.data.get("paused"):
-            self.state.agent("chief", f"paused: {self.state.data.get('pause_reason') or 'by you'}", None, "paused")
-            return "paused"
-        if self.last_cycle is not None and now - self.last_cycle < CYCLE_SECONDS:
-            return "waiting"
+        if self.slots_free():
+            if self.state.data.get("paused"):
+                if not holding:
+                    self.state.agent("chief", f"paused: {self.state.data.get('pause_reason') or 'by you'}", None, "paused")
+                    done.append((0, "paused"))
+            elif self.last_cycle is None or now - self.last_cycle >= CYCLE_SECONDS:
+                done.append((3, self.cycle(now)))
+        if not done:
+            return "holding" if holding else "waiting"
+        return max(enumerate(done), key=lambda x: (x[1][0], x[0]))[1][1]
+
+    def cycle(self, now):
         self.last_cycle = now
         bank = self.last_bank = self.seats.bank()
         if bank is not None and not self.seats.daily_guard(bank):
@@ -328,7 +352,7 @@ class Runner:
         """Between picks SIZE, FILLS and RISK still say something true: the ticket they would cut, the price Jupiter
         quotes right now, the rule RISK would sell on. Never a made-up figure: unknown stays unknown."""
         bank = self.last_bank
-        if self.state.data.get("position") is None:
+        if True:
             if _f(bank) is not None:
                 top = bank * main.TICKET_SHARE * thresholds.NO_SOCIAL_CUT
                 self.state.agent("size", f"ready: next ticket up to ${top:,.2f} = 6% of ${bank:,.0f} x {thresholds.NO_SOCIAL_CUT} "
@@ -343,6 +367,8 @@ class Runner:
             trades = self.state.data.get("trades") or []
             w, l = seats_record(trades)
             today = _f(self.state.data.get("realized_today")) or 0.0
+            if self.state.positions():
+                return
             self.state.agent("risk", f"flat. Sells a position when volume ratio < 0.20; stops the day at "
                                      f"-{self.cfg.max_daily_loss_pct:g}% (today {today:+,.2f} USD)", None, f"{w}W {l}L")
 
@@ -350,8 +376,10 @@ class Runner:
     def request_scan(self):
         """'Scan now': the next tick runs a cycle instead of waiting out CYCLE_SECONDS."""
         now = self.clock()
-        if self.state.data.get("position") is not None or book.held() is not None:
-            return 409, "holding a position: no scan until RISK closes it"
+        if not self.slots_free():
+            n = self.cfg.max_positions
+            return 409, (f"all {n} slots are full: the next scan starts when RISK sells one" if n > 1
+                         else "holding a position: no scan until RISK closes it (MAX_POSITIONS=1)")
         if self.state.data.get("paused"):
             return 409, "the desk is paused: tap Resume first"
         if self.last_cycle is not None and now - self.last_cycle < SCAN_NOW_COOLDOWN:
@@ -416,13 +444,17 @@ class Runner:
         self.state.save()
 
     def snapshot(self):
-        """One real point on the balance curve: free cash + open position value. Skipped if either is unknown."""
-        pos = self.state.data.get("position")
+        """One real point on the balance curve: free cash + the value of every coin held. Skipped if any is unknown."""
         cash = self.seats.bank()
-        value = 0.0 if pos is None else _f(pos.get("last_value_usd"))
-        if pos is not None and value is None:
-            value = _f(pos.get("cost_usd")) if pos.get("last_check") is None else None   # just bought: worth its cost
-        if cash is None or value is None:
+        value = 0.0
+        for pos in self.state.positions():
+            v = _f(pos.get("last_value_usd"))
+            if v is None and pos.get("last_check") is None and pos.get("watched_at") is None:
+                v = _f(pos.get("cost_usd"))      # just bought: worth its cost
+            if v is None:
+                return
+            value += v
+        if cash is None:
             return
         with self.state.lock:
             self.state.data["equity"] = (self.state.data["equity"] + [[_now(), round(cash + value, 2)]])[-2000:]
@@ -438,8 +470,10 @@ class Runner:
                  thresholds={"HARD": thresholds.HARD, "SOFT": {k: list(v) for k, v in thresholds.SOFT.items()},
                              "PICK_MIN_WORTH": thresholds.PICK_MIN_WORTH, "PICK_MIN_CONF": thresholds.PICK_MIN_CONF,
                              "DARK_TICKET_CUT": thresholds.DARK_TICKET_CUT, "NO_SOCIAL_CUT": thresholds.NO_SOCIAL_CUT})
-        holding = d.get("position") is not None
-        d.update(next_cycle_at=None if holding or d.get("paused") else
+        holding = bool(d.get("positions"))
+        full = len(d.get("positions") or []) >= self.cfg.max_positions
+        d.update(max_positions=self.cfg.max_positions, max_exposure_pct=self.cfg.max_exposure_pct,
+                 next_cycle_at=None if full or d.get("paused") else
                  _iso(self.clock() if self.last_cycle is None else self.last_cycle + CYCLE_SECONDS),
                  next_risk_at=_iso(self.last_risk + self.cfg.risk_poll_seconds) if holding and self.last_risk else None,
                  server_now=_iso(self.clock()), test_swap_usd=TEST_SWAP_USD, title=DESK_TITLE, tagline=DESK_TAGLINE,
