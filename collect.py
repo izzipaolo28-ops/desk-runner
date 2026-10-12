@@ -93,6 +93,11 @@ class _Limiter:
         with self.lock:
             self.paused_until = max(self.paused_until, time.monotonic() + seconds)
 
+    def busy(self):
+        """True while it's paused after a 429: a call now would only wait out the minute."""
+        with self.lock:
+            return time.monotonic() < self.paused_until
+
     def wait(self):
         while True:
             with self.lock:
@@ -321,12 +326,23 @@ def dossier(t: dict) -> dict:
     Refuses (KilledToken) a token without both the stage-2 and stage-3 pass."""
     _require(t, "stage2", "stage3")
     net = GT_NET[t["net"]]
-    try:
-        body = _get_json(f"{GT}/networks/{net}/tokens/{t['addr']}/info", None, GT_LIMIT)
-    except FetchFailed as exc:
-        raise DossierFailed(f"GeckoTerminal token info: {exc}") from None
+    gt_status = "ok"
+    # On Solana the chain itself answers the safety facts (authorities, Token-2022, the biggest wallets), so a
+    # GeckoTerminal 429 costs only its extras (holder count, dev share, X handle): those stay null, never invented.
+    # Other chains have nothing else to read: there a failure still drops the coin.
+    if net == "solana" and GT_LIMIT.busy():
+        body, gt_status = None, "skipped: GeckoTerminal rate limit, the chain's own facts only"
+    else:
+        try:
+            body = _get_json(f"{GT}/networks/{net}/tokens/{t['addr']}/info", None, GT_LIMIT)
+        except FetchFailed as exc:
+            if net != "solana":
+                raise DossierFailed(f"GeckoTerminal token info: {exc}") from None
+            body, gt_status = None, f"failed ({'rate limited' if exc.status == 429 else exc.status or 'network'}): the chain's own facts only"
     if body is not None and not (isinstance(body, dict) and isinstance(body.get("data"), dict)):
-        raise DossierFailed("GeckoTerminal token info: unexpected body")
+        if net != "solana":
+            raise DossierFailed("GeckoTerminal token info: unexpected body")
+        body, gt_status = None, "unexpected answer: the chain's own facts only"
     data = (body or {}).get("data") or {}
     a = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
     holders = a.get("holders") if isinstance(a.get("holders"), dict) else {}
@@ -334,7 +350,7 @@ def dossier(t: dict) -> dict:
     gt_holders = int(_num(holders.get("count"))) if _num(holders.get("count")) else None
 
     d = {**t, "chain": net, "chain_set": CHAIN_SET.get(t["net"]),
-         "gt_info_found": bool(a),
+         "gt_info_found": bool(a), "gt_info_status": gt_status,
          "holder_count": gt_holders if gt_holders is not None else t.get("holder_count"),
          "holder_count_source": "geckoterminal" if gt_holders is not None else
                                 ("fomo" if t.get("holder_count") is not None else None),
@@ -359,6 +375,8 @@ def dossier(t: dict) -> dict:
         d.update({k: facts.get(k) for k in ("top_wallet_percent", "top_wallet_at_most_percent",
                                            "top_program_account_percent", "sell_block_possible",
                                            "risky_extensions", "decimals")})
+        if d["top_10_percent"] is None and facts.get("top10_wallets_percent") is not None:
+            d["top_10_percent"] = facts["top10_wallets_percent"]          # the chain's count (pools excluded)
     return d
 
 

@@ -39,6 +39,8 @@ a{color:inherit}
 .pausebar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#2a1f05;border:1px solid #8a6a12;
   color:var(--amber);border-radius:8px;padding:8px 12px;margin-bottom:8px;font:13px var(--mono)}
 .pausebar[hidden],[hidden]{display:none !important}
+.storebar{background:#2a0b12;border:1px solid #8a1f35;color:#fda4af;border-radius:8px;padding:8px 12px;margin-bottom:8px;font:12.5px/1.5 var(--mono)}
+.storebar b{color:#fff}
 .cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 @media (max-width:900px){.cards{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .card{background:#0b0d14;border:1px solid #05060a;border-radius:4px;padding:12px 14px 22px;min-width:0;position:relative;min-height:126px;box-shadow:0 1px 0 rgba(0,0,0,.25)}
@@ -129,7 +131,10 @@ a{color:inherit}
 .rows3 .r .pass{color:#4ade80;font-weight:700;text-align:right} .rows3 .r .drop{color:#f87171;font-weight:700;text-align:right}
 .rows3 .r.old{opacity:.35}
 @media (max-width:700px){.anl{grid-template-columns:minmax(0,1fr)}.anl-side{grid-template-rows:none;grid-template-columns:repeat(2,minmax(0,1fr))}
-  .dexframe{height:470px}.ckov{top:44px;right:72px;width:176px;font-size:10.5px}.rows3 .r{grid-template-columns:40px minmax(0,1fr) minmax(0,1fr) 46px 42px;font-size:11px}}
+  .dexframe{height:470px}
+  .ckov{position:static;width:auto;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:14px;margin-top:6px;
+    padding:2px 8px;font-size:11px;line-height:2;background:#05070c}
+  .ckov div:nth-last-child(2){border-bottom:0}.rows3 .r{grid-template-columns:40px minmax(0,1fr) minmax(0,1fr) 46px 42px;font-size:11px}}
 .live{background:#05070c;border:1px solid #121826;border-radius:3px;overflow:hidden}
 .lhd{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid #121826;min-height:58px}
 .lhd .who{display:flex;align-items:center;gap:9px;flex:0 1 auto;min-width:0;max-width:40%}
@@ -334,6 +339,9 @@ details.pc .inner{padding:4px 8px 8px}
   </header>
 
   <div class="pausebar" id="pauseBar" hidden><span id="pauseText">PAUSED</span><button class="btn go" id="pauseResume" type="button">RESUME</button></div>
+  <div class="storebar" id="storeBar" hidden><b>NOT SAVED:</b> this service has no Railway volume, so every deploy starts the bank, the trades
+    and what the bots learned over from zero. In Railway: open the project, add a <b>Volume</b>, connect it to this service with mount path
+    <b>/data</b>, and redeploy.</div>
 
   <section class="cards" id="cards" aria-label="Seats"></section>
 
@@ -911,7 +919,8 @@ function planBlock(p, W, i, n, bare){
   const lock = W.lock_pct ? `, and never back under +${W.lock_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 + W.lock_pct / 100))} MC)` : "") : "";
   const trail = (!W.trail_pct ? "off" : armed ? (peakMC !== null ? `armed: sells the rest under ${mcap(peakMC * (1 - W.trail_pct / 100))} MC (-${W.trail_pct}% off the best)` : `armed: sells ${W.trail_pct}% off the best`)
     : `arms at +${W.trail_arm_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 + W.trail_arm_pct / 100))} MC)` : "") + `, then sells ${W.trail_pct}% off the best`) + (W.trail_pct ? lock : "");
-  const stop = !W.stop_loss_pct ? "off" : entryMC !== null ? `sells all under ${mcap(entryMC * (1 - W.stop_loss_pct / 100))} MC (-${W.stop_loss_pct}%)` : `-${W.stop_loss_pct}%`;
+  const stop = (!W.stop_loss_pct ? "off" : entryMC !== null ? `sells all under ${mcap(entryMC * (1 - W.stop_loss_pct / 100))} MC (-${W.stop_loss_pct}%)` : `-${W.stop_loss_pct}%`)
+    + (W.stop_loss_pct ? ", once the real quote agrees (a wick on the price feed doesn't sell)" : "");
   const held = num(p.opened_ts) !== null ? (Date.now() / 1000 - p.opened_ts) / 3600 : null;
   const rungs = el("div", "rungs"), done = new Set((p.rungs_done || []).map(Number));
   let marked = false;
@@ -928,6 +937,8 @@ function planBlock(p, W, i, n, bare){
     ["trailing stop", trail], ["stop-loss", stop],
     ["max hold", W.max_hold_hours ? (held === null ? W.max_hold_hours + "h" : Math.max(0, W.max_hold_hours - held).toFixed(1) + "h left of " + W.max_hold_hours + "h")
       + (W.ride_x > 1 ? `, rides up to ${W.ride_x}x longer while buyers lead` : "") : "off"],
+    ...(W.fail_pct ? [["move failed", `out at -${W.fail_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 - W.fail_pct / 100))} MC)` : "")
+      + ` if it's still falling ${W.fail_m5_pct}%+ in 5 min, in its first ${W.fail_minutes} min`]] : []),
     ...(W.stall_minutes ? [["no momentum", `out if it hasn't made +${W.stall_gain_pct}% within ${W.stall_minutes} min`]] : []),
     ["bought by", p.plan === "snipe" ? "the sniper" + (p.source ? ` (${p.source})` : "") + (num(p.score) !== null ? `, score ${p.score}/100` : "") : "the desk (Jev's pick)"],
     ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells all under 0.20)"]];
@@ -1647,7 +1658,10 @@ function analysisRender(d){
   } else ov.hidden = true;
   // the side: mini charts of the latest other coins (tap one to put it on the big chart for two minutes)
   const side = $("anlSide"), seen = [];
-  for (const r of d.feed || []){ if (r.mint && MINT_RE.test(r.mint) && !seen.some(x => x.mint === r.mint) && !(f && r.mint === f.mint)) seen.push({mint: r.mint, ticker: r.ticker}); if (seen.length >= 4) break; }
+  for (const r of d.feed || []){
+    if (r.check === "free_kill" && r.kind === "cut") continue;          // cut at the door (minutes old, no volume): nothing to chart yet
+    if (r.mint && MINT_RE.test(r.mint) && !seen.some(x => x.mint === r.mint) && !(f && r.mint === f.mint)) seen.push({mint: r.mint, ticker: r.ticker});
+    if (seen.length >= 4) break; }
   const key = seen.map(x => x.mint).join(",");
   if (side.dataset.key !== key){ side.dataset.key = key; side.textContent = "";
     seen.forEach(c => { const m = el("div", "mini"); m.dataset.mint = c.mint; m.title = "show $" + (c.ticker || "") + " on the big chart";
@@ -1673,7 +1687,7 @@ function paintMini(m, c){
   const svg = document.createElementNS(NS, "svg"); svg.setAttribute("viewBox", "0 0 200 84"); svg.setAttribute("preserveAspectRatio", "none"); m.appendChild(svg);
   m.appendChild(el("b", "", "$" + clip(c.ticker || c.mint.slice(0, 5), 9)));
   const list = hit && hit.list;
-  if (!list || list.length < 2){ m.appendChild(el("em", "", hit && hit.err ? "no chart" : "…")).style.color = "#4b5569"; return; }
+  if (!list || list.length < 2){ m.appendChild(el("em", "", hit && hit.err ? "no chart" : hit && !hit.loading ? "too new" : "…")).style.color = "#4b5569"; return; }
   const cs = list.slice(-40), lo = Math.min(...cs.map(x => x[3])), hi = Math.max(...cs.map(x => x[2])), span = hi - lo || hi || 1, cw = 196 / cs.length;
   cs.forEach((k, i) => { const x = 2 + i * cw + cw / 2, up = k[4] >= k[1], col = up ? "#34d399" : "#f87171", y = v => 78 - (v - lo) / span * 58;
     S("line", {x1: x, x2: x, y1: y(k[2]), y2: y(k[3]), stroke: col, "stroke-width": .8}, svg);
@@ -1722,6 +1736,7 @@ function render(d){
   $("pauseBar").hidden = !d.paused;
   $("pauseText").textContent = d.mode === "stopped" ? "STOPPED · " + (d.pause_reason || "") : "PAUSED · " + (d.pause_reason || "") + " · no scans or buys until you resume";
   $("pauseResume").hidden = d.mode === "stopped";
+  $("storeBar").hidden = !(d.storage && d.storage.railway && d.storage.volume === false);
   const eq = (d.equity || []).filter(p => num(p[1]) !== null);
   const first = eq.length ? eq[0][1] : num(d.start_bank), last = eq.length ? eq[eq.length - 1][1] : null, goal = num(d.goal_usd);
   // the goal bar: everything the desk has (cash + coins at their last value) against the goal you set
@@ -1973,7 +1988,9 @@ function sniperRender(d){
     if (!total) wh.appendChild(el("span", "muted", mode === "off" ? "the fast lane is off" : "nothing checked in full yet: the first look runs within a minute"));
     Object.entries(W1).forEach(([k, n]) => { const c = el("span", k === "BUY" ? "buy" : ""); c.append(el("b", "", String(n)), document.createTextNode(" " + k)); wh.appendChild(c); }); }
   const note = S.note || {};
-  $("laneNote").textContent = S.last_round ? `last look ${ago(S.last_round)} ago · ${note.candidates ?? 0} candidates · ${note.checked ?? 0} checked deep` : mode === "off" ? "off" : "first look soon";
+  $("laneNote").textContent = (S.last_round ? `last look ${ago(S.last_round)} ago · ${note.candidates ?? 0} candidates · ${note.checked ?? 0} checked deep` : mode === "off" ? "off" : "first look soon")
+    + ((S.confirming || []).length ? ` · second look on ${S.confirming.map(c => "$" + clip(c.ticker || c.mint.slice(0, 5), 10)).join(", ")}` : "")
+    + (S.cooling ? ` · RESTING after ${S.cooling.why}: no fast-lane buys until ${S.cooling.at}` : "");
   const rb = $("radar"), radar = d.radar || [], rkey = radar.map(x => x.mint + (x.verdict || "") + (x.score ?? "")).join("|") + Math.floor(Date.now() / 30000);
   if (rb.dataset.key !== rkey){ rb.dataset.key = rkey; rb.textContent = "";
     if (!radar.length) rb.appendChild(el("div", "empty", mode === "off" ? "the fast lane is off: set WATCH or AUTO" : "nothing looked at yet"));

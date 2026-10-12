@@ -26,6 +26,24 @@ HERE = Path(__file__).resolve().parent
 DATA_DIR = (os.environ.get("DATA_DIR", "").strip() or os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
             or str(HERE / "data"))
 os.environ["DATA_DIR"] = DATA_DIR
+
+
+def _storage():
+    """Is the state on a Railway volume? Without one, every deploy starts the paper bank, the trades and the
+    benches over (the page says so). Railway sets RAILWAY_VOLUME_MOUNT_PATH only when a volume is attached."""
+    mount = os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+    railway = any(os.environ.get(k) for k in ("RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "RAILWAY_PROJECT_ID",
+                                              "RAILWAY_SERVICE_ID"))
+    on = False
+    if mount:
+        try:
+            on = os.path.commonpath([os.path.realpath(DATA_DIR), os.path.realpath(mount)]) == os.path.realpath(mount)
+        except ValueError:
+            on = False
+    return {"railway": railway, "volume": on, "mount": mount or None}
+
+
+STORAGE = _storage()
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -77,10 +95,11 @@ except ValueError:
     TEST_SWAP_USD = 1.0
 DESK_GATE = "off" if os.environ.get("DESK_GATE", "on").strip().lower() == "off" else "on"
 try:
-    DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "40"))))
+    DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "25"))))
 except ValueError:
-    DESK_GATE_SCORE = 40.0
+    DESK_GATE_SCORE = 25.0
 SCAN_NOW_COOLDOWN = 60          # seconds: "Scan now" can't fire twice inside a minute (GeckoTerminal, Jev credits)
+GATE_RETRY_SECONDS = 60         # the desk's pick failed the safety checks: the next scan starts this soon
 
 
 def _f(v):
@@ -180,6 +199,7 @@ class Runner:
         def free_kill(t):
             R.seen_n += 1
             R.coin_no = st.bump("coins")
+            R.sniper.remember(t.get("addr"), t.get("ticker"))     # the desk's coins count for the sniper's themes too
             step("crawler", "free_kill", t)
             if t.get("addr") in {p.get("mint") for p in st.positions()}:
                 st.feed("crawler", "info", "already held: RISK is managing it", **_coin(t))
@@ -210,10 +230,13 @@ class Runner:
         def dossier(t):
             step("vet", "dossier", t)
             try:
-                return timed(collect.dossier, t)
+                d = timed(collect.dossier, t)
             except collect.DossierFailed as exc:
                 feed("vet", "error", f"dossier failed: {str(exc)[:80]}", t, "dossier", R.ms.get("dossier"))
                 raise
+            if d.get("gt_info_status") not in (None, "ok"):
+                feed("vet", "info", f"GeckoTerminal {d['gt_info_status'][:70]}", t, "dossier", R.ms.get("dossier"))
+            return d
 
         def chain_kill(d):
             step("vet", "chain_kill", d)
@@ -325,10 +348,15 @@ class Runner:
         # Normal coins: the safety checks only (rugs, copycats, can't sell, already ran and cooling, sellers ahead).
         # Not the sniper's early-coin rules (its age and size window, narrative, hype, 2x room): those are the sniper's.
         rep = self.sniper.check(tok["address"], "desk pick", purpose="desk")
+        ratio = (rep.get("flow") or {}).get("ratio15")
+        m5 = ((rep.get("facts") or {}).get("chg") or {}).get("m5")
         if rep["verdict"] == "SKIP":
             ok, why = False, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"
-        elif rep.get("momentum_ok") is False:
-            ok, why = False, "sellers are ahead right now"
+        elif isinstance(m5, (int, float)) and self.cfg.snipe_max_m5_pct > 0 and m5 >= self.cfg.snipe_max_m5_pct:
+            ok, why = False, f"it's spiking right now ({m5:+.1f}% in 5 min): not buying the top of the candle"
+        elif (isinstance(m5, (int, float)) and m5 <= -8) or (isinstance(ratio, (int, float)) and ratio < 0.7):
+            ok, why = False, "it's dumping right now" + (f" ({m5:+.1f}% in 5 min)" if isinstance(m5, (int, float)) and m5 <= -8 else
+                                                          f" (sellers {1 / ratio:.1f}x buyers over 15 min)" if ratio else "")
         elif (rep.get("score") or 0) < DESK_GATE_SCORE:
             ok, why = False, f"sniper score {rep.get('score')} is under {DESK_GATE_SCORE:g}"
         else:
@@ -368,6 +396,8 @@ class Runner:
             return self.run_sell(self.sell_requests.pop(0))
         if self.sniper.queue or self.sniper.forced:   # a coin you pasted (or "buy anyway") goes before anything else
             return self.sniper.run_queued()
+        if self.sniper.pending and self.sniper.confirms_due(now) and not self.state.data.get("paused"):
+            return self.sniper.run_confirms(now)    # a BUY's second look: one quick call, then buy only if it held up
         done = []                                 # (weight, what): a sale > a scan > a RISK check > a WATCH check
         holding = bool(self.state.positions()) or book.held() is not None
         if holding:
@@ -429,6 +459,8 @@ class Runner:
             if not ok:
                 book.sit(f"{order['token']['address']}:{order['token'].get('network_id') or collect.FOMO_NET['solana']}", "sniper_gate")
                 self.seats.release_unfilled(order, f"sniper gate: {why}")
+                # the pick is benched; the other coins that passed are still good: look again in a minute, not five
+                self.last_cycle = now - max(0.0, CYCLE_SECONDS - GATE_RETRY_SECONDS)
                 self.snapshot()
                 return "cycle: gate said no"
             try:
@@ -576,7 +608,7 @@ class Runner:
                  practice=PRACTICE["active"], practice_note=PRACTICE["note"], watch=self.cfg.watch_plan(),
                  max_daily_loss_pct=self.cfg.max_daily_loss_pct,
                  thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD},
-                 sniper=self.sniper.status(), scorecard=snipe.scorecard(d.get("trades")))
+                 sniper=self.sniper.status(), scorecard=snipe.scorecard(d.get("trades")), storage=STORAGE)
         d.pop("shadow", None)
         d.pop("wallet_sigs", None)
         return d

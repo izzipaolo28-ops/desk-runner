@@ -188,6 +188,8 @@ def gt_pools(kind, params=None):
 
 # ---------- GeckoTerminal ----------
 def gt_info(mint):
+    if collect.GT_LIMIT.busy():          # paused after a 429: RugCheck's holder count stands in, nothing is invented
+        return {"status": "skipped: GeckoTerminal is rate-limiting this minute"}
     try:
         body = collect._get_json(f"{collect.GT}/networks/solana/tokens/{mint}/info", None, collect.GT_LIMIT)
     except FetchFailed as exc:
@@ -254,6 +256,8 @@ def wallet_history(addr):
 def gt_trades(pool, mint):
     """The last 300 trades on the pool (GeckoTerminal keeps 24 hours). Buy or sell is read from the token
     direction, so it is right whichever side of the pair the coin is."""
+    if collect.GT_LIMIT.busy():          # paused after a 429: the score uses DexScreener's 5-minute counts instead
+        return None, "skipped: GeckoTerminal is rate-limiting this minute (DexScreener's counts used)"
     try:
         body = collect._get_json(f"{collect.GT}/networks/solana/pools/{pool}/trades", None, collect.GT_LIMIT)
     except FetchFailed as exc:
@@ -484,10 +488,64 @@ class Buzz:
                 "summary": clean(verdict.get("summary"), 240), "sources": sources[:6], "searches": searches}
 
 
+SERIOUS_RISKS = ("mint authority", "freeze authority", "rug", "honeypot", "copycat", "creator history", "permanent delegate",
+                 "transfer fee", "transfer hook", "non-transferable", "single holder")
+
+
 # ---------- the narrative: is there a story people are piling into right now ----------
 GENERIC_TAGS = {"pump fun", "pump.fun", "pumpfun", "solana", "solana ecosystem", "solana meme", "solana memes", "meme", "memes",
                 "memecoin", "memecoins", "meme token", "meme tokens", "bonk fun", "bonk.fun", "letsbonk", "letsbonk.fun", "moonshot",
                 "raydium", "launchlab", "boop", "believe", "bags", "pumpswap", "meteora", "orca", "jupiter", "new listings"}
+
+
+# Words in coin names that say nothing about a story.
+NAME_STOP = {"the", "coin", "coins", "token", "tokens", "sol", "solana", "inu", "official", "real", "baby", "mini", "meme", "memes",
+             "pump", "fun", "moon", "and", "for", "you", "new", "dao", "finance", "protocol", "community", "season", "szn", "meta",
+             "world", "club", "army", "gang", "life", "time", "day", "first", "only", "just", "that", "this", "with", "from"}
+
+# The big meme families: a coin in one of them has a crowd that already knows the joke (word -> family).
+MEME_FAMILIES = {
+    "doge": "Doge", "kabosu": "Doge", "shib": "Shiba", "shiba": "Shiba", "pepe": "Pepe", "frog": "frogs", "wojak": "Wojak",
+    "giga": "Gigachad", "chad": "Gigachad", "trump": "Trump", "maga": "Trump / MAGA", "melania": "Trump", "barron": "Trump",
+    "elon": "Elon", "musk": "Elon", "mars": "Elon / Mars", "spacex": "Elon / Mars", "tesla": "Elon", "grok": "Grok / xAI",
+    "xai": "Grok / xAI", "bonk": "Bonk", "wif": "dogwifhat", "popcat": "Popcat", "cat": "cats", "kitty": "cats", "dog": "dogs",
+    "pup": "dogs", "puppy": "dogs", "pengu": "penguins", "penguin": "penguins", "moodeng": "Moo Deng", "hippo": "Moo Deng",
+    "pnut": "Peanut", "squirrel": "Peanut", "chill": "Chill Guy", "goat": "GOAT", "ai": "AI", "agi": "AI", "gpt": "AI",
+    "agent": "AI agents", "fart": "Fartcoin", "stonk": "stonks", "stonks": "stonks", "safu": "CZ / Binance", "cz": "CZ / Binance",
+    "binance": "CZ / Binance", "ansem": "Ansem", "toly": "Toly", "milei": "Milei", "kanye": "Kanye", "monkey": "monkeys",
+    "ape": "apes", "pope": "Pope", "jesus": "Jesus", "rizz": "brainrot", "skibidi": "brainrot", "sigma": "brainrot",
+}
+
+
+def name_words(*texts):
+    """'MarsX' -> {'mars', 'x'}; 'MARSDOGE' -> {'marsdoge'}. Lowercase runs of letters and digits, camelCase split."""
+    out = set()
+    for t in texts:
+        if isinstance(t, str):
+            t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t[:80])
+            out.update(re.findall(r"[a-z0-9]+", t.lower()))
+    return out
+
+
+def word_hit(words, key):
+    """Does the key word appear in the name: the whole word, or the start or end of a run ('marsdoge' has 'mars' and
+    'doge'). Two-letter keys must be a whole word; three-letter ones only in short runs ('doggo' yes, 'catalyst' no)."""
+    for w in words:
+        if w == key:
+            return True
+        if len(key) >= 4 and (w.startswith(key) or w.endswith(key)):
+            return True
+        if len(key) == 3 and len(w) <= 7 and (w.startswith(key) or w.endswith(key)):
+            return True
+    return False
+
+
+def families(words):
+    out = []
+    for k, fam in MEME_FAMILIES.items():
+        if fam not in out and word_hit(words, k):
+            out.append(fam)
+    return out
 
 
 class Metas:
@@ -539,9 +597,21 @@ class Metas:
             meta["median_mcap"] = mcs[len(mcs) // 2] if mcs else None
         self.list, self.by_mint, self.status = metas[:12], by, "ok" if metas else "no narratives listed"
 
-    def of(self, mint):
+    def of(self, mint, words=()):
+        """The trending narratives this coin is in: listed in them, or carrying the narrative's own word in its name
+        (a coin launched ten minutes ago isn't listed yet)."""
         names = self.by_mint.get(mint, [])
-        return [m for m in self.list if m["name"] in names]
+        out = []
+        for m in self.list:
+            if m["name"] in names:
+                out.append(m)
+                continue
+            keys = {w for w in name_words(m["name"], m["slug"].replace("-", " ")) if len(w) >= 2 and w not in NAME_STOP}
+            keys |= {k[:-1] for k in keys if len(k) >= 5 and k.endswith("s")}          # 'agents' -> 'agent' too
+            hit = next((k for k in sorted(keys, key=len, reverse=True) if word_hit(words, k)), None) if words else None
+            if hit:
+                out.append({**m, "by_name": hit})
+        return out
 
 
 def dex_orders(mint):
@@ -577,14 +647,34 @@ def upside_read(F, metas_hit):
     return out
 
 
-def narrative_read(F, metas_hit, categories, bz, orders=(), lists=()):
-    """A story, from three places: a trending DexScreener narrative it belongs to, a web search that says who or what
-    it's about with real talk around it, or a specific theme tag (not just "Pump Fun") plus socials of its own."""
+CROWD_HOLDERS, CROWD_PER_HOUR, CROWD_HYPE = 1500, 1500, 70
+PAID_LISTS = {"boosted", "new profile"}          # lists a coin gets on by paying, not by being bought
+
+
+def narrative_read(F, metas_hit, categories, bz, orders=(), lists=(), themes=(), fams=(), crowd=None):
+    """A story, from any of these: a trending DexScreener narrative it belongs to (listed in it, or its word in the name),
+    a web search that says who or what it's about with real talk around it, a theme several new coins are riding right
+    now (MarsX, then MARSDOGE...), one of the big meme families with its own X or other coins of the family out now,
+    a specific theme tag plus socials, a community takeover, or a crowd so big and so fast that the crowd is the story."""
     why = []
     hot = [m for m in metas_hit if (m.get("h24") is None or m["h24"] >= 0) or (m.get("h1") or 0) > 0]
     if hot:
         why.append("in the trending narrative " + ", ".join(f"'{m['name']}'" + (f" ({m['h24']:+.0f}% today)" if m.get("h24") is not None else "")
+                                                          + (f" by its name ('{m['by_name']}')" if m.get("by_name") else "")
                                                           for m in hot[:2]))
+    themes = list(themes or [])
+    if themes:
+        t = themes[0]
+        why.append(f"a theme {len(t['others']) + 1} coins are riding right now: '{t['word']}' (" + ", ".join("$" + o for o in t["others"][:3])
+                   + (" and this one)" if len(t["others"]) <= 3 else "…)"))
+    fams = list(fams or [])
+    x_own = bool((F.get("socials") or {}).get("x"))
+    if fams and x_own and not themes:
+        why.append(f"a big meme family ({', '.join(fams[:2])}) with its own X account")
+    c = crowd or {}
+    if (c.get("holders") or 0) >= CROWD_HOLDERS and (c.get("per_hour") or 0) >= CROWD_PER_HOUR and (c.get("hype") or 0) >= CROWD_HYPE:
+        why.append(f"the crowd is the story: {c['holders']:,} holders, +{c['per_hour']:,.0f} an hour"
+                   + (f", {c['buyers5']} wallets buying in 5 min" if c.get("buyers5") else ""))
     bz = bz or {}
     if bz.get("status") == "ok" and bz.get("linked_to") and bz.get("mentions") in ("medium", "high"):
         why.append(f"about {bz['linked_to']}, and people are talking about it ({bz['mentions']})")
@@ -596,7 +686,7 @@ def narrative_read(F, metas_hit, categories, bz, orders=(), lists=()):
         why.append("a community takeover: holders rallied to run it themselves")
     elif ("tokenProfile" in orders or "new profile" in lists) and (F.get("socials") or {}).get("x") and (F.get("sites") or (F.get("socials") or {}).get("telegram")):
         why.append("a paid DexScreener profile with its own X and a site or Telegram")
-    return {"ok": bool(why), "why": why, "metas": [m["name"] for m in metas_hit][:3], "tags": tags}
+    return {"ok": bool(why), "why": why, "metas": [m["name"] for m in metas_hit][:3], "tags": tags, "families": fams[:3]}
 
 
 def hype_score(F, fl, growth, lists, metas_hit, bz):
@@ -692,14 +782,18 @@ def score_coin(r, cfg):
         veto.append(f"top 10 wallets hold {t10:.1f}% (max {cfg.snipe_max_top10_pct:g}%)")
     if rug.get("status") == "ok":
         dangers = [x for x in rug["risks"] if x["level"] == "danger" and "liquidity" not in x["name"].lower()]
+        serious = [x for x in dangers if any(k in x["name"].lower() for k in SERIOUS_RISKS)]
+        minor = [x for x in dangers if x not in serious]
         warns = [x for x in rug["risks"] if x["level"] == "warn"]
-        check("rug", "RugCheck", not dangers and rug.get("rugged") is not True,
-              "RUGGED" if rug.get("rugged") else ", ".join(x["name"] for x in dangers) if dangers else
+        check("rug", "RugCheck", not serious and rug.get("rugged") is not True,
+              "RUGGED" if rug.get("rugged") else ", ".join(x["name"] for x in serious + minor) if dangers else
               (f"{len(warns)} warning(s)" if warns else "no risks listed"))
         if rug.get("rugged") is True:
             veto.append("RugCheck marks it rugged")
-        for x in dangers[:3]:
+        for x in serious[:3]:
             veto.append(f"RugCheck danger: {x['name']}")
+        if minor:
+            add("rugcheck dangers", "RugCheck flags: " + ", ".join(x["name"] for x in minor[:3]), -min(18, 6 * len(minor)))
         if warns:
             add("rugcheck warnings", "RugCheck warns: " + ", ".join(x["name"] for x in warns[:3]), -min(12, 3 * len(warns)))
     else:
@@ -709,8 +803,10 @@ def score_coin(r, cfg):
         check("rug", "liquidity pool", True, "bonding curve: no LP the dev can pull")
     else:
         check("rug", "LP locked or burned", None if lp is None else lp >= 50, f"{lp:.0f}%" if lp is not None else "unknown")
-        if lp is not None and lp < 50:
+        if lp is not None and lp < 50 and (age is None or age < 1440):
             veto.append(f"only {lp:.0f}% of the pool is locked or burned: the dev can pull it")
+        elif lp is not None and lp < 50:
+            add("LP unlocked", f"only {lp:.0f}% of the pool is locked or burned (an older coin, some pools have nothing to lock)", -10)
         elif lp is not None and lp >= 90:
             add("LP locked", f"LP {lp:.0f}% locked or burned", 5)
     if buys.get("h1") is not None and sells.get("h1") is not None and buys["h1"] >= 25 and sells["h1"] == 0:
@@ -858,9 +954,15 @@ def score_coin(r, cfg):
             mom_ok = False
     if h1c is not None and h1c > 300 and (m5c or 0) < -5:
         add("extended", f"already +{h1c:.0f}% this hour and turning down: late", -10)
+    if m5c is not None and cfg.snipe_max_m5_pct > 0 and m5c >= cfg.snipe_max_m5_pct and not desk:
+        wait.append(f"spiking {m5c:+.0f}% in 5 min: it waits for the candle to cool, never buys the top of one")
+    # A big run alone isn't a reason: on a coin under a day old the 24h change is "since launch", and every coin that
+    # made it is up 1000%+. One red 5-minute candle isn't cooling either. It's a SKIP only when the hour itself is falling.
     h24c = chg.get("h24")
-    if h24c is not None and h24c >= 300 and ((h1c is not None and h1c < 0) or (m5c is not None and m5c < 0)):
-        veto.append(f"already ran {h24c:+.0f}% today and is cooling off: buying now is buying someone's exit")
+    if h24c is not None and h24c >= 300 and h1c is not None and h1c <= -15 and (m5c is None or m5c <= 0):
+        veto.append(f"already ran {h24c:+.0f}% and is falling ({h1c:+.0f}% this hour): buying now is buying someone's exit")
+    elif h24c is not None and h24c >= 300 and h1c is not None and h1c < 0 and m5c is not None and m5c < 0:
+        add("cooling", f"cooling after a {h24c:+.0f}% run ({h1c:+.0f}% this hour)", -6)
 
     # -- smart money: the wallets you follow --
     smart = r.get("smart") or []
@@ -894,12 +996,12 @@ def score_coin(r, cfg):
         add("socials", "has an X account plus a website or Telegram", 4)
     elif not soc and not F.get("sites"):
         add("no socials", "no socials listed anywhere", -4)
-    if F.get("boosts"):
-        add("boosted", f"{F['boosts']} paid DexScreener boost(s) running", 4)
-        check("attention", "DexScreener boosts", True, str(F["boosts"]))
+    if F.get("boosts"):                        # paid for by whoever launched it: often the dev buying attention to sell into
+        check("attention", "DexScreener boosts", None, f"{F['boosts']} (paid, no points: devs boost what they're about to sell)")
     lists = r.get("lists") or []
-    if lists:
-        add("on trending lists", "on " + ", ".join(lists), 5)
+    earned = [x for x in lists if x not in PAID_LISTS]
+    if earned:
+        add("on trending lists", "on " + ", ".join(earned), 5)
     check("attention", "found on", None, ", ".join(lists) or "only by you" if r.get("source") == "you" else ", ".join(lists) or "—")
     if bz.get("status") == "ok":
         lvl = bz.get("mentions")
@@ -958,14 +1060,16 @@ def score_coin(r, cfg):
     nar, hy = r.get("narrative"), r.get("hype")
     if nar is not None:
         check("story", "narrative", nar["ok"], "; ".join(nar["why"]) if nar["ok"] else
-              "none found" + (f" (tags: {', '.join(nar['tags'])})" if nar.get("tags") else ""))
+              "none found" + (f" (tags: {', '.join(nar['tags'])})" if nar.get("tags") else "")
+              + (f" (meme family {', '.join(nar['families'])}, but no X account of its own and no other coin of it out now)"
+                 if nar.get("families") else ""))
     if hy is not None:
         check("story", "hype, growing how fast", hy["score"] >= cfg.snipe_min_hype, f"{hy['score']}/100 (needs {cfg.snipe_min_hype:g})"
               + (": " + "; ".join(f"{p['label']} +{p['pts']}" for p in hy["parts"]) if hy["parts"] else ": nothing yet"))
     if r.get("gate", True) and not veto and not desk:
         if cfg.snipe_need_narrative and nar is not None and not nar["ok"]:
-            wait.append("no narrative found: it only buys coins with a story people are piling into (a trending DexScreener "
-                        "narrative, or web-search buzz saying who or what it's about)")
+            wait.append("no narrative found: it only buys coins with a story people are piling into (a trending narrative, "
+                        "a theme other new coins share, a big meme family, talk online, or a crowd of thousands an hour)")
         if hy is not None and hy["score"] < cfg.snipe_min_hype:
             wait.append(f"hype {hy['score']}/100 is under {cfg.snipe_min_hype:g}: not gaining fast enough yet")
         if up and up.get("potential_x") is not None and up["potential_x"] < cfg.snipe_min_upside_x:
@@ -1005,7 +1109,8 @@ def why_key(rep):
         return ("copycat" if "copycat" in v else "already ran" if "already ran" in v else "too old or too big" if "old (" in v or "past the sniper" in v
                 else "thin liquidity" if "liquidity" in v else "rug risk")
     w = " ".join((rep.get("wait") or [])[:1]).lower()
-    for key, label in (("no narrative", "no narrative"), ("hype", "hype too slow"), ("not enough room", "no 2x room"),
+    for key, label in (("spiking", "spiking: waiting for it to cool"), ("no narrative", "no narrative"), ("hype", "hype too slow"),
+                       ("not enough room", "no 2x room"),
                        ("too new", "too new"), ("market cap", "market cap too small"), ("no dex pair", "no pair yet"),
                        ("authority", "chain didn't answer"), ("momentum", "no momentum reading"), ("unavailable", "data unavailable")):
         if key in w:
@@ -1021,6 +1126,8 @@ class Sniper:
                          "claude-haiku-5-5", self.cfg.buzz_per_hour)
         self.queue, self.forced = deque(), deque()
         self.metas, self.holders_seen = Metas(), {}
+        self.names = {}                         # mint -> (when seen, words of its name, ticker): every coin the lists show
+        self.pending = {}                       # mint -> a BUY waiting for its second look: {"rep", "price", "at", "sources"}
         self.tally = deque(maxlen=600)          # (time, why) for every deep check: the page shows the last hour
         self.again, self.seen = {}, {}          # mint -> {"next", "tries", "source"} / mint -> when it was last checked
         self.last_round, self.rounds, self.note = None, 0, {}
@@ -1050,6 +1157,9 @@ class Sniper:
                 "buy_score": self.cfg.snipe_buy_score, "last_round": self.last_round and datetime.fromtimestamp(
                     self.last_round, timezone.utc).isoformat(timespec="seconds"), "rounds": self.rounds, "note": self.note,
                 "watching": len(self.again), "queued": len(self.queue),
+                "confirming": [{"mint": m, "ticker": p["rep"].get("ticker"), "at": datetime.fromtimestamp(p["at"], timezone.utc).isoformat(timespec="seconds")
+                                if p["at"] > 1e9 else None} for m, p in self.pending.items()],
+                "confirm_seconds": self.cfg.snipe_confirm_seconds, "cooling": self.cooling(),
                 "story": {"need_narrative": self.cfg.snipe_need_narrative, "min_hype": self.cfg.snipe_min_hype},
                 "metas": [{k: m.get(k) for k in ("name", "h1", "h24", "tokens", "coins")} for m in self.metas.list[:10]],
                 "metas_status": self.metas.status,
@@ -1068,6 +1178,114 @@ class Sniper:
             if now - t <= 3600:
                 out[k] = out.get(k, 0) + 1
         return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+    def _retally(self, key):
+        """The newest BUY in the hour's count becomes what really happened to it."""
+        for i in range(len(self.tally) - 1, -1, -1):
+            if self.tally[i][1] == "BUY":
+                self.tally[i] = (self.tally[i][0], key)
+                return
+
+    # ---------- the losing streak: the fast lane rests ----------
+    def cooling(self, now_ts=None):
+        """After SNIPE_LOSS_STREAK sniper coins in a row closed at a loss, the fast lane doesn't buy for
+        SNIPE_COOLDOWN_MINUTES from the last one (a cold market sinks every new coin). Your own checks still buy.
+        Returns {"until", "at", "why"} or None."""
+        n = self.cfg.snipe_loss_streak
+        if n <= 0 or self.cfg.snipe_cooldown_minutes <= 0:
+            return None
+        coins, order = {}, []
+        for i, t in enumerate(self.state.data.get("trades") or []):           # newest first
+            if t.get("plan") != "snipe":
+                continue
+            k = t.get("order_id") or f"row{i}"
+            if k not in coins:
+                coins[k] = {"pnl": 0.0, "final": False, "closed": t.get("closed_at")}
+                order.append(k)
+            coins[k]["pnl"] += _f(t.get("pnl_usd")) or 0.0
+            coins[k]["final"] = coins[k]["final"] or t.get("final") is not False
+        done = [coins[k] for k in order if coins[k]["final"]][:n]
+        if len(done) < n or any(c["pnl"] >= 0 for c in done):
+            return None
+        try:
+            last = datetime.fromisoformat(str(done[0]["closed"]).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            return None
+        until = last + self.cfg.snipe_cooldown_minutes * 60
+        if (now_ts or time.time()) >= until:
+            return None
+        return {"until": until, "at": datetime.fromtimestamp(until, timezone.utc).strftime("%H:%M UTC"),
+                "why": f"{n} sniper losses in a row"}
+
+    # ---------- a second look before the money goes in ----------
+    def hold_for_confirm(self, rep, now, sources=()):
+        self.pending[rep["mint"]] = {"rep": rep, "price": (rep.get("facts") or {}).get("price"), "at": now, "sources": list(sources)}
+        rep["action"] = (f"BUY signal: it looks again in {self.cfg.snipe_confirm_seconds:g}s before buying "
+                         "(the price has to hold and the buyers stay ahead)")
+
+    def confirms_due(self, now):
+        return any(now - p["at"] >= self.cfg.snipe_confirm_seconds for p in self.pending.values())
+
+    def _confirm_ok(self, p, F, now):
+        secs, price, was = now - p["at"], F.get("price"), p.get("price")
+        if secs > self.cfg.snipe_confirm_seconds + 300:
+            return False, "the second look came too late (the desk was busy or paused): it checks the coin again from scratch"
+        if not price or not was:
+            return False, "no price on the second look"
+        chg = (price / was - 1) * 100
+        b, s5, m5 = (F.get("buys") or {}).get("m5"), (F.get("sells") or {}).get("m5"), (F.get("chg") or {}).get("m5")
+        if chg <= -self.cfg.snipe_confirm_drop_pct:
+            return False, f"it didn't hold: {chg:+.1f}% in the {secs:.0f}s since the check"
+        if self.cfg.snipe_max_m5_pct > 0 and chg >= self.cfg.snipe_max_m5_pct:
+            return False, f"it ran {chg:+.1f}% in {secs:.0f}s: that's the top of a candle, not an entry"
+        if b is not None and s5 is not None and s5 > b:
+            return False, f"sellers took over ({s5} sells vs {b} buys in 5 min)"
+        if m5 is not None and m5 <= -8:
+            return False, f"falling: {m5:+.1f}% in 5 min"
+        return True, (f"held up on a second look {secs:.0f}s later ({chg:+.1f}%"
+                      + (f", {b} buys / {s5} sells in 5 min" if b is not None and s5 is not None else "") + ")")
+
+    def run_confirms(self, now):
+        """The BUYs whose second look is due: one DexScreener call for all of them, then buy the ones that held."""
+        due = [m for m, p in self.pending.items() if now - p["at"] >= self.cfg.snipe_confirm_seconds]
+        try:
+            rows = dex_rows(due[:30])
+        except FetchFailed as exc:
+            for m in due:
+                if now - self.pending[m]["at"] > self.cfg.snipe_confirm_seconds + 300:
+                    p = self.pending.pop(m)
+                    p["rep"]["action"] = "not bought: DexScreener didn't answer the second look"
+                    self._retally("BUY, didn't hold on the 2nd look")
+                    self._save(p["rep"])
+            return f"confirm: DexScreener unavailable ({exc.status or 'network'})"
+        bought_any = False
+        for m in due[:30]:
+            p = self.pending.pop(m)
+            rep = p["rep"]
+            F = pair_facts(pairs_for(rows, m))
+            ok, why = self._confirm_ok(p, F, now)
+            cool = self.cooling() if ok else None
+            if ok and self.mode() != "auto":
+                ok, why = False, "the sniper was set to WATCH meanwhile"
+            elif cool:
+                ok, why = False, f"cooling off after {cool['why']} (buys again from {cool['at']})"
+            if ok:
+                bought, msg = self.buy(rep)
+                bought_any = bought_any or bought
+                rep.update(bought=bought, action=f"{why}: {msg}" if bought else f"{why}, but not bought: {msg}")
+                if not bought:
+                    self._retally("BUY, not bought: " + ("slots full" if "slots are full" in msg else "paused" if "paused" in msg else "other"))
+            else:
+                rep["action"] = f"not bought: {why}"
+                self._retally("BUY, not bought: cooling off" if cool else "BUY, didn't hold on the 2nd look")
+                if not cool:
+                    self.again[m] = {"next": now + 240, "tries": 1, "source": (p["sources"] or ["again"])[0]}
+            self.state.feed("sniper", "pick" if ok else "info", f"${rep.get('ticker') or m[:6]}: {rep['action']}"[:180], rep.get("ticker"), m)
+            self._save(rep)
+            if F:
+                self._radar(m, F, p["sources"], None, rep, None)
+        self.state.save()
+        return "confirm: bought" if bought_any else "confirm: not bought"
 
     def note_not_bought(self, why):
         """A BUY it couldn't buy (slots full, paused...) counts under its own reason."""
@@ -1129,6 +1347,40 @@ class Sniper:
             self.state.save()
         return 200, msg
 
+    # ---------- names: which themes many new coins share right now ----------
+    THEME_HOURS = 3
+
+    def remember(self, mint, symbol, name=None, now=None):
+        """Every coin the fast lane and the desk's scan see: its name's words, for the themes."""
+        if not (isinstance(mint, str) and (symbol or name)):
+            return
+        now = now or time.time()
+        self.names[mint] = (now, name_words(symbol, name), clean(symbol, 16) or mint[:5])
+        if len(self.names) > 3000:
+            cut = now - self.THEME_HOURS * 3600
+            self.names = {m: v for m, v in self.names.items() if v[0] >= cut}
+            if len(self.names) > 3000:
+                self.names = dict(sorted(self.names.items(), key=lambda kv: -kv[1][0])[:2000])
+
+    def themes(self, mint, words, symbol=None, now=None):
+        """The words of this coin's name that other coins out in the last 3 hours share: 2 other coins, or 1 when the
+        word is one of the big meme families. Clones with the same ticker don't count. Biggest theme first."""
+        now = now or time.time()
+        cut = now - self.THEME_HOURS * 3600
+        mine = (clean(symbol, 16) or "").lower()
+        keys = {w for w in words if len(w) >= 4 and w not in NAME_STOP and not w.isdigit()}
+        keys |= {k for k in MEME_FAMILIES if word_hit(words, k)}
+        out = []
+        for k in keys:
+            others = []
+            for m, (t, ws, tick) in self.names.items():
+                if m != mint and t >= cut and word_hit(ws, k) and tick not in others and tick.lower() != mine:
+                    others.append(tick)
+            fam = k in MEME_FAMILIES
+            if len(others) >= (1 if fam else 2):
+                out.append({"word": k, "others": others[:6], "n": len(others), "family": fam})
+        return sorted(out, key=lambda t: (-t["n"], -len(t["word"])))
+
     # ---------- the deep check ----------
     def check(self, mint, source, lists=(), wallet_hits=(), manual=False, purpose="snipe"):
         st, cfg = self.state, self.cfg
@@ -1177,9 +1429,17 @@ class Sniper:
             for h in wallet_hits:
                 smart.setdefault(h["wallet"], {"wallet": h["wallet"], "label": followed.get(h["wallet"], h.get("label"))})["sol"] = h.get("sol")
             rep.update(rug=rug, flow=flw, smart=list(smart.values()), followed_n=len(followed))
-            rep["jev"] = self._jev(F)
+            if purpose == "desk":
+                rep["jev"] = {"status": "the desk already asked Jev about this coin"}
+            elif self._close_to_buy(rep, F):
+                rep["jev"] = self._jev(F)
+            else:
+                rep["jev"] = {"status": "not asked: the coin isn't close to a BUY (saves Jev's credits for the desk)"}
             rep["growth"] = self._growth(mint, F.get("holders"), F.get("age_min"))
-            metas_hit = self.metas.of(mint)
+            words = name_words(F.get("symbol"), F.get("name"))
+            metas_hit = self.metas.of(mint, words)
+            themes = self.themes(mint, words, F.get("symbol"))
+            self.remember(mint, F.get("symbol"), F.get("name"))
             rep["buzz"] = None
             if self.buzz.enabled() and (manual or self._worth_buzz(rep, F)) and self.buzz.room(manual):
                 work("social", "sniper: searching the web for buzz")
@@ -1190,9 +1450,13 @@ class Sniper:
                 rep["buzz"] = {"status": f"skipped: {self.buzz.per_hour} web searches this hour already"}
             else:
                 rep["buzz"] = {"status": "skipped: the coin didn't score high enough to spend a search"}
-            rep["narrative"] = narrative_read(F, metas_hit, gi.get("categories"), rep["buzz"], dex_orders(mint), lists)
+            rep["hype"] = hype_score(F, flw, rep["growth"], [x for x in lists if "bought" not in x and x not in PAID_LISTS],
+                                     metas_hit, rep["buzz"])
+            crowd = {"holders": F.get("holders"), "per_hour": rep["growth"].get("per_hour"), "hype": rep["hype"]["score"],
+                     "buyers5": (flw or {}).get("buyers5")}
+            rep["narrative"] = narrative_read(F, metas_hit, gi.get("categories"), rep["buzz"], dex_orders(mint), lists,
+                                              themes=themes, fams=families(words), crowd=crowd)
             rep["upside"] = upside_read(F, metas_hit)
-            rep["hype"] = hype_score(F, flw, rep["growth"], [x for x in lists if "bought" not in x], metas_hit, rep["buzz"])
             work("chief", "sniper: verdict")
             return self._finish(rep, F)
         finally:
@@ -1215,6 +1479,10 @@ class Sniper:
         if age_min and age_min >= 6:
             return {"per_hour": round(holders / (min(age_min, 1440) / 60), 1), "basis": "since launch"}
         return {"per_hour": None, "basis": "too new to measure"}
+
+    def _close_to_buy(self, rep, F):
+        trial = score_coin({**rep, "facts": F, "buzz": None, "jev": None, "gate": False}, self.cfg)
+        return trial["verdict"] != "SKIP" and trial["score"] >= self.cfg.snipe_buy_score - 20
 
     def _worth_buzz(self, rep, F):
         """The fast lane spends a web search only on a coin that is already close to a BUY on everything else."""
@@ -1391,6 +1659,9 @@ class Sniper:
         for kind, params, name in (("new_pools", {}, "new pool"), ("trending_pools", {"duration": "5m"}, "trending 5m")):
             if name == "trending 5m" and self.rounds % 2:
                 continue                                         # every other round: GeckoTerminal is rate-limited
+            if collect.GT_LIMIT.busy():
+                note[name] = "skipped (GeckoTerminal rate limit)"
+                continue
             try:
                 got = gt_pools(kind, params)
             except FetchFailed as exc:
@@ -1418,6 +1689,7 @@ class Sniper:
                 break
             for m in chunk:
                 F = pair_facts(pairs_for(rows, m))
+                self.remember(m, F.get("symbol"), F.get("name"))          # every coin out there counts for the themes
                 pre, why = self._pre(F)
                 c = fresh[m]
                 if why and c["prio"] < 100:
@@ -1431,10 +1703,17 @@ class Sniper:
             rep = self.check(m, ", ".join(c["sources"][:2]), lists=[s for s in c["sources"] if "bought" not in s],
                              wallet_hits=c["hits"])
             if rep["verdict"] == "BUY" and self.mode() == "auto":
-                ok, why = self.buy(rep)
-                rep.update(bought=ok, action=why if ok else f"not bought: {why}")
-                if not ok:
-                    self.note_not_bought(why)
+                cool = self.cooling()
+                if cool:
+                    rep["action"] = f"BUY signal, not bought: cooling off after {cool['why']} (buys again from {cool['at']})"
+                    self._retally("BUY, not bought: cooling off")
+                elif self.cfg.snipe_confirm_seconds > 0 and self.r.snipe_slots_free():
+                    self.hold_for_confirm(rep, now, c["sources"])      # bought on the second look, if it holds up
+                else:
+                    ok, why = self.buy(rep)
+                    rep.update(bought=ok, action=why if ok else f"not bought: {why}")
+                    if not ok:
+                        self.note_not_bought(why)
             elif rep["verdict"] == "BUY":
                 rep["action"] = "WATCH mode: a BUY, not bought (set the sniper to AUTO to let it buy)"
             if rep["verdict"] == "WATCH":

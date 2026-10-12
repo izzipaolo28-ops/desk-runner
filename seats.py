@@ -86,7 +86,7 @@ class Config:
         if watch not in ("on", "off"):
             raise ValueError("WATCH must be on or off")
         self.watch = watch == "on"
-        self.watch_seconds = _env_num(env, "WATCH_SECONDS", 20, low=10)   # every 20s: memecoins drop 40% in a minute
+        self.watch_seconds = _env_num(env, "WATCH_SECONDS", 10, low=5)    # every 10s: memecoins drop 40% in a minute
         self.take_profit_pct = _env_num(env, "TAKE_PROFIT_PCT", 0)           # sell everything at +X%
         self.scale_out = parse_ladder(env.get("SCALE_OUT", "30:25,60:25,100:25"))
         self.trail_arm_pct = _env_num(env, "TRAIL_ARM_PCT", 20)              # trailing stop arms once up this much
@@ -113,7 +113,7 @@ class Config:
         self.snipe_scan_seconds = _env_num(env, "SNIPE_SCAN_SECONDS", 60, low=20)
         self.snipe_buy_score = _env_num(env, "SNIPE_BUY_SCORE", 70, high=100)
         self.snipe_deep_per_round = int(_env_num(env, "SNIPE_CHECKS_PER_ROUND", 2, low=1, high=5))
-        self.snipe_min_age_minutes = _env_num(env, "SNIPE_MIN_AGE_MINUTES", 3)
+        self.snipe_min_age_minutes = _env_num(env, "SNIPE_MIN_AGE_MINUTES", 10)   # the first minutes are the dev's and the bots' dump
         self.snipe_max_age_hours = _env_num(env, "SNIPE_MAX_AGE_HOURS", 72, low=1)
         self.snipe_min_liquidity_usd = _env_num(env, "SNIPE_MIN_LIQUIDITY_USD", 8000)
         self.snipe_min_mcap_usd = _env_num(env, "SNIPE_MIN_MCAP_USD", 20000)
@@ -131,6 +131,18 @@ class Config:
         self.snipe_stall_gain_pct = _env_num(env, "SNIPE_STALL_GAIN_PCT", 10)
         self.snipe_ride_x = _env_num(env, "SNIPE_RIDE_X", 3, low=1, high=10)
         self.snipe_lock_pct = _env_num(env, "SNIPE_TRAIL_LOCK_PCT", 10, high=100)   # still climbing at max hold: keep riding up to 3x
+        # a snipe whose move failed gets out early instead of riding to the stop: down this much in its first minutes
+        # while the price is still falling hard
+        self.snipe_fail_pct = _env_num(env, "SNIPE_FAIL_PCT", 12, high=100)
+        self.snipe_fail_m5_pct = _env_num(env, "SNIPE_FAIL_M5_PCT", 10, high=100)
+        self.snipe_fail_minutes = _env_num(env, "SNIPE_FAIL_MINUTES", 30)
+        # a BUY is looked at again before the money goes in: the price must hold and the buyers stay ahead
+        self.snipe_confirm_seconds = _env_num(env, "SNIPE_CONFIRM_SECONDS", 60, high=600)
+        self.snipe_confirm_drop_pct = _env_num(env, "SNIPE_CONFIRM_DROP_PCT", 4, high=100)
+        self.snipe_max_m5_pct = _env_num(env, "SNIPE_MAX_M5_PCT", 30)      # +30% in 5 min = the top of a candle: wait
+        # after this many sniper losses in a row, the fast lane stops buying for a while (your own checks still can)
+        self.snipe_loss_streak = int(_env_num(env, "SNIPE_LOSS_STREAK", 2, high=20))
+        self.snipe_cooldown_minutes = _env_num(env, "SNIPE_COOLDOWN_MINUTES", 30, high=1440)
         self.buzz_per_hour = int(_env_num(env, "BUZZ_PER_HOUR", 6, high=120))
         # only coins with a story people are piling into, and attention growing fast
         need = str(env.get("SNIPE_NEED_NARRATIVE", "on")).strip().lower()
@@ -163,12 +175,13 @@ class Config:
                 "trail_arm_pct": self.trail_arm_pct, "trail_pct": self.trail_pct, "scale_out": self.scale_out,
                 "drop_m5_pct": self.drop_m5_pct, "derisk_pct": self.derisk_pct, "pump_m5_pct": self.pump_m5_pct,
                 "pump_sell_pct": self.pump_sell_pct, "stall_minutes": self.stall_minutes, "stall_gain_pct": self.stall_gain_pct,
-                "ride_x": 1.0, "lock_pct": self.lock_pct}
+                "ride_x": 1.0, "lock_pct": self.lock_pct, "fail_pct": 0.0, "fail_m5_pct": 0.0, "fail_minutes": 0.0}
         if (pos or {}).get("plan") == "snipe":
             base.update(stop_loss_pct=self.snipe_stop_loss_pct, max_hold_hours=self.snipe_max_hold_hours,
                         trail_arm_pct=self.snipe_trail_arm_pct, trail_pct=self.snipe_trail_pct, scale_out=self.snipe_scale_out,
                         stall_minutes=self.snipe_stall_minutes, stall_gain_pct=self.snipe_stall_gain_pct, ride_x=self.snipe_ride_x,
-                        lock_pct=self.snipe_lock_pct)
+                        lock_pct=self.snipe_lock_pct, fail_pct=self.snipe_fail_pct, fail_m5_pct=self.snipe_fail_m5_pct,
+                        fail_minutes=self.snipe_fail_minutes)
         return type("Plan", (), base)
 
     def watch_plan(self):
@@ -182,7 +195,8 @@ class Config:
                           "trail_arm_pct": self.snipe_trail_arm_pct, "trail_pct": self.snipe_trail_pct,
                           "max_hold_hours": self.snipe_max_hold_hours, "stall_minutes": self.snipe_stall_minutes,
                           "stall_gain_pct": self.snipe_stall_gain_pct, "ride_x": self.snipe_ride_x,
-                          "lock_pct": self.snipe_lock_pct}}
+                          "lock_pct": self.snipe_lock_pct, "fail_pct": self.snipe_fail_pct, "fail_m5_pct": self.snipe_fail_m5_pct,
+                          "fail_minutes": self.snipe_fail_minutes}}
 
 
 def parse_ladder(raw, name="SCALE_OUT"):
@@ -727,6 +741,17 @@ class Seats:
             return None                                # the pool itself is gone (a rug): take what there is
         return f"Jupiter quotes ${quoted:,.2f} for tokens the market prices at ${market:,.2f}"
 
+    def _held_on_wick(self, pos, rule, wick):
+        label = pos.get("ticker") or pos["mint"][:6]
+        self.state.agent("risk", f"{label}: {rule.split(':')[0]} read on the price feed, but {wick}: holding, checks again in "
+                                 f"{self.cfg.watch_seconds:g}s", None, "watching")
+        with self.state.lock:
+            p = self.state.find(pos) or pos
+            quiet = time.time() - (_f(p.get("wick_ts")) or 0) < 120
+            p["wick_ts"] = time.time() if not quiet else p.get("wick_ts")
+        if not quiet:                                  # once every two minutes, not every check
+            self.state.feed("risk", "info", f"not sold: {rule} on the price feed, but {wick}", pos.get("ticker"), pos.get("mint"))
+
     def _wait_for_fair(self, pos, why):
         """True = don't sell now (tried again next check). After 20 minutes of bad quotes it sells anyway."""
         with self.state.lock:
@@ -741,11 +766,24 @@ class Seats:
         self.state.feed("risk", "info", f"not sold at a bad price: {why}", pos.get("ticker"), pos.get("mint"))
         return True
 
-    def sell(self, pos, fraction, why):
+    def _above_floor(self, pos, amount, held, full, out_lamports, sol_usd, floor_pct):
+        """A loss rule fired on DexScreener's price. Before selling, the real quote has to agree: a one-tick wick in the
+        price feed ($DEPTH read -44% while Jupiter paid -23%) is not a reason to sell. Returns why it holds, or None."""
+        basis = _f(pos.get("cost_usd"))
+        if floor_pct is None or sol_usd is None or basis is None or not held:
+            return None
+        cost_part = basis * (1.0 if full else amount / held)
+        quoted = out_lamports / LAMPORTS * sol_usd
+        if cost_part <= 0 or quoted <= cost_part * (1 - floor_pct / 100):
+            return None
+        return f"the price feed says one thing, the real quote another: Jupiter pays {(quoted / cost_part - 1) * 100:+.1f}% (limit -{floor_pct:g}%)"
+
+    def sell(self, pos, fraction, why, floor_pct=None):
         """Sell `fraction` of what is held now (1.0 = everything, which closes the position and frees the book).
         Each sale is its own row in trades, with the share of cost it used up; the rest of the cost stays on the
         position. A part sale that would leave dust sells everything instead. Returns the trade row, or None
-        when nothing could be sold (it is tried again on the next check)."""
+        when nothing could be sold (it is tried again on the next check). floor_pct: a loss rule's limit, checked
+        against the real quote before anything is sold."""
         label = pos.get("ticker") or pos["mint"][:6]
         held = int(pos.get("tokens_raw") or 0)
         full = fraction >= 0.999
@@ -765,6 +803,10 @@ class Seats:
                     proceeds_lamports = 0
                 else:
                     q = self.jup.order(pos["mint"], WSOL, amount, taker=self.kp.address)
+                    wick = self._above_floor(pos, amount, max(held, balance), full, int(q.get("outAmount") or 0), sol_usd, floor_pct)
+                    if wick:
+                        self._held_on_wick(pos, why, wick)
+                        return None                  # nothing signed, nothing sent
                     bad = self._unfair(pos, amount, int(q.get("outAmount") or 0), sol_usd)
                     if bad and self._wait_for_fair(pos, bad):
                         return None                  # nothing signed, nothing sent
@@ -775,6 +817,10 @@ class Seats:
                 amount = held if full else int(held * fraction)
                 q = self.jup.order(pos["mint"], WSOL, int(amount))
                 proceeds_lamports = int(q["outAmount"])
+                wick = self._above_floor(pos, amount, held, full, proceeds_lamports, sol_usd, floor_pct)
+                if wick:
+                    self._held_on_wick(pos, why, wick)
+                    return None
                 bad = self._unfair(pos, amount, proceeds_lamports, sol_usd)
                 if bad and self._wait_for_fair(pos, bad):
                     return None
@@ -887,9 +933,12 @@ class Seats:
         done = set(pos.get("rungs_done") or [])
         sellers = buys is not None and sells is not None
         rolling = gain > 0 and m5 is not None and m5 >= 0 and sellers and buys >= sells   # still climbing, buyers ahead
-        act = None
+        act, floor = None, None
         if c.stop_loss_pct > 0 and gain <= -c.stop_loss_pct:
-            act = (1.0, f"stop-loss at {gain:+.1f}% (limit -{c.stop_loss_pct:g}%)", None)
+            act, floor = (1.0, f"stop-loss at {gain:+.1f}% (limit -{c.stop_loss_pct:g}%)", None), c.stop_loss_pct
+        elif (c.fail_pct > 0 and age_h * 60 <= c.fail_minutes and gain <= -c.fail_pct and m5 is not None
+              and m5 <= -c.fail_m5_pct):
+            act, floor = (1.0, f"the snipe failed: {gain:+.1f}% and still falling ({m5:+.1f}% in 5 min): out before the stop", None), c.fail_pct
         elif c.take_profit_pct > 0 and gain >= c.take_profit_pct:
             act = (1.0, f"take-profit at {gain:+.1f}% (target +{c.take_profit_pct:g}%)", None)
         elif c.max_hold_hours > 0 and age_h >= c.max_hold_hours and not (rolling and age_h < c.max_hold_hours * c.ride_x):
@@ -928,7 +977,7 @@ class Seats:
                              + (f" · next take-profit at +{nxt:g}%" if nxt is not None else ""), gain / 100, "gain")
             return None
         share, why, mark = act
-        trade = self.sell(pos, share, why)
+        trade = self.sell(pos, share, why, floor_pct=floor)
         if trade is not None and mark is not None and not trade.get("final"):
             with self.state.lock:
                 p = self.state.find(pos)
