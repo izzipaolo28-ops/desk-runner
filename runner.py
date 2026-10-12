@@ -48,8 +48,41 @@ NETS = tuple(n.strip() for n in os.environ.get("NETS", "solana").split(",") if n
 CYCLE_SECONDS = float(os.environ.get("CYCLE_SECONDS", main.CYCLE_SECONDS))
 
 
+TRENDING_WINDOW = os.environ.get("TRENDING_WINDOW", "1h").strip()
+if TRENDING_WINDOW not in ("5m", "1h", "6h", "24h"):
+    TRENDING_WINDOW = "1h"
+try:
+    TRENDING_PAGES = max(0, min(3, int(os.environ.get("TRENDING_PAGES", "1"))))
+except ValueError:
+    TRENDING_PAGES = 1
+
+
 def _f(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+
+
+def universe(pages):
+    """Trending pools first (what is trading now), then main's new pools. One GeckoTerminal slot per page.
+    Either list failing is recorded in collect.UNIVERSE_FAILURES; only both failing stands the cycle down."""
+    fresh = collect.universe(nets=NETS, pages=pages)          # clears the failure list
+    hot = collect.trending(nets=NETS, pages=TRENDING_PAGES, duration=TRENDING_WINDOW) if TRENDING_PAGES else []
+    out, seen = [], set()
+    for tid in hot + fresh:
+        if tid not in seen:
+            seen.add(tid)
+            out.append(tid)
+    return out
+
+
+def why(stats):
+    """'free: age 31, volume 9 · trade: no_sells 2'. The counts alone can't tell a bug from a quiet market."""
+    parts = []
+    for stage in ("free", "trade", "chain", "soft"):
+        reasons = stats.get(stage) or {}
+        if reasons:
+            top = sorted(reasons.items(), key=lambda kv: -kv[1])
+            parts.append(f"{stage}: " + ", ".join(f"{k} {v}" for k, v in top[:4]))
+    return " · ".join(parts)
 
 
 class Runner:
@@ -57,7 +90,7 @@ class Runner:
         self.cfg, self.seats, self.state, self._judge, self.lister, self.clock = cfg, seats, state, judge, lister, clock
         self.last_cycle = self.last_risk = None
         self.last_bank = None
-        main.universe = lambda pages: collect.universe(nets=NETS, pages=pages)   # trade only what Jupiter can
+        main.universe = universe                  # trade only what Jupiter can, trending first
 
     # the judge, with every answer kept for the dashboard's agent cards
     def judge(self, set_name, state):
@@ -127,7 +160,7 @@ class Runner:
     def report(self, order, stats):
         kills = {k: sum((stats.get(k) or {}).values()) for k in ("free", "trade", "chain", "soft")}
         with self.state.lock:
-            self.state.data["cycle"] = {"time": _now(), "stats": stats, "kills": kills,
+            self.state.data["cycle"] = {"time": _now(), "stats": stats, "kills": kills, "why": why(stats),
                                         "order": order["token"] if order else None}
         if stats.get("stood_down"):
             self.state.agent("chief", f"stood down: {stats['stood_down']}", None, "no order")
@@ -137,8 +170,8 @@ class Runner:
             t = order["token"]
             self.state.agent("chief", f"pick {t.get('ticker') or t['address'][:6]} on {t['chain']}",
                              order.get("confidence"), "confidence")
-        self.state.agent("crawler", f"{stats.get('seen', 0)} seen, {stats.get('benched', 0)} benched · cut: "
-                                    + ", ".join(f"{k} {v}" for k, v in kills.items()), stats.get("seen"), "seen")
+        self.state.agent("crawler", f"{stats.get('seen', 0)} seen, {stats.get('benched', 0)} benched · "
+                                    + (why(stats) or "nothing cut"), stats.get("seen"), "seen")
         self.state.save()
 
     def snapshot(self):

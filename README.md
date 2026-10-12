@@ -88,7 +88,7 @@ account like any other swap, so you can see them there, or sell by hand.
 
 `free_kill` → `trade_kill` → `chain_kill` → `soft_kill` → `pick` → SIZE → FILLS → RISK
 
-1. **Scan.** New Solana pools come from GeckoTerminal, and prices and volume from DexScreener. Arithmetic kills
+1. **Scan.** Trending and new Solana pools come from GeckoTerminal, and prices and volume from DexScreener. Arithmetic kills
    come first, because they cost nothing.
 2. **Vet.** Only the survivors get a dossier: Solana RPC, mint and freeze authority, real top holders (pool vaults
    excluded), and GeckoTerminal. Jev answers the market and Solana sets. A missing fact is sent as `null` and is
@@ -124,6 +124,8 @@ stays paused until you tap **Resume**.
 | `FEE_RESERVE_SOL` | `0.02` | SOL the bot never spends |
 | `RISK_POLL_SECONDS` | `300` | how often RISK checks an open position (at least 30) |
 | `CYCLE_SECONDS` | `900` | time between scans |
+| `TRENDING_PAGES` | `1` | pages of GeckoTerminal trending pools scanned first (0 to 3; 0 = new pools only) |
+| `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
 
 A variable that is set but isn't a valid number stops the desk and names the variable. It is never silently

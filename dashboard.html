@@ -291,7 +291,8 @@ function render(d){
   $("cycleTime").textContent = c ? ago(c.time) + " ago" : "";
   const st = c ? c.stats || {} : {};
   $("cycleLine").textContent = !c ? "no cycle yet" : st.stood_down ? "stood down: " + st.stood_down
-    : st.held ? "holding " + st.held + ": no scan" : `${st.seen || 0} seen · ${st.benched || 0} benched · ` + (st.no_order ? "no order: " + st.no_order : c.order ? "order placed" : "");
+    : st.held ? "holding " + st.held + ": no scan" : `${st.seen || 0} seen · ${st.benched || 0} benched · ` + (st.no_order ? "no order: " + st.no_order : c.order ? "order placed" : "")
+      + (c.why ? " · " + c.why : "");
   // judge feed
   const jb = $("judge"); jb.textContent = "";
   for (const j of (d.judge || []).slice(0, 8)){

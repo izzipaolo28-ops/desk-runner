@@ -163,8 +163,19 @@ UNIVERSE_FAILURES: list[str] = []   # what the last universe() could not fetch. 
 def universe(nets=("solana", "bsc", "robinhood"), pages=2) -> list[str]:
     """Fresh pools per chain -> ['<addr>:<netId>', ...]. One GeckoTerminal slot per chain per page.
     If GeckoTerminal keeps answering 429, run with pages=1: six slots become three."""
-    ids, seen = [], set()
     UNIVERSE_FAILURES.clear()
+    return _pool_list("new_pools", {}, nets, pages)
+
+
+def trending(nets=("solana",), pages=1, duration="1h") -> list[str]:
+    """GeckoTerminal's trending pools: what is trading now. new_pools alone is mostly minutes-old launches that
+    the age and volume floors cut before they can qualify; trending is where 15-minute-to-72-hour tokens with
+    real volume show up. Same ids, same slots (one per chain per page). Failures add to UNIVERSE_FAILURES."""
+    return _pool_list("trending_pools", {"duration": duration}, nets, pages)
+
+
+def _pool_list(kind, params, nets, pages):
+    ids, seen = [], set()
     for net in nets:
         if net not in FOMO_NET:
             log.warning("universe: no FOMO netId for %r", net)
@@ -172,14 +183,14 @@ def universe(nets=("solana", "bsc", "robinhood"), pages=2) -> list[str]:
             continue
         for page in range(1, pages + 1):
             try:
-                r = _get_json(f"{GT}/networks/{net}/new_pools", {"page": page}, GT_LIMIT)
+                r = _get_json(f"{GT}/networks/{net}/{kind}", {**params, "page": page}, GT_LIMIT)
             except FetchFailed as exc:
-                log.warning("universe: %s page %d: %s", net, page, exc)
-                UNIVERSE_FAILURES.append(f"{net} page {page}: {exc}")
+                log.warning("universe: %s %s page %d: %s", net, kind, page, exc)
+                UNIVERSE_FAILURES.append(f"{net} {kind} page {page}: {exc}")
                 break
             if not isinstance(r, dict) or not isinstance(r.get("data"), list):
-                log.warning("universe: %s page %d unavailable", net, page)
-                UNIVERSE_FAILURES.append(f"{net} page {page}: no pool list in the answer")
+                log.warning("universe: %s %s page %d unavailable", net, kind, page)
+                UNIVERSE_FAILURES.append(f"{net} {kind} page {page}: no pool list in the answer")
                 break
             for pool in r["data"]:
                 base = ((pool.get("relationships") or {}).get("base_token") or {})
