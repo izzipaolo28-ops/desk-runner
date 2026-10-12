@@ -77,9 +77,9 @@ except ValueError:
     TEST_SWAP_USD = 1.0
 DESK_GATE = "off" if os.environ.get("DESK_GATE", "on").strip().lower() == "off" else "on"
 try:
-    DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "50"))))
+    DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "40"))))
 except ValueError:
-    DESK_GATE_SCORE = 50.0
+    DESK_GATE_SCORE = 40.0
 SCAN_NOW_COOLDOWN = 60          # seconds: "Scan now" can't fire twice inside a minute (GeckoTerminal, Jev credits)
 
 
@@ -122,7 +122,7 @@ class SlotBook:
         self.runner = runner
 
     def held(self):
-        return None if self.runner.slots_free() else book.held()
+        return None if self.runner.desk_slots_free() else book.held()
 
     def __getattr__(self, name):
         return getattr(book, name)
@@ -148,6 +148,7 @@ class Runner:
         self._instrument()
         self.sniper = snipe.Sniper(self)          # your own checks, the wallets you follow, the fast lane
         self._watching = False
+        self.sell_requests = []                   # coins you asked to sell from the page
         collect.WAIT_HOOK = self.watch_if_due     # a scan waiting on GeckoTerminal keeps watching prices meanwhile
 
     # ---------- the live feed: main.run_once is the desk's code, unchanged; each step it calls is wrapped ----------
@@ -321,15 +322,13 @@ class Runner:
         tok = order["token"]
         if DESK_GATE == "off":
             return True, "gate off"
-        rep = self.sniper.check(tok["address"], "desk pick")
+        # Normal coins: the safety checks only (rugs, copycats, can't sell, already ran and cooling, sellers ahead).
+        # Not the sniper's early-coin rules (its age and size window, narrative, hype, 2x room): those are the sniper's.
+        rep = self.sniper.check(tok["address"], "desk pick", purpose="desk")
         if rep["verdict"] == "SKIP":
             ok, why = False, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"
         elif rep.get("momentum_ok") is False:
             ok, why = False, "sellers are ahead right now"
-        elif self.cfg.snipe_need_narrative and not (rep.get("narrative") or {}).get("ok"):
-            ok, why = False, "no narrative found"
-        elif ((rep.get("hype") or {}).get("score") or 0) < self.cfg.snipe_min_hype:
-            ok, why = False, f"hype {(rep.get('hype') or {}).get('score', 0)}/100 is under {self.cfg.snipe_min_hype:g}"
         elif (rep.get("score") or 0) < DESK_GATE_SCORE:
             ok, why = False, f"sniper score {rep.get('score')} is under {DESK_GATE_SCORE:g}"
         else:
@@ -343,6 +342,21 @@ class Runner:
     def slots_free(self):
         return len(self.state.positions()) < self.cfg.max_positions
 
+    def held_counts(self):
+        """(all coins held, the desk's, the sniper's). A coin from before the split counts as the desk's."""
+        ps = self.state.positions()
+        snipe = sum(1 for p in ps if p.get("plan") == "snipe")
+        return len(ps), len(ps) - snipe, snipe
+
+    def desk_slots_free(self):
+        total, desk, _ = self.held_counts()
+        return total < self.cfg.max_positions and desk < self.cfg.desk_slots
+
+    def snipe_slots_free(self, yours=False):
+        """The sniper's own slots; a coin you asked for yourself may take any free slot."""
+        total, _, snipe = self.held_counts()
+        return total < self.cfg.max_positions and (yours or snipe < self.cfg.snipe_slots)
+
     def tick(self):
         """One step of the loop: WATCH and RISK manage every open coin on their clocks, and while a slot is free
         (MAX_POSITIONS) the desk keeps scanning for the next one. Returns the most important thing it did."""
@@ -350,6 +364,8 @@ class Runner:
         if self.test_requested:                   # asked for from the dashboard; runs here, never beside a trade
             self.test_requested = False
             return self.run_test_swap()
+        if self.sell_requests:                    # a sale you asked for goes first
+            return self.run_sell(self.sell_requests.pop(0))
         if self.sniper.queue or self.sniper.forced:   # a coin you pasted (or "buy anyway") goes before anything else
             return self.sniper.run_queued()
         done = []                                 # (weight, what): a sale > a scan > a RISK check > a WATCH check
@@ -376,7 +392,7 @@ class Runner:
             if done:
                 self.snapshot()
         ran_cycle = False
-        if self.slots_free():
+        if self.desk_slots_free():
             if self.state.data.get("paused"):
                 if not holding:
                     self.state.agent("chief", f"paused: {self.state.data.get('pause_reason') or 'by you'}", None, "paused")
@@ -451,9 +467,9 @@ class Runner:
     def request_scan(self):
         """'Scan now': the next tick runs a cycle instead of waiting out CYCLE_SECONDS."""
         now = self.clock()
-        if not self.slots_free():
+        if not self.desk_slots_free():
             n = self.cfg.max_positions
-            return 409, (f"all {n} slots are full: the next scan starts when RISK sells one" if n > 1
+            return 409, (f"the desk's slots are full: the next scan starts when RISK sells one" if n > 1
                          else "holding a position: no scan until RISK closes it (MAX_POSITIONS=1)")
         if self.state.data.get("paused"):
             return 409, "the desk is paused: tap Resume first"
@@ -547,6 +563,10 @@ class Runner:
                              "DARK_TICKET_CUT": thresholds.DARK_TICKET_CUT, "NO_SOCIAL_CUT": thresholds.NO_SOCIAL_CUT})
         holding = bool(d.get("positions"))
         full = len(d.get("positions") or []) >= self.cfg.max_positions
+        total, desk_n, snipe_n = self.held_counts()
+        d.update(slots={"desk": self.cfg.desk_slots, "sniper": self.cfg.snipe_slots, "desk_held": desk_n, "sniper_held": snipe_n,
+                        "desk_free": self.desk_slots_free(), "sniper_free": self.snipe_slots_free()},
+                 desk_gate={"on": DESK_GATE == "on", "score": DESK_GATE_SCORE})
         d.update(max_positions=self.cfg.max_positions, max_exposure_pct=self.cfg.max_exposure_pct,
                  next_cycle_at=None if full or d.get("paused") else
                  _iso(self.clock() if self.last_cycle is None else self.last_cycle + CYCLE_SECONDS),
@@ -573,6 +593,27 @@ class Runner:
 
     def edit_wallets(self, body):
         return self.sniper.edit_wallets(body if isinstance(body, dict) else {})
+
+    def request_sell(self, mint):
+        pos = next((p for p in self.state.positions() if p.get("mint") == mint), None)
+        if pos is None:
+            return 404, "that coin isn't held"
+        if mint in self.sell_requests:
+            return 409, "already selling it"
+        self.sell_requests.append(mint)
+        return 200, f"selling ${pos.get('ticker') or mint[:6]} within 5 seconds"
+
+    def run_sell(self, mint):
+        pos = next((p for p in self.state.positions() if p.get("mint") == mint), None)
+        if pos is None:
+            return "sell: not held"
+        self.state.set_working("risk", "selling (you asked)", pos.get("ticker"), mint)
+        try:
+            trade = self.seats.close(pos, "sold by you from the page")
+        finally:
+            self.state.set_working(None)
+        self.snapshot()
+        return "sell: sold" if trade else "sell: waiting for a fair price"
 
     def set_goal(self, value):
         """The goal on the bar at the top, set from the page. 0 or empty clears it (GOAL_USD then applies)."""
@@ -636,7 +677,7 @@ def make_handler(runner, admin_token):
 
         def do_POST(self):
             if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap", "/api/goal",
-                                 "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets"):
+                                 "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets", "/api/sell"):
                 return self._send(404, {"detail": "not found"})
             given = self.headers.get("X-Admin-Token", "")
             if len(admin_token) < MIN_ADMIN_TOKEN or not hmac.compare_digest(given.encode(), admin_token.encode()):
@@ -648,7 +689,7 @@ def make_handler(runner, admin_token):
                 code, msg = runner.request_test()
                 return self._send(code, {"detail": msg})
             body = None
-            if self.path in ("/api/goal", "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets"):
+            if self.path in ("/api/goal", "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets", "/api/sell"):
                 try:
                     n = min(int(self.headers.get("Content-Length") or 0), 2000)
                     body = json.loads(self.rfile.read(n) or b"{}")
@@ -670,6 +711,9 @@ def make_handler(runner, admin_token):
                 return self._send(code, {"detail": msg})
             if self.path == "/api/wallets":
                 code, msg = runner.edit_wallets(body)
+                return self._send(code, {"detail": msg})
+            if self.path == "/api/sell":
+                code, msg = runner.request_sell(str(body.get("mint") or ""))
                 return self._send(code, {"detail": msg})
             runner.set_paused(self.path == "/api/pause", "paused from the dashboard")
             return self._send(200, {"paused": bool(runner.status().get("paused"))})
@@ -793,6 +837,9 @@ class Stopped:
         return 409, self.reason
 
     def edit_wallets(self, body):
+        return 409, self.reason
+
+    def request_sell(self, mint):
         return 409, self.reason
 
     def tick(self):

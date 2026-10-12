@@ -337,6 +337,8 @@ def rugcheck(mint):
         out["creator_pct"] = round(100 * bal / supply, 3) if bal is not None and supply else None
         ins = full.get("graphInsidersDetected")
         out["insiders"] = int(ins) if isinstance(ins, (int, float)) and not isinstance(ins, bool) else None
+        th = full.get("totalHolders")
+        out["holders"] = int(th) if isinstance(th, (int, float)) and not isinstance(th, bool) and th > 0 else None
     return out
 
 
@@ -528,6 +530,13 @@ class Metas:
                     if meta["name"] not in names:
                         names.append(meta["name"])
                         meta["coins"] += 1
+                    mc = _num(pr.get("marketCap"))
+                    if mc:
+                        meta.setdefault("_mcs", []).append(mc)
+                        if mc > (meta.get("leader_mcap") or 0):
+                            meta["leader_mcap"], meta["leader"] = mc, clean((pr.get("baseToken") or {}).get("symbol"), 16)
+            mcs = sorted(meta.pop("_mcs", []))
+            meta["median_mcap"] = mcs[len(mcs) // 2] if mcs else None
         self.list, self.by_mint, self.status = metas[:12], by, "ok" if metas else "no narratives listed"
 
     def of(self, mint):
@@ -535,7 +544,40 @@ class Metas:
         return [m for m in self.list if m["name"] in names]
 
 
-def narrative_read(F, metas_hit, categories, bz):
+def dex_orders(mint):
+    """What was paid for on DexScreener for this coin: a token profile, a community takeover, ads. Approved ones only."""
+    try:
+        body = collect._get_json(f"{DEXS}/orders/v1/solana/{mint}")
+    except FetchFailed:
+        return set()
+    rows = body if isinstance(body, list) else (body or {}).get("orders") if isinstance(body, dict) else []
+    return {str(o.get("type")) for o in rows or [] if isinstance(o, dict) and str(o.get("status")).lower() == "approved"}
+
+
+def upside_read(F, metas_hit):
+    """How much room it has: the 2x / 3x / 5x market caps, how far under the biggest coin of its own narrative it sits
+    (traders buy the next coin of a hot story while the leader is far above), where its size usually tops out, and how
+    long 2x takes at this hour's pace. A read, not a promise."""
+    mc, h1 = F.get("mcap"), (F.get("chg") or {}).get("h1")
+    out = {"targets": None, "room_x": None, "leader": None, "band": None, "band_x": None, "potential_x": None, "pace": None}
+    if not mc:
+        return out
+    out["targets"] = {"2x": round(mc * 2), "3x": round(mc * 3), "5x": round(mc * 5)}
+    lead = max((m for m in metas_hit if m.get("leader_mcap")), key=lambda m: m["leader_mcap"], default=None)
+    if lead and lead["leader_mcap"] > mc * 1.05:
+        out["room_x"] = round(lead["leader_mcap"] / mc, 1)
+        out["leader"] = {"symbol": lead.get("leader"), "mcap": lead["leader_mcap"], "meta": lead["name"], "median": lead.get("median_mcap")}
+    band, bx = (("micro cap", 10) if mc < 300_000 else ("small cap", 5) if mc < 2_000_000 else ("mid cap", 3) if mc < 10_000_000
+                else ("large cap", 1.5))
+    out["band"], out["band_x"] = band, bx
+    out["potential_x"] = round(min(out["room_x"], 50), 1) if out["room_x"] else bx
+    if h1 is not None and h1 > 0:
+        r = math.log(1 + h1 / 100)
+        out["pace"] = {"2x_h": round(math.log(2) / r, 1), "3x_h": round(math.log(3) / r, 1)}
+    return out
+
+
+def narrative_read(F, metas_hit, categories, bz, orders=(), lists=()):
     """A story, from three places: a trending DexScreener narrative it belongs to, a web search that says who or what
     it's about with real talk around it, or a specific theme tag (not just "Pump Fun") plus socials of its own."""
     why = []
@@ -547,8 +589,13 @@ def narrative_read(F, metas_hit, categories, bz):
     if bz.get("status") == "ok" and bz.get("linked_to") and bz.get("mentions") in ("medium", "high"):
         why.append(f"about {bz['linked_to']}, and people are talking about it ({bz['mentions']})")
     tags = [c for c in categories or [] if c.lower() not in GENERIC_TAGS][:3]
-    if tags and ((F.get("socials") or {}) or F.get("sites")):
+    socials = (F.get("socials") or {}) or F.get("sites")
+    if tags and socials:
         why.append("its theme: " + ", ".join(tags) + ", with its own socials")
+    if "communityTakeover" in orders or "community takeover" in lists:
+        why.append("a community takeover: holders rallied to run it themselves")
+    elif ("tokenProfile" in orders or "new profile" in lists) and (F.get("socials") or {}).get("x") and (F.get("sites") or (F.get("socials") or {}).get("telegram")):
+        why.append("a paid DexScreener profile with its own X and a site or Telegram")
     return {"ok": bool(why), "why": why, "metas": [m["name"] for m in metas_hit][:3], "tags": tags}
 
 
@@ -735,17 +782,18 @@ def score_coin(r, cfg):
     check("market", "market cap", None if mcap is None else cfg.snipe_min_mcap_usd <= mcap <= cfg.snipe_max_mcap_usd, money(mcap))
     check("market", "liquidity", None if liq is None else liq >= cfg.snipe_min_liquidity_usd, money(liq),
           f"min {money(cfg.snipe_min_liquidity_usd)}")
+    desk = r.get("purpose") == "desk"         # the desk's normal coins: its own age and size rules already passed
     if age is None:
         wait.append("age unknown")
-    elif age < cfg.snipe_min_age_minutes:
+    elif age < cfg.snipe_min_age_minutes and not desk:
         wait.append(f"only {age:.0f} min old: too new to read, look again in a few minutes")
-    elif age > cfg.snipe_max_age_hours * 60:
+    elif age > cfg.snipe_max_age_hours * 60 and not desk:
         veto.append(f"{mins(age)} old (the sniper stops at {cfg.snipe_max_age_hours:g}h)")
     if liq is not None and liq < cfg.snipe_min_liquidity_usd:
         veto.append(f"liquidity {money(liq)} is too thin to get out of")
-    if mcap is not None and mcap > cfg.snipe_max_mcap_usd:
+    if mcap is not None and mcap > cfg.snipe_max_mcap_usd and not desk:
         veto.append(f"market cap {money(mcap)} is past the sniper's {money(cfg.snipe_max_mcap_usd)}")
-    elif mcap is not None and mcap < cfg.snipe_min_mcap_usd:
+    elif mcap is not None and mcap < cfg.snipe_min_mcap_usd and not desk:
         wait.append(f"market cap {money(mcap)} is under {money(cfg.snipe_min_mcap_usd)}: too early")
     elif mcap is None:
         wait.append("market cap unknown")
@@ -891,6 +939,22 @@ def score_coin(r, cfg):
     else:
         check("jev", "Jev", None, jev.get("status") or "not asked")
 
+    up = r.get("upside")
+    if up and up.get("targets"):
+        T = up["targets"]
+        check("upside", "targets", None, f"2x at {money(T['2x'])} · 3x at {money(T['3x'])} · 5x at {money(T['5x'])}")
+        if up.get("leader"):
+            L = up["leader"]
+            check("upside", "its narrative's leader", up["room_x"] >= 2, f"${L.get('symbol') or '?'} at {money(L['mcap'])} in '{L['meta']}': "
+                  f"this one is {up['room_x']:g}x under it" + (f" (the typical coin there: {money(L['median'])})" if L.get("median") else ""))
+        check("upside", "size", None, f"{up['band']}: coins this size often have room for ~{up['band_x']:g}x")
+        check("upside", "potential", up["potential_x"] >= cfg.snipe_min_upside_x, f"~{up['potential_x']:g}x", f"needs {cfg.snipe_min_upside_x:g}x")
+        if up.get("pace"):
+            check("upside", "at this hour's pace", None, f"2x in ~{up['pace']['2x_h']:g}h, 3x in ~{up['pace']['3x_h']:g}h (if it keeps going)")
+        if up["potential_x"] >= 5:
+            add("room to run", f"room to run: ~{up['potential_x']:g}x" + (f" to its narrative's leader" if up.get("leader") else ""), 6)
+        elif up["potential_x"] >= 3:
+            add("some room", f"room for ~{up['potential_x']:g}x", 3)
     nar, hy = r.get("narrative"), r.get("hype")
     if nar is not None:
         check("story", "narrative", nar["ok"], "; ".join(nar["why"]) if nar["ok"] else
@@ -898,12 +962,14 @@ def score_coin(r, cfg):
     if hy is not None:
         check("story", "hype, growing how fast", hy["score"] >= cfg.snipe_min_hype, f"{hy['score']}/100 (needs {cfg.snipe_min_hype:g})"
               + (": " + "; ".join(f"{p['label']} +{p['pts']}" for p in hy["parts"]) if hy["parts"] else ": nothing yet"))
-    if r.get("gate", True) and not veto:
+    if r.get("gate", True) and not veto and not desk:
         if cfg.snipe_need_narrative and nar is not None and not nar["ok"]:
             wait.append("no narrative found: it only buys coins with a story people are piling into (a trending DexScreener "
                         "narrative, or web-search buzz saying who or what it's about)")
         if hy is not None and hy["score"] < cfg.snipe_min_hype:
             wait.append(f"hype {hy['score']}/100 is under {cfg.snipe_min_hype:g}: not gaining fast enough yet")
+        if up and up.get("potential_x") is not None and up["potential_x"] < cfg.snipe_min_upside_x:
+            wait.append(f"not enough room: ~{up['potential_x']:g}x potential, it wants {cfg.snipe_min_upside_x:g}x+")
     total = max(0, min(100, 25 + sum(p["pts"] for p in pts)))
     if veto:
         verdict = "SKIP"
@@ -930,6 +996,23 @@ def headline(rep, cfg):
     return f"WATCH {tick} · {rep['score']}/100 · {rep['setup']}: " + "; ".join(need + good[:1])
 
 
+def why_key(rep):
+    """One short reason per checked coin, for the "why no buy" count."""
+    if rep.get("verdict") == "BUY":
+        return "BUY"
+    if rep.get("verdict") == "SKIP":
+        v = " ".join(rep.get("veto") or []).lower()
+        return ("copycat" if "copycat" in v else "already ran" if "already ran" in v else "too old or too big" if "old (" in v or "past the sniper" in v
+                else "thin liquidity" if "liquidity" in v else "rug risk")
+    w = " ".join((rep.get("wait") or [])[:1]).lower()
+    for key, label in (("no narrative", "no narrative"), ("hype", "hype too slow"), ("not enough room", "no 2x room"),
+                       ("too new", "too new"), ("market cap", "market cap too small"), ("no dex pair", "no pair yet"),
+                       ("authority", "chain didn't answer"), ("momentum", "no momentum reading"), ("unavailable", "data unavailable")):
+        if key in w:
+            return label
+    return "score too low" if rep.get("score") is not None and rep.get("score") < 70 else "other"
+
+
 # ---------- the sniper itself: lives inside the runner's loop ----------
 class Sniper:
     def __init__(self, runner):
@@ -938,6 +1021,7 @@ class Sniper:
                          "claude-haiku-5-5", self.cfg.buzz_per_hour)
         self.queue, self.forced = deque(), deque()
         self.metas, self.holders_seen = Metas(), {}
+        self.tally = deque(maxlen=600)          # (time, why) for every deep check: the page shows the last hour
         self.again, self.seen = {}, {}          # mint -> {"next", "tries", "source"} / mint -> when it was last checked
         self.last_round, self.rounds, self.note = None, 0, {}
         self.env_wallets = parse_wallets(os.environ.get("SMART_WALLETS", ""))
@@ -969,6 +1053,7 @@ class Sniper:
                 "story": {"need_narrative": self.cfg.snipe_need_narrative, "min_hype": self.cfg.snipe_min_hype},
                 "metas": [{k: m.get(k) for k in ("name", "h1", "h24", "tokens", "coins")} for m in self.metas.list[:10]],
                 "metas_status": self.metas.status,
+                "why_hour": self._why_hour(), "min_upside_x": self.cfg.snipe_min_upside_x,
                 "buzz": {"enabled": self.buzz.enabled(), "model": self.buzz.model, "per_hour": self.buzz.per_hour,
                          "used_hour": len([t for t in self.buzz.used if time.time() - t < 3600])},
                 "wallets": [{"address": a, "label": l, "from": "variable" if a in self.env_wallets else "page"} for a, l in fol.items()],
@@ -976,6 +1061,18 @@ class Sniper:
                           "min_liquidity_usd": self.cfg.snipe_min_liquidity_usd, "min_mcap_usd": self.cfg.snipe_min_mcap_usd,
                           "max_mcap_usd": self.cfg.snipe_max_mcap_usd, "max_top_wallet_pct": self.cfg.snipe_max_top_wallet_pct,
                           "max_top10_pct": self.cfg.snipe_max_top10_pct, "max_dev_pct": self.cfg.snipe_max_dev_pct}}
+
+    def _why_hour(self):
+        now, out = time.time(), {}
+        for t, k in self.tally:
+            if now - t <= 3600:
+                out[k] = out.get(k, 0) + 1
+        return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+    def note_not_bought(self, why):
+        """A BUY it couldn't buy (slots full, paused...) counts under its own reason."""
+        if self.tally and self.tally[-1][1] == "BUY":
+            self.tally[-1] = (self.tally[-1][0], "BUY, not bought: " + ("slots full" if "slots are full" in why else "paused" if "paused" in why else "other"))
 
     def request(self, text, buy):
         mint = parse_target(text)
@@ -1033,9 +1130,9 @@ class Sniper:
         return 200, msg
 
     # ---------- the deep check ----------
-    def check(self, mint, source, lists=(), wallet_hits=(), manual=False):
+    def check(self, mint, source, lists=(), wallet_hits=(), manual=False, purpose="snipe"):
         st, cfg = self.state, self.cfg
-        rep = {"id": f"{int(time.time() * 1000)}", "ts": time.time(), "time": _now(), "mint": mint, "source": source,
+        rep = {"id": f"{int(time.time() * 1000)}", "ts": time.time(), "time": _now(), "mint": mint, "source": source, "purpose": purpose,
                "lists": list(lists), "ticker": None, "name": None, "note": None, "bought": False, "action": None}
         def work(seat, step):
             st.set_working(seat, step, rep.get("ticker"), mint)
@@ -1063,6 +1160,8 @@ class Sniper:
             if F.get("top10_pct") is None and gi.get("top10") is not None:
                 F["top10_pct"] = gi["top10"]
             rug = rugcheck(mint)
+            if F.get("holders") is None and rug.get("holders"):
+                F["holders"] = rug["holders"]                    # GeckoTerminal busy: RugCheck's count instead
             dev = rug.get("creator") or gi.get("developer")
             rep["dev"] = {"address": dev, **(wallet_history(dev) if dev else {"status": "unknown: no creator on record"})}
             rep["copycat"] = copycat(mint, F.get("symbol"), F.get("name"), F.get("liq"), F.get("age_min"))
@@ -1091,7 +1190,8 @@ class Sniper:
                 rep["buzz"] = {"status": f"skipped: {self.buzz.per_hour} web searches this hour already"}
             else:
                 rep["buzz"] = {"status": "skipped: the coin didn't score high enough to spend a search"}
-            rep["narrative"] = narrative_read(F, metas_hit, gi.get("categories"), rep["buzz"])
+            rep["narrative"] = narrative_read(F, metas_hit, gi.get("categories"), rep["buzz"], dex_orders(mint), lists)
+            rep["upside"] = upside_read(F, metas_hit)
             rep["hype"] = hype_score(F, flw, rep["growth"], [x for x in lists if "bought" not in x], metas_hit, rep["buzz"])
             work("chief", "sniper: verdict")
             return self._finish(rep, F)
@@ -1157,9 +1257,10 @@ class Sniper:
             rep.update(score_coin(rep, self.cfg))
         rep["headline"] = headline(rep, self.cfg)
         self.seen[rep["mint"]] = time.time()
-        self.state.feed("chief", "pick" if rep["verdict"] == "BUY" else "cut" if rep["verdict"] == "SKIP" else "info",
-                        "sniper: " + rep["headline"][:180], rep.get("ticker"), rep["mint"])
-        self.state.agent("chief", "sniper: " + rep["headline"][:140], rep["score"] / 100, "sniper score")
+        self.tally.append((time.time(), why_key(rep)))
+        self.state.feed("sniper", "pick" if rep["verdict"] == "BUY" else "cut" if rep["verdict"] == "SKIP" else "info",
+                        rep["headline"][:180], rep.get("ticker"), rep["mint"])
+        self.state.agent("sniper", rep["headline"][:160], rep["score"] / 100, "sniper score")
         return rep
 
     def _save(self, rep):
@@ -1176,8 +1277,11 @@ class Sniper:
     def buy(self, rep, forced=False):
         """SIZE and FILLS take it from here, exactly like the desk's own picks; the position carries the sniper's plan."""
         r, mint = self.r, rep["mint"]
-        if not r.slots_free():
-            return False, f"all {self.cfg.max_positions} slots are full"
+        yours = forced or rep.get("source") == "you"
+        if not r.snipe_slots_free(yours=yours):
+            total, _, snipe = r.held_counts()
+            return False, (f"all {self.cfg.max_positions} slots are full" if total >= self.cfg.max_positions
+                           else f"the sniper's {self.cfg.snipe_slots} slots are full (the rest are the desk's)")
         if self.state.data.get("paused"):
             return False, "the desk is paused"
         if mint in {p.get("mint") for p in self.state.positions()}:
@@ -1233,6 +1337,8 @@ class Sniper:
         if rep["verdict"] == "BUY" and req["buy"]:
             ok, why = self.buy(rep)
             rep.update(bought=ok, action=why if ok else f"not bought: {why}")
+            if not ok:
+                self.note_not_bought(why)
         elif rep["verdict"] == "BUY":
             rep["action"] = "check only: not bought (tick 'buy if it looks good' to let it buy)"
         else:
@@ -1327,6 +1433,8 @@ class Sniper:
             if rep["verdict"] == "BUY" and self.mode() == "auto":
                 ok, why = self.buy(rep)
                 rep.update(bought=ok, action=why if ok else f"not bought: {why}")
+                if not ok:
+                    self.note_not_bought(why)
             elif rep["verdict"] == "BUY":
                 rep["action"] = "WATCH mode: a BUY, not bought (set the sniper to AUTO to let it buy)"
             if rep["verdict"] == "WATCH":

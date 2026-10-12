@@ -99,6 +99,10 @@ class Config:
         self.max_hold_hours = _env_num(env, "MAX_HOLD_HOURS", 24)
         self.max_positions = int(_env_num(env, "MAX_POSITIONS", 5, low=1, high=10))
         self.max_exposure_pct = _env_num(env, "MAX_EXPOSURE_PCT", 25, low=1, high=100)   # all coins together
+        # the two bots share the slots: the desk (normal coins, Jev's picks) and the sniper (early coins) each get their own.
+        # Unless set, they follow MAX_POSITIONS: 60% the desk's, the rest the sniper's (5 -> 3 and 2).
+        self._desk_slots = int(_env_num(env, "DESK_SLOTS", 0, low=0, high=10)) if str(env.get("DESK_SLOTS", "")).strip() else None
+        self._snipe_slots = int(_env_num(env, "SNIPE_SLOTS", 0, low=0, high=10)) if str(env.get("SNIPE_SLOTS", "")).strip() else None
         self.stall_minutes = _env_num(env, "STALL_MINUTES", 0)              # off for the desk's own picks
         self.stall_gain_pct = _env_num(env, "STALL_GAIN_PCT", 10)
         # THE SNIPER: its own gates and its own in-and-out plan for every coin it buys
@@ -119,7 +123,7 @@ class Config:
         self.snipe_max_dev_pct = _env_num(env, "SNIPE_MAX_DEV_PCT", 10, high=100)
         self.snipe_bundle_wallets = int(_env_num(env, "SNIPE_BUNDLE_WALLETS", 8, low=2))
         self.snipe_stop_loss_pct = _env_num(env, "SNIPE_STOP_LOSS_PCT", 25, high=100)
-        self.snipe_scale_out = parse_ladder(env.get("SNIPE_SCALE_OUT", "50:50,100:25"), "SNIPE_SCALE_OUT")
+        self.snipe_scale_out = parse_ladder(env.get("SNIPE_SCALE_OUT", "50:30,100:30,200:20"), "SNIPE_SCALE_OUT")   # +50%, 2x, 3x
         self.snipe_trail_arm_pct = _env_num(env, "SNIPE_TRAIL_ARM_PCT", 30)
         self.snipe_trail_pct = _env_num(env, "SNIPE_TRAIL_PCT", 20, high=100)
         self.snipe_max_hold_hours = _env_num(env, "SNIPE_MAX_HOLD_HOURS", 12)
@@ -134,6 +138,23 @@ class Config:
             raise ValueError("SNIPE_NEED_NARRATIVE must be on or off")
         self.snipe_need_narrative = need == "on"
         self.snipe_min_hype = _env_num(env, "SNIPE_MIN_HYPE", 50, high=100)
+        self.snipe_min_upside_x = _env_num(env, "SNIPE_MIN_UPSIDE_X", 2, high=100)   # room for at least a 2x
+
+    @property
+    def desk_slots(self):
+        return self._desk_slots if self._desk_slots is not None else max(1, round(self.max_positions * 0.6))
+
+    @desk_slots.setter
+    def desk_slots(self, n):
+        self._desk_slots = n
+
+    @property
+    def snipe_slots(self):
+        return self._snipe_slots if self._snipe_slots is not None else max(1, self.max_positions - max(1, round(self.max_positions * 0.6)))
+
+    @snipe_slots.setter
+    def snipe_slots(self, n):
+        self._snipe_slots = n
 
     def plan(self, pos=None):
         """The rules WATCH applies to one coin. A sniper buy gets the sniper's in-and-out plan; everything else the

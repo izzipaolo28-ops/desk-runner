@@ -290,6 +290,12 @@ details.pc .inner{padding:4px 8px 8px}
 .modes .btn.on.off{border-color:#6b7489;color:#e8edf6} .modes .btn.on.watch{border-color:#fbbf24;color:#fde68a;background:#2a1f05}
 .modes .btn.on.auto{border-color:#34d399;color:#bbf7d0;background:#06281a}
 .gates{font:11px/1.6 var(--mono);color:#8b97b0;margin:8px 0}
+.deskbox{margin-top:14px} .deskbox .gates{margin:0;color:#c6cfdf} .deskbox b{color:#e8edf6}
+.who{font:800 9px var(--mono);letter-spacing:.08em;border-radius:3px;padding:1px 5px;margin-right:6px;vertical-align:2px}
+.who.dk{background:#1e293b;color:#93c5fd} .who.sn{background:#3b0a33;color:#ffd6f6}
+.whyh{font:12px var(--mono);color:#c6cfdf;margin:8px 0 2px;display:flex;flex-wrap:wrap;gap:4px 10px}
+.whyh .hd{width:100%;color:#9aa6bd;letter-spacing:.12em;font-size:10px} .whyh b{color:#fbbf24} .whyh .buy b{color:#4ade80}
+.sellbtn{margin:4px 0 8px;min-height:36px;font-size:12px;border-color:#f87171;color:#fca5a5}
 .metas{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px;font:11px var(--mono)}
 .metas .mt{border:1px solid #2a3244;border-radius:12px;padding:3px 9px;color:#c6cfdf;white-space:nowrap}
 .metas .mt b{margin-left:5px} .metas .hd{width:100%;color:#9aa6bd;letter-spacing:.12em;font-size:10px}
@@ -409,10 +415,16 @@ details.pc .inner{padding:4px 8px 8px}
     <div class="msg" id="checkMsg" role="status"></div>
     <div id="checkNow"></div>
     <div id="checkOld"></div>
+    <div class="sbox deskbox">
+      <h3>THE DESK · NORMAL COINS <span id="deskNote"></span></h3>
+      <div id="deskLine" class="gates"></div>
+    </div>
     <div class="sgrid">
       <div class="sbox">
-        <h3>THE FAST LANE <span id="laneNote"></span></h3>
+        <h3>THE FAST LANE · EARLY COINS <span id="laneNote"></span></h3>
+        <div class="gates" id="snipeLatest"></div>
         <div class="modes" id="snipeModes"></div>
+        <div class="whyh" id="whyHour"></div>
         <div class="gates" id="snipeGates"></div>
         <div class="metas" id="metas"></div>
         <div class="radar" id="radar"></div>
@@ -1472,6 +1484,7 @@ function liveDraw(now){
     ctx.fillStyle = bg; ctx.fillRect(plotR + 1, y - 8, w, 16); ctx.fillStyle = fg; ctx.textAlign = "left"; ctx.fillText(text, plotR + 4, y + 4); return true; };
   const lineName = (v, text, color) => { const y = Y(v); if (y < yTop + 10 || y > yBot) return; ctx.fillStyle = color; ctx.font = mono(10); ctx.textAlign = "left"; ctx.fillText(text, 8, y - 5); };
   if (entryV !== null){
+    [[2, "2x"], [3, "3x"]].forEach(([x, label]) => { if (axisTag(entryV * x, fmt(entryV * x), "#4c1d95", "#ede9fe", [1, 5])) lineName(entryV * x, `${label} from your entry`, "#c4b5fd"); });
     const tp = (Wt.ladder || []).find(([g]) => !new Set((q.rungs_done || []).map(Number)).has(Number(g)));
     if (tp && axisTag(entryV * (1 + tp[0] / 100), fmt(entryV * (1 + tp[0] / 100)), "#166534", "#dcfce7", [2, 4])) lineName(entryV * (1 + tp[0] / 100), `take profit +${tp[0]}% · sells ${tp[1]}%`, "#4ade80");
     if (Wt.stop_loss_pct && axisTag(entryV * (1 - Wt.stop_loss_pct / 100), fmt(entryV * (1 - Wt.stop_loss_pct / 100)), "#7f1d1d", "#fee2e2", [2, 4])) lineName(entryV * (1 - Wt.stop_loss_pct / 100), `stop-loss −${Wt.stop_loss_pct}% · sells all`, "#f87171");
@@ -1748,23 +1761,32 @@ function render(d){
   const fb = $("feed"); fb.textContent = "";
   for (const f of (d.feed || []).slice(0, 80)){
     const r = el("div", "frow k-" + (f.kind || "info")), seat = SEAT[f.agent];
-    const ag = el("span", "fa", seat ? seat.name : (f.agent || "")); if (seat) ag.style.color = seat.c;
+    const ag = el("span", "fa", seat ? seat.name : String(f.agent || "").toUpperCase()); ag.style.color = seat ? seat.c : f.agent === "sniper" ? "#ff5fd2" : "";
     const coin = f.ticker || f.mint ? coinLink(f.ticker, f.mint) : el("span"); coin.classList.add("fc");
     r.append(el("span", "ft", clockTime(f.t)), ag, coin, el("span", "fx", (f.no ? "#" + f.no + " " : "") + (f.text || "") + (num(f.ms) !== null && f.ms > 0 ? ` (${f.ms}ms)` : "")));
     fb.appendChild(r);
   }
   if (!(d.feed || []).length) fb.appendChild(el("div", "empty", "nothing yet: the first scan fills this in"));
   const ps = d.positions || (p ? [p] : []), W = d.watch || {}, slots = num(d.max_positions) || 1;
-  $("posMode").textContent = (p ? p.mode.toUpperCase() + " · " : "") + `${ps.length} OF ${slots} SLOTS` + (ps.length && W.enabled ? " · WATCHED EVERY " + Math.round(W.seconds) + "s" : "");
+  const SL = d.slots || null;
+  $("posMode").textContent = (p ? p.mode.toUpperCase() + " · " : "") + (SL ? `DESK ${SL.desk_held}/${SL.desk} · SNIPER ${SL.sniper_held}/${SL.sniper}` : `${ps.length} OF ${slots} SLOTS`)
+    + (ps.length && W.enabled ? " · WATCHED EVERY " + Math.round(W.seconds) + "s" : "");
   const pos = $("position"); pos.textContent = ""; pos.className = ps.length ? "" : "empty";
   // one line per coin, all of them on screen; tap a line for its whole plan (stays open across refreshes)
   ps.forEach((q, i) => {
     const n = posNums(q), det = el("details", "pc"), sm = el("summary");
-    sm.append(el("span", "t", (ps.length > 1 ? (i + 1) + ". " : "") + "$" + clip(q.ticker || q.mint.slice(0, 6), 12)), el("span", "m", `MC ${mcap(n.entry)} → ${mcap(n.now)}`),
+    const who = el("span", "who " + (q.plan === "snipe" ? "sn" : "dk"), q.plan === "snipe" ? "SNIPER" : "DESK");
+    const tt = el("span", "t", (ps.length > 1 ? (i + 1) + ". " : "") + "$" + clip(q.ticker || q.mint.slice(0, 6), 12)); tt.prepend(who);
+    sm.append(tt, el("span", "m", `MC ${mcap(n.entry)} → ${mcap(n.now)}`),
       el("b", n.g === null ? "" : n.g >= 0 ? "pos" : "neg", pcTxt(n.g)), el("b", n.pnl === null ? "" : n.pnl >= 0 ? "pos" : "neg", n.pnl === null ? "P&L —" : signed(n.pnl)));
     det.appendChild(sm);
     const Wq = q.plan === "snipe" ? Object.assign({}, W, W.snipe || {}) : W;      // a sniper buy runs the sniper's exits
-    const inner = el("div", "inner"); inner.appendChild(planBlock(q, Wq, 0, 1, true)); det.appendChild(inner);
+    const inner = el("div", "inner");
+    const sb = el("button", "btn sellbtn", "Sell all now"); sb.type = "button";
+    sb.addEventListener("click", () => { const live = lastStatus && lastStatus.mode === "live";
+      if (!confirm((live ? "REAL MONEY: " : "") + `Sell all of $${q.ticker || q.mint.slice(0, 6)} now? (It won't sell into a quote far under the market.)`)) return;
+      admin("/api/sell", {mint: q.mint}); });
+    inner.append(sb, planBlock(q, Wq, 0, 1, true)); det.appendChild(inner);
     const want = view.openPlans.has(q.mint) ? view.openPlans.get(q.mint) : ps.length === 1;
     det.open = want;
     det.addEventListener("toggle", () => view.openPlans.set(q.mint, det.open));
@@ -1814,7 +1836,7 @@ function render(d){
   sniperRender(d);
 }
 // ---------- the sniper: your own checks, the fast lane, the wallets you follow ----------
-const GROUPS = [["rug", "RUG SAFETY"], ["story", "NARRATIVE & HYPE"], ["who", "WHO'S BEHIND IT"], ["market", "WHERE IT IS"], ["flow", "MOMENTUM NOW"],
+const GROUPS = [["rug", "RUG SAFETY"], ["story", "NARRATIVE & HYPE"], ["upside", "UPSIDE · 2x 3x 5x"], ["who", "WHO'S BEHIND IT"], ["market", "WHERE IT IS"], ["flow", "MOMENTUM NOW"],
   ["smart", "SMART MONEY"], ["attention", "ATTENTION"], ["jev", "JEV"]];
 const checkView = {pending: null, open: new Set()};
 function scoreColor(v){ return v >= 70 ? "#34d399" : v >= 45 ? "#fbbf24" : "#f87171"; }
@@ -1917,7 +1939,7 @@ function sniperRender(d){
   $("snipeGates").textContent = `looks at coins ${G.min_age_minutes ?? "?"}m to ${G.max_age_hours ?? "?"}h old · MC $${compact(G.min_mcap_usd ?? null)} to $${compact(G.max_mcap_usd ?? null)}`
     + ` · liquidity ≥ $${compact(G.min_liquidity_usd ?? null)} · biggest wallet ≤ ${G.max_top_wallet_pct ?? "?"}% · top 10 ≤ ${G.max_top10_pct ?? "?"}% · dev ≤ ${G.max_dev_pct ?? "?"}%`
     + ` · buys at ${S.buy_score ?? "?"}/100` + ((S.story || {}).need_narrative ? " and only with a narrative" : "")
-    + ((S.story || {}).min_hype ? ` and hype ≥ ${S.story.min_hype}/100` : "") + `.  Exits: ` + [P.stop_loss_pct ? `stop −${P.stop_loss_pct}%` : null, ladder ? "sells " + ladder : null,
+    + ((S.story || {}).min_hype ? ` and hype ≥ ${S.story.min_hype}/100` : "") + (S.min_upside_x ? ` and room for ${S.min_upside_x}x+` : "") + `.  Exits: ` + [P.stop_loss_pct ? `stop −${P.stop_loss_pct}%` : null, ladder ? "sells " + ladder : null,
       P.trail_pct ? `trail ${P.trail_pct}% off the top after +${P.trail_arm_pct}%` : null, P.stall_minutes ? `out if not +${P.stall_gain_pct}% within ${P.stall_minutes} min` : null,
       P.max_hold_hours ? `${P.max_hold_hours}h max, riding up to ${P.ride_x || 1}× longer while buyers lead` : null].filter(Boolean).join(" · ")
     + `.  Web search for buzz: ` + (bz.enabled ? `on (${bz.used_hour ?? 0}/${bz.per_hour} this hour)` : "off (needs ANTHROPIC_API_KEY)");
@@ -1927,6 +1949,29 @@ function sniperRender(d){
     if (!M.length) mt.appendChild(el("span", "muted", S.metas_status && S.metas_status !== "ok" ? "DexScreener narratives: " + S.metas_status : "read on the first look"));
     M.forEach(m => { const c = el("span", "mt", m.name); const v = num(m.h24) ?? num(m.h1);
       if (v !== null) c.appendChild(el("b", v >= 0 ? "pos" : "neg", pcTxt(v) + (num(m.h24) !== null ? " 24h" : " 1h"))); mt.appendChild(c); }); }
+  // the desk: normal coins, Jev's picks, every few minutes
+  const SL = d.slots || {}, C = d.cycle || {}, st0 = C.stats || {};
+  const nextAt = Date.parse(d.next_cycle_at), leftS = Number.isFinite(nextAt) ? Math.round((nextAt - (Date.now() + clockOffset)) / 1000) : null;
+  $("deskNote").textContent = SL.desk !== undefined ? `${SL.desk_held}/${SL.desk} DESK SLOTS` : "";
+  const deskBits = [];
+  if (d.paused) deskBits.push("paused: tap Resume");
+  else if (SL.desk_free === false) deskBits.push(SL.desk_held >= SL.desk
+    ? `its ${SL.desk} slot${SL.desk === 1 ? " is" : "s are"} full: the next scan starts when one of its coins sells`
+    : `all ${d.max_positions} slots are taken: the next scan starts when a coin sells`);
+  else deskBits.push("scans for normal coins every " + Math.round((d.cycle_seconds || 300) / 60) + " min" + (leftS !== null ? (leftS > 0 ? ` · next scan in ${Math.floor(leftS / 60)}:${String(leftS % 60).padStart(2, "0")}` : " · scanning now or any second") : ""));
+  if (C.time) deskBits.push(`last scan ${ago(C.time)} ago: ${st0.seen || 0} coins read` + (C.order ? `, picked $${C.order.ticker || "?"}` : st0.stood_down ? `, stood down (${clip(String(st0.stood_down), 80)})` : st0.no_order ? `, no pick (${clip(String(st0.no_order), 80)})` : ""));
+  if (C.why) deskBits.push("cuts: " + clip(C.why, 160));
+  deskBits.push(d.practice ? "practice mode on: looser gates, more trades" : "its own gates (practice mode off)");
+  if ((d.desk_gate || {}).on) deskBits.push(`every pick also passes the rug checks (score ≥ ${d.desk_gate.score})`);
+  $("deskLine").textContent = deskBits.join(" · ");
+  const sa = (d.agents || {}).sniper;
+  $("snipeLatest").textContent = (SL.sniper !== undefined ? `${SL.sniper_held}/${SL.sniper} sniper slots` : "") + (sa && sa.line ? ` · latest: ${clip(sa.line, 150)}` : "");
+  const wh = $("whyHour"), W1 = S.why_hour || {}, wkey2 = JSON.stringify(W1);
+  if (wh.dataset.key !== wkey2){ wh.dataset.key = wkey2; wh.textContent = "";
+    const total = Object.values(W1).reduce((a, b) => a + b, 0);
+    wh.appendChild(el("div", "hd", total ? `WHY NO BUY · LAST HOUR · ${total} COINS CHECKED IN FULL` : "WHY NO BUY · LAST HOUR"));
+    if (!total) wh.appendChild(el("span", "muted", mode === "off" ? "the fast lane is off" : "nothing checked in full yet: the first look runs within a minute"));
+    Object.entries(W1).forEach(([k, n]) => { const c = el("span", k === "BUY" ? "buy" : ""); c.append(el("b", "", String(n)), document.createTextNode(" " + k)); wh.appendChild(c); }); }
   const note = S.note || {};
   $("laneNote").textContent = S.last_round ? `last look ${ago(S.last_round)} ago · ${note.candidates ?? 0} candidates · ${note.checked ?? 0} checked deep` : mode === "off" ? "off" : "first look soon";
   const rb = $("radar"), radar = d.radar || [], rkey = radar.map(x => x.mint + (x.verdict || "") + (x.score ?? "")).join("|") + Math.floor(Date.now() / 30000);

@@ -146,9 +146,14 @@ growing fast:
   hour (between its own looks, or since launch), volume speeding up, the price climbing this hour, trending lists and
   narratives, and talk online.
 
-A coin that's safe but has no story, or whose hype is still slow, is a WATCH: it gets looked at again every few
-minutes while it builds. `SNIPE_NEED_NARRATIVE=off` drops the narrative rule. The same rules apply to the desk's own
-picks.
+**Room for 2x, 3x, 5x.** Every report has an UPSIDE box: the market caps a 2x, 3x and 5x would mean, how far under
+the biggest coin of its own narrative it sits (traders buy the next coin of a hot story while its leader is far
+above), where coins of its size usually top out, and how long a 2x takes at this hour's pace. With less than 2x of
+room (`SNIPE_MIN_UPSIDE_X`) it doesn't buy. It's a read of the room, not a promise.
+
+A coin that's safe but has no story, or whose hype is still slow, or with no room left, is a WATCH: it gets looked at again every few
+minutes while it builds. `SNIPE_NEED_NARRATIVE=off` drops the narrative rule. These are the sniper's rules; the desk's
+normal coins don't need them.
 
 Any single rug-safety failure, a copycat, or "nobody can sell" is a **SKIP**, whatever the score. Unknown is never a
 pass: a check that couldn't be read is a **WATCH**. A **BUY** needs 70/100 (`SNIPE_BUY_SCORE`) and buyers ahead
@@ -164,7 +169,13 @@ look decides which two get the full check. **OFF** = only your own checks, **WAT
 **Wallets you follow.** Add any trader's Solana wallet on the page (or `SMART_WALLETS=address:name,address:name`).
 When one of them buys a coin, that coin is checked within a minute, and a followed buy adds up to 24 points.
 
-**In and out.** The sniper's coins get their own plan: stop at −25%, sell 50% at +50% and 25% at +100%, a 20%
+**Why no buy.** The fast lane box counts, for the last hour, every coin it checked in full and why it didn't buy:
+no narrative, hype too slow, no 2x room, rug risk, copycat, slots full... so a quiet bot always says why.
+
+**Sell now.** Each coin in POSITIONS has a **Sell all now** button (it still won't sell into a quote far under the
+market). Use it to free a slot.
+
+**In and out.** The sniper's coins get their own plan: stop at −25%, sell 30% at +50%, 30% at 2x and 20% at 3x, a 20%
 trailing stop once it's been up 30%, and **out if it hasn't made +10% within 20 minutes** (no momentum, no stay).
 At 12 hours it sells, unless buyers are still ahead and it's still rising: then it rides up to 3x longer. Every
 number is a variable (`SNIPE_*` below).
@@ -177,6 +188,24 @@ lower the bar. It doesn't change its own rules: you do, with the variables.
 buy, the less there is to check. The sniper can't see private Telegram groups or a celebrity's post before
 everyone else. It only reads X, TikTok and Reddit through the web search, which needs `ANTHROPIC_API_KEY` and costs
 about $0.01 per search plus tokens (at most 3 searches a check, `BUZZ_PER_HOUR` checks an hour). Run it on paper first.
+
+## Two bots, their own slots
+
+The desk runs **two bots side by side**:
+
+- **the desk** (normal coins): every `CYCLE_SECONDS` it scans trending and new pools, cuts with its own rules
+  (thresholds.py), asks Jev, and buys Jev's pick, like it always did. Before a cent goes in, its pick also passes the
+  sniper's **safety** checks only (rugs, copycats, people able to sell, not already run and cooling, buyers not
+  behind, a score of at least 40). Not the sniper's early-coin rules: a normal coin doesn't need a trending
+  narrative or a 72-hour age limit.
+- **the sniper** (early coins): every minute, the fast lane, with its narrative, hype and 2x-room rules.
+
+They split the slots so one can never crowd out the other: with `MAX_POSITIONS=5`, 3 are the desk's and 2 the
+sniper's (`DESK_SLOTS`, `SNIPE_SLOTS`). A coin you paste and tell it to buy may take any free slot. The POSITIONS
+panel says which bot bought each coin, and the bottom section has a box for each bot saying what it's doing.
+
+If you want the desk trading as much as it did the first night, `PRACTICE_MODE=true` opens its gates again (paper
+only); the safety checks now run on every pick either way.
 
 ## Several coins at once
 
@@ -219,7 +248,7 @@ still sells for whatever there is, and after 20 minutes of bad quotes it sells a
 
 **Every desk pick gets the sniper's checks.** Before the desk buys its own pick, the sniper runs its full check:
 RugCheck, locked liquidity, the dev wallet, bundles, copycats, whether people can sell, buyers against sellers right
-now. A SKIP, sellers ahead, or a score under 50 (`DESK_GATE_SCORE`) means no buy. `DESK_GATE=off` turns it off. `WATCH=off`
+now. A SKIP, sellers ahead, or a score under 40 (`DESK_GATE_SCORE`) means no buy. `DESK_GATE=off` turns it off. `WATCH=off`
 turns the price manager off; `0` turns a single rule off; `SCALE_OUT=off` removes the ladder. Every sale is its
 own row in TRADES (part sales are marked with the % sold); wins and losses count per coin, not per sale.
 The POSITIONS · TRADE PLAN panel shows each coin's plan live: entry and price now, best so far, which ladder steps are done,
@@ -290,7 +319,8 @@ stays paused until you tap **Resume**.
 | `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
 | `WATCH_SECONDS` | `20` | how often WATCH reads the price of each coin held (10 at least) |
 | `TRAIL_LOCK_PCT` / `SNIPE_TRAIL_LOCK_PCT` | `8` / `10` | once the trail is armed, sell rather than fall back under this gain |
-| `DESK_GATE` / `DESK_GATE_SCORE` | `on` / `50` | every desk pick must pass the sniper's checks and score at least this |
+| `DESK_GATE` / `DESK_GATE_SCORE` | `on` / `40` | every desk pick must pass the sniper's safety checks and score at least this |
+| `DESK_SLOTS` / `SNIPE_SLOTS` | 60% / 40% of `MAX_POSITIONS` (3 / 2) | the slots each bot may fill |
 | `SNIPE_MODE` | `auto` paper, `watch` live | the fast lane: `off`, `watch` (never buys) or `auto` |
 | `SNIPE_BUY_SCORE` | `70` | the score a BUY needs |
 | `SNIPE_SCAN_SECONDS` | `60` | how often the fast lane looks |
@@ -299,10 +329,11 @@ stays paused until you tap **Resume**.
 | `SNIPE_MIN_MCAP_USD` / `SNIPE_MAX_MCAP_USD` | `20000` / `30000000` | the market cap window |
 | `SNIPE_MAX_TOP_WALLET_PCT` / `SNIPE_MAX_TOP10_PCT` / `SNIPE_MAX_DEV_PCT` | `8` / `45` / `10` | rug lines |
 | `SNIPE_BUNDLE_WALLETS` | `8` | this many wallets in the launch block = a bundled launch |
-| `SNIPE_STOP_LOSS_PCT`, `SNIPE_SCALE_OUT`, `SNIPE_TRAIL_ARM_PCT`, `SNIPE_TRAIL_PCT` | `25`, `50:50,100:25`, `30`, `20` | the sniper's exits |
+| `SNIPE_STOP_LOSS_PCT`, `SNIPE_SCALE_OUT`, `SNIPE_TRAIL_ARM_PCT`, `SNIPE_TRAIL_PCT` | `25`, `50:30,100:30,200:20`, `30`, `20` | the sniper's exits (sells at +50%, 2x and 3x) |
 | `SNIPE_STALL_MINUTES` / `SNIPE_STALL_GAIN_PCT` | `20` / `10` | out if it hasn't made +10% within 20 min |
 | `SNIPE_MAX_HOLD_HOURS` / `SNIPE_RIDE_X` | `12` / `3` | max hold, and how much longer it rides while buyers lead |
 | `SNIPE_NEED_NARRATIVE` / `SNIPE_MIN_HYPE` | `on` / `50` | buy only coins with a narrative, and hype at least this |
+| `SNIPE_MIN_UPSIDE_X` | `2` | buy only with room for at least this many x |
 | `SMART_WALLETS` | none | wallets to follow: `address:name,address:name` (or add them on the page) |
 | `ANTHROPIC_API_KEY` | none | turns on the web search for buzz (X, Reddit, TikTok, news), from console.anthropic.com |
 | `BUZZ_PER_HOUR` / `BUZZ_MODEL` | `6` / `claude-haiku-5-5` | web-searched checks per hour (your own checks may use up to 30) |
