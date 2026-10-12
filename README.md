@@ -35,6 +35,7 @@ Everything below works from an iPhone in Safari.
    | `ADMIN_TOKEN` | make up a password, at least 16 characters. The Pause button asks for it. |
    | `LIVE_MODE` | `false` |
    | `JUPITER_API_KEY` | recommended: a free key from **portal.jup.ag**. Without one, Jupiter limits you harder. |
+   | `SOLANA_RPC_URL` | recommended: `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` (free key at **helius.dev**) |
    | `PORT` | `8080` |
    | `GOAL_USD` | optional: draws the goal bar, e.g. `2000` |
 
@@ -114,7 +115,7 @@ stays paused until you tap **Resume**.
 | `LIVE_MODE` | `false` | exactly `true` or `false` |
 | `BOT_WALLET_KEY` | none | live only. The bot account's private key, in Phantom's export format. |
 | `JUPITER_API_KEY` | none | recommended |
-| `SOLANA_RPC_URL` | public endpoints | your own RPC (e.g. a free Helius key) if the public ones rate-limit |
+| `SOLANA_RPC_URL` | public endpoints | strongly recommended: `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` (free key at helius.dev). Public endpoints often refuse the holder lookup, and then every token is cut as `top_wallet_unknown`. |
 | `GOAL_USD` | none | the goal bar |
 | `PAPER_BANK_USD` | `1000` | paper mode's starting cash |
 | `MIN_TICKET_USD` | `5` | no buy smaller than this |

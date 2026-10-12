@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 from collections import deque
 
 import requests
@@ -34,7 +35,23 @@ log = logging.getLogger(__name__)
 GT_KEY = os.environ.get("COINGECKO_DEMO_API_KEY", "").strip() or None
 GT = "https://api.coingecko.com/api/v3/onchain" if GT_KEY else "https://api.geckoterminal.com/api/v2"
 DEX = "https://api.dexscreener.com/tokens/v1"            # chain-scoped token endpoint, documented
-SOLANA_RPC = os.environ.get("SOLANA_RPC_URL", "https://api.mainnet.solana.com")
+# Your own RPC first (SOLANA_RPC_URL, e.g. a free Helius key), then public endpoints. Public ones rate-limit and
+# some refuse getTokenLargestAccounts, so one refusing is not the answer: the next one is asked.
+RPC_FALLBACKS = ("https://solana-rpc.publicnode.com", "https://solana.drpc.org",
+                 "https://api.mainnet.solana.com", "https://api.mainnet-beta.solana.com")
+RPC_FAILURES: list[str] = []      # calls every endpoint refused, newest last, for the dashboard. Hosts only:
+_rpc_last_good = [None]           # an RPC URL can carry an API key and is never logged whole
+
+
+def _rpc_urls():
+    own = os.environ.get("SOLANA_RPC_URL", "").strip()
+    urls = ([own] if own else []) + [u for u in RPC_FALLBACKS if u != own]
+    good = _rpc_last_good[0]
+    return ([good] + [u for u in urls if u != good]) if good in urls else urls
+
+
+def _host(url):
+    return urllib.parse.urlsplit(url).hostname or "rpc"
 
 GT_NET = {1399811149: "solana", 4663: "robinhood", 56: "bsc", 8453: "base"}
 FOMO_NET = {v: k for k, v in GT_NET.items()}
@@ -403,16 +420,25 @@ def on_curve(address: str) -> bool | None:
 
 
 def _rpc(method, params):
-    try:
-        r = HTTP.post(SOLANA_RPC, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=20)
-        body = r.json()
-    except (requests.RequestException, ValueError) as exc:
-        log.warning("solana rpc %s failed: %s", method, exc)
-        return None
-    if not isinstance(body, dict) or "result" not in body:
-        log.warning("solana rpc %s error: %s", method, str(body.get("error") if isinstance(body, dict) else body)[:120])
-        return None
-    return body["result"]
+    """The result, or None when every endpoint failed. A refusal is never read as an empty answer."""
+    why = []
+    for url in _rpc_urls():
+        try:
+            r = HTTP.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=10)
+            body = r.json()
+        except (requests.RequestException, ValueError) as exc:
+            why.append(f"{_host(url)}: {type(exc).__name__}")
+            continue
+        if isinstance(body, dict) and "result" in body:
+            _rpc_last_good[0] = url
+            return body["result"]
+        err = body.get("error") if isinstance(body, dict) else body
+        msg = err.get("message") if isinstance(err, dict) else err
+        why.append(f"{_host(url)}: {str(msg)[:80] or getattr(r, 'status_code', '?')}")
+    log.warning("solana rpc %s failed everywhere: %s", method, "; ".join(why))
+    RPC_FAILURES.append(f"{method}: " + "; ".join(why))
+    del RPC_FAILURES[:-20]
+    return None
 
 
 def sol_chain_facts(mint: str) -> dict:

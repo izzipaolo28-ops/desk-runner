@@ -141,7 +141,12 @@ class Runner:
         bank = self.last_bank = self.seats.bank()
         if bank is not None and not self.seats.daily_guard(bank):
             return "paused"
+        collect.RPC_FAILURES.clear()
         order, stats = main.run_once(self.lister, self.judge, self, bank, shadow=False)
+        if collect.RPC_FAILURES:                 # a token cut for *_unknown because Solana refused: say so
+            stats["rpc_failed"] = len(collect.RPC_FAILURES)
+            self.state.error(f"Solana RPC refused {len(collect.RPC_FAILURES)} call(s) this cycle, last: "
+                             f"{collect.RPC_FAILURES[-1][:200]}. A free key from helius.dev in SOLANA_RPC_URL fixes this.")
         self.report(order, stats)
         if order:
             self.seats.send_to_seats(order, bank)
