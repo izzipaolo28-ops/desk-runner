@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 import book
 import collect
+import thresholds
 from jupiter import USDC, WSOL, JupiterError
 from main import TICKET_SHARE
 from solana_wallet import sign_transaction
@@ -75,7 +76,7 @@ class State:
         self.data = {"position": None, "trades": [], "equity": [], "paused": False, "pause_reason": None,
                      "day": None, "day_start_bank": None, "realized_today": 0.0, "agents": {}, "errors": [],
                      "judge": [], "cycle": None, "shadow": [], "started_at": _now(),
-                     "feed": [], "working": None, "tests": []}
+                     "feed": [], "working": None, "tests": [], "totals": {}, "lens": None}
         try:
             with open(path) as fh:
                 self.data.update(json.load(fh))
@@ -97,15 +98,71 @@ class State:
         with self.lock:
             self.data["agents"][name] = {"line": str(line)[:160], "value": _f(value), "label": label, "updated": _now()}
 
-    def feed(self, agent, kind, text, ticker=None, mint=None):
+    def feed(self, agent, kind, text, ticker=None, mint=None, check=None, no=None, ms=None):
         """One line of the live feed: which coin, which seat, what happened. Newest first."""
         row = {"t": _now(), "agent": agent, "kind": kind, "text": str(text)[:160]}
         if ticker:
             row["ticker"] = str(ticker)[:16]
         if isinstance(mint, str) and 32 <= len(mint) <= 44:
             row["mint"] = mint
+        if check:
+            row["check"] = check
+        if isinstance(no, int):
+            row["no"] = no
+        if isinstance(ms, int):
+            row["ms"] = ms
         with self.lock:
             self.data["feed"] = ([row] + (self.data.get("feed") or []))[:FEED_MAX]
+
+    def bump(self, name, by=1):
+        """Running totals since the desk started (survive restarts with the state file)."""
+        with self.lock:
+            totals = self.data.setdefault("totals", {})
+            totals[name] = int(totals.get(name) or 0) + by
+            return totals[name]
+
+    def lens(self, t, stage, killed, no=None, answers=None):
+        """The coin under the lens: its real numbers next to every threshold, for thresholds.py on the page.
+        A number the desk doesn't have is None and shows as unknown, never as a pass."""
+        f = lambda k: _f(t.get(k))
+        age, top_w, top_10 = f("age_minutes"), f("top_wallet_percent"), f("top_10_percent")
+        facts = {"age_minutes": age, "liquidity_usd": f("liquidity_usd"), "volume_h24": f("volume_h24"),
+                 "mcap_usd": f("mcap_usd"), "price_usd": f("price_usd"), "holders": f("holder_count"),
+                 "trades_h24": f("trades_h24"), "top_wallet": None if top_w is None else top_w / 100,
+                 "top_10": None if top_10 is None else top_10 / 100,
+                 "change_1h": _f((t.get("change") or {}).get("1h")), "change_24h": _f((t.get("change") or {}).get("24h"))}
+        H = thresholds.HARD
+        rule = {"min_age_minutes": ("age_minutes", "min"), "max_age_hours": ("age_minutes", "max_h"),
+                "min_liquidity_usd": ("liquidity_usd", "min"), "min_volume_h24": ("volume_h24", "min"),
+                "min_mcap_usd": ("mcap_usd", "min"), "max_mcap_usd": ("mcap_usd", "max"),
+                "min_trades_h24": ("trades_h24", "min"), "max_top_wallet": ("top_wallet", "max"),
+                "max_top_10": ("top_10", "max"), "min_holders": ("holders", "min")}
+        hard = []
+        for k, limit in H.items():
+            fact, how = rule.get(k, (None, None))
+            v = facts.get(fact) if fact else None
+            if v is None or how is None:
+                ok = None
+            elif how == "min":
+                ok = v >= limit
+            elif how == "max":
+                ok = v <= limit
+            else:
+                ok = v <= limit * 60
+            hard.append({"k": k, "limit": limit, "v": v, "unit": "min" if fact == "age_minutes" else None, "ok": ok})
+        soft = []
+        for k, (direction, limit) in thresholds.SOFT.items():
+            a = (answers or {}).get(k) if answers else None
+            v = _f(a.get("noul", a.get("score"))) if isinstance(a, dict) else None
+            ok = None if v is None else (v <= limit if direction == "max" else v >= limit)
+            soft.append({"k": k, "dir": direction, "limit": limit, "v": v, "ok": ok})
+        with self.lock:
+            prev = self.data.get("lens") or {}
+            if prev.get("mint") == t.get("addr") and answers is None:
+                soft = prev.get("soft") or soft            # keep Jev's numbers while the same coin moves on
+            self.data["lens"] = {"time": _now(), "no": no, "ticker": str(t.get("ticker") or "")[:16] or None,
+                                 "mint": t.get("addr"), "stage": stage, "verdict": killed or "passed",
+                                 "facts": facts, "hard": hard, "soft": soft}
 
     def set_working(self, agent=None, step=None, ticker=None, mint=None, n=None, of=None):
         """What the desk is doing this second, for the floor. agent=None: nothing (between scans)."""
@@ -289,6 +346,7 @@ class Seats:
             return self.release_unfilled(order, f"FILLS: {exc}")
         self.state.agent("fills", f"in ${pos['cost_usd']:,.2f} on {label}, impact {pos['impact_pct']:.2f}%"
                          + (" (paper)" if pos["mode"] == "paper" else ""), pos["cost_usd"], "last fill")
+        self.state.bump("buys")
         self.state.feed("fills", "buy", f"BOUGHT ${pos['cost_usd']:,.2f}"
                         + (" (paper)" if pos["mode"] == "paper" else " with real SOL")
                         + f", impact {pos['impact_pct']:.2f}%", **coin)
@@ -453,6 +511,7 @@ class Seats:
         losses = sum(1 for t in self.state.data["trades"] if (t.get("pnl_usd") or 0) < 0)
         self.state.agent("risk", f"closed {label}: {why}" + (f", ${pnl:+,.2f}" if pnl is not None else ", P&L unknown"),
                          pnl, f"{wins}W {losses}L")
+        self.state.bump("sells")
         self.state.feed("risk", "sell", ("SOLD " + (f"{pnl:+,.2f} USD" if pnl is not None else "(P&L unknown)")
                                          + (" (paper)" if pos["mode"] == "paper" else "") + f": {why}"),
                         pos.get("ticker"), pos.get("mint"))

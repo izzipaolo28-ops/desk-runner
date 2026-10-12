@@ -47,7 +47,9 @@ from solana_wallet import RPC, Keypair, WalletKeyError  # noqa: E402
 
 log = logging.getLogger("runner")
 NETS = tuple(n.strip() for n in os.environ.get("NETS", "solana").split(",") if n.strip())
-CYCLE_SECONDS = float(os.environ.get("CYCLE_SECONDS", main.CYCLE_SECONDS))
+CYCLE_SECONDS = float(os.environ.get("CYCLE_SECONDS", 300))     # 5 minutes: three times main's 15, at Jev's ~$0.0001 a scan
+DESK_TITLE = os.environ.get("DESK_TITLE", "GROKBOT + JEV").strip()[:40] or "GROKBOT + JEV"
+DESK_TAGLINE = os.environ.get("DESK_TAGLINE", "JEV PICKS, CODE TRADES").strip()[:60]
 
 
 TRENDING_WINDOW = os.environ.get("TRENDING_WINDOW", "1h").strip()
@@ -109,13 +111,24 @@ class Runner:
         self.last_cycle = self.last_risk = None
         self.last_bank = None
         self.test_requested = False
-        self.coin, self.seen_n, self.seen_of = {}, 0, None
+        self.coin, self.seen_n, self.seen_of, self.coin_no, self.judge_ms = {}, 0, None, None, 0
         main.universe = universe                  # trade only what Jupiter can, trending first
         self._instrument()
 
     # ---------- the live feed: main.run_once is the desk's code, unchanged; each step it calls is wrapped ----------
     def _instrument(self):
         st, R = self.state, self
+        R.ms = {}
+
+        def timed(fn, *a, **k):
+            t0 = time.perf_counter()
+            try:
+                return fn(*a, **k)
+            finally:
+                R.ms[fn.__name__] = int((time.perf_counter() - t0) * 1000)
+
+        def feed(agent, kind, text, t, check, ms=None):
+            st.feed(agent, kind, text, check=check, no=R.coin_no, ms=ms, **_coin(t))
 
         def shortlist(fomo, ids):
             listed = collect.shortlist(fomo, ids)
@@ -129,47 +142,68 @@ class Runner:
 
         def free_kill(t):
             R.seen_n += 1
+            R.coin_no = st.bump("coins")
             step("crawler", "free_kill", t)
-            k = desk_filter.free_kill(t)
-            st.feed("crawler", "cut" if k else "pass", f"cut: {k}" if k else "passed the free checks", **_coin(t))
+            k = timed(desk_filter.free_kill, t)
+            st.lens(t, "free_kill", k, R.coin_no)
+            feed("crawler", "cut" if k else "pass", f"cut: {k}" if k else "passed the free checks", t, "free_kill",
+                 R.ms.get("free_kill"))
+            if k:
+                st.bump("cut")
             return k
 
         def trade_counts(t):
             step("crawler", "trade data", t)
-            return collect.trade_counts(t)
+            return timed(collect.trade_counts, t)
 
         def trade_kill(t):
             k = desk_filter.trade_kill(t)
+            st.lens(t, "trade_kill", k, R.coin_no)
+            ms = R.ms.get("trade_counts")
             if k:
-                st.feed("crawler", "cut", f"cut: {k}", **_coin(t))
+                st.bump("cut")
+                feed("crawler", "cut", f"cut: {k}", t, "trade_kill", ms)
             else:
-                st.feed("crawler", "pass", f"trades ok: {t.get('trades_h24')} in 24h", **_coin(t))
+                feed("crawler", "pass", f"trades ok: {t.get('trades_h24')} in 24h", t, "trade_kill", ms)
             return k
 
         def dossier(t):
             step("vet", "dossier", t)
             try:
-                return collect.dossier(t)
+                return timed(collect.dossier, t)
             except collect.DossierFailed as exc:
-                st.feed("vet", "error", f"dossier failed: {str(exc)[:80]}", **_coin(t))
+                feed("vet", "error", f"dossier failed: {str(exc)[:80]}", t, "dossier", R.ms.get("dossier"))
                 raise
 
         def chain_kill(d):
             step("vet", "chain_kill", d)
             k = desk_filter.chain_kill(d)
+            st.lens(d, "chain_kill", k, R.coin_no)
+            ms = R.ms.get("dossier")
             if k:
-                st.feed("vet", "cut", f"cut: {k}", **_coin(d))
+                st.bump("cut")
+                st.bump("rugs")
+                feed("vet", "cut", f"cut: {k}", d, "chain_kill", ms)
             else:
                 tw = d.get("top_wallet_percent")
-                st.feed("vet", "pass", "chain ok" + (f": top wallet {tw:.1f}%" if isinstance(tw, (int, float)) else ""),
-                        **_coin(d))
+                feed("vet", "pass", "chain ok" + (f": top wallet {tw:.1f}%" if isinstance(tw, (int, float)) else ""),
+                     d, "chain_kill", ms)
+                handle = d.get("x_handle")       # SOCIAL's honest state for this coin: what exists, what was read
+                st.agent("social", (f"@{handle} is the token's published X account. Posts not read: no X source "
+                                    "is set, so the ticket takes the x0.60 cut" if handle else
+                                    "this token publishes no X account: ticket x0.60, never a look-alike handle"),
+                         None, "x account")
+            R.judge_ms = 0
             return k
 
         def soft_kill(ans, d=None, asked=()):
             k = desk_filter.soft_kill(ans, d, asked)
-            coin = _coin(d or {})
-            st.feed("chief" if not k else "vet", "cut" if k else "pass",
-                    f"Jev says no: {k}" if k else "survived every check: goes to the pick", **coin)
+            st.lens(d or {}, "soft_kill", k, R.coin_no, answers=ans)
+            if k:
+                st.bump("cut")
+            feed("chief" if not k else "vet", "cut" if k else "pass",
+                 f"Jev says no: {k}" if k else "survived every check: goes to the pick", d or {}, "soft_kill",
+                 getattr(R, "judge_ms", None))
             return k
 
         def pick(ask, survivors):
@@ -177,6 +211,7 @@ class Runner:
                 st.set_working("chief", "pick", n=len(survivors), of=len(survivors))
             order, why = desk_pick.pick(ask, survivors)
             if order:
+                st.bump("picks")
                 tok = order["token"]
                 st.feed("chief", "pick", f"PICK, confidence {_fmt(order.get('confidence'))}",
                         tok.get("ticker"), tok.get("address"))
@@ -192,7 +227,10 @@ class Runner:
         seat = {"market": "scan", "social": "social", "pick": "chief"}.get(set_name, "vet")
         if set_name != "pick":
             self.state.set_working(seat, f"asking Jev: {set_name}", n=self.seen_n, of=self.seen_of, **self.coin)
+        t0 = time.perf_counter()
         r = self._judge(set_name, state)
+        self.judge_ms = getattr(self, "judge_ms", 0) + int((time.perf_counter() - t0) * 1000)
+        self.state.bump("jev")
         if set_name != "pick":
             self.state.feed(seat, "ask", f"Jev answered the {set_name} questions", **self.coin)
         answers = r.get("answers") or {}
@@ -270,6 +308,29 @@ class Runner:
         self.snapshot()
         return "cycle: order" if order else "cycle: no order"
 
+    def idle_lines(self):
+        """Between picks SIZE, FILLS and RISK still say something true: the ticket they would cut, the price Jupiter
+        quotes right now, the rule RISK would sell on. Never a made-up figure: unknown stays unknown."""
+        bank = self.last_bank
+        if self.state.data.get("position") is None:
+            if _f(bank) is not None:
+                top = bank * main.TICKET_SHARE * thresholds.NO_SOCIAL_CUT
+                self.state.agent("size", f"ready: next ticket up to ${top:,.2f} = 6% of ${bank:,.0f} x {thresholds.NO_SOCIAL_CUT} "
+                                         f"(no X read); never under ${self.cfg.min_ticket_usd:g} or over 2% of the pool",
+                                 top, "ticket")
+            else:
+                self.state.agent("size", "bank unknown: no ticket can be sized", None, "ticket")
+            sol = self.seats.sol_usd()
+            mode = "LIVE" if self.cfg.live else "paper"
+            self.state.agent("fills", f"{mode}: Jupiter quoting, 1 SOL = ${sol:,.2f}" if sol is not None else
+                             f"{mode}: Jupiter not answering right now (see errors)", sol, "1 SOL $")
+            trades = self.state.data.get("trades") or []
+            w = sum(1 for t in trades if (t.get("pnl_usd") or 0) > 0)
+            l = sum(1 for t in trades if (t.get("pnl_usd") or 0) < 0)
+            today = _f(self.state.data.get("realized_today")) or 0.0
+            self.state.agent("risk", f"flat. Sells a position when volume ratio < 0.20; stops the day at "
+                                     f"-{self.cfg.max_daily_loss_pct:g}% (today {today:+,.2f} USD)", None, f"{w}W {l}L")
+
     # ---------- dashboard requests (admin token checked by the handler) ----------
     def request_scan(self):
         """'Scan now': the next tick runs a cycle instead of waiting out CYCLE_SECONDS."""
@@ -331,6 +392,9 @@ class Runner:
                              order.get("confidence"), "confidence")
         self.state.agent("crawler", f"{stats.get('seen', 0)} seen, {stats.get('benched', 0)} benched · "
                                     + (why(stats) or "nothing cut"), stats.get("seen"), "seen")
+        self.state.bump("scans")
+        if order is None:
+            self.idle_lines()
         self.state.feed("chief", "info", f"scan done: {stats.get('seen', 0)} coins, "
                         + ("stood down: " + str(stats["stood_down"])[:80] if stats.get("stood_down")
                            else "order placed" if order else f"no order ({stats.get('no_order') or 'nothing survived'})"))
@@ -362,7 +426,9 @@ class Runner:
         d.update(next_cycle_at=None if holding or d.get("paused") else
                  _iso(self.clock() if self.last_cycle is None else self.last_cycle + CYCLE_SECONDS),
                  next_risk_at=_iso(self.last_risk + self.cfg.risk_poll_seconds) if holding and self.last_risk else None,
-                 server_now=_iso(self.clock()), test_swap_usd=TEST_SWAP_USD)
+                 server_now=_iso(self.clock()), test_swap_usd=TEST_SWAP_USD, title=DESK_TITLE, tagline=DESK_TAGLINE,
+                 start_bank=self.cfg.paper_bank_usd if not self.cfg.live else None, overrides=OVERRIDES,
+                 thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD})
         d.pop("shadow", None)
         return d
 
@@ -447,6 +513,45 @@ def start_desk(state):
     return True
 
 
+OVERRIDES = {}
+
+
+def apply_overrides(env):
+    """HARD_<NAME>, SOFT_<NAME>, SHAPE_MIN_CROWD, PICK_MIN_WORTH, PICK_MIN_CONF from the variables, so a threshold can
+    be tuned from the phone. Changed in place, where filter.py and pick.py read them. A bad value stops the desk
+    and names the variable (never its value)."""
+    applied = {}
+    for name, raw in env.items():
+        key = None
+        if name.startswith("HARD_") and name[5:].lower() in thresholds.HARD:
+            key = ("HARD", name[5:].lower())
+        elif name.startswith("SOFT_") and name[5:].lower() in thresholds.SOFT:
+            key = ("SOFT", name[5:].lower())
+        elif name in ("SHAPE_MIN_CROWD", "PICK_MIN_WORTH", "PICK_MIN_CONF"):
+            key = ("ONE", name)
+        if key is None:
+            continue
+        try:
+            v = float(str(raw).strip())
+        except ValueError:
+            v = math.nan
+        if not math.isfinite(v) or v < 0 or (key[0] != "HARD" and v > 10):
+            raise SetupProblem(f"{name} must be a number" + ("" if key[0] == "HARD" else " between 0 and 10"))
+        if key[0] == "HARD":
+            old = thresholds.HARD[key[1]]
+            thresholds.HARD[key[1]] = int(v) if isinstance(old, int) and v.is_integer() else v
+        elif key[0] == "SOFT":
+            thresholds.SOFT[key[1]] = (thresholds.SOFT[key[1]][0], v)
+        else:
+            for mod in (thresholds, desk_filter, desk_pick):
+                if hasattr(mod, name):
+                    setattr(mod, name, v)
+        applied[name] = v
+    OVERRIDES.clear()
+    OVERRIDES.update(applied)
+    return applied
+
+
 class SetupProblem(Exception):
     """A variable is wrong. The page says which one; nothing scans or trades until it is fixed."""
 
@@ -482,6 +587,7 @@ def build(env=os.environ):
         raise SetupProblem("LIVE_MODE=true on Railway needs a volume first: without one, a redeploy forgets the open "
                            "position while the tokens are still in the wallet")
     cfg = Config(env)
+    apply_overrides(env)
     state = State(os.path.join(DATA_DIR, "state.json"))
     key = env.get("BOT_WALLET_KEY", "").strip()
     kp = Keypair.from_env(key) if key else None

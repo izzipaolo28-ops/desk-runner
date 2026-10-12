@@ -85,9 +85,12 @@ account like any other swap, so you can see them there, or sell by hand.
 | **Test swap** | paper: asks Jupiter for real SOL→USDC→SOL quotes, sends nothing. Live: really swaps about `TEST_SWAP_USD` ($1) of SOL to USDC and back, with Solscan links for both transactions. Do this once after going live, before the bot trades a memecoin. |
 | **Pause / Resume** | stop / restart new buys. RISK keeps managing an open position. |
 
-The floor at the top shows the crawler carrying the coin being checked from desk to desk, a countdown to the next
-scan, and the live feed lists every coin: what was cut and why, what Jev was asked, what was bought and sold. Tap a
-coin to open its DexScreener chart.
+On the floor the crawler (the spider) carries the coin being read to the seat reading it, tickets fly to the
+shredder when a coin is cut and to the big screen when Jev is asked, and the screens show real numbers only: the
+big monitor draws the coin's 5-minute candles from GeckoTerminal (fetched by your phone) or says it has none, the
+desk monitors show the balance, fills, tickets, P&L and coins per scan. thresholds.py shows the coin under the
+lens with its real value next to every rule, ✓ or ✗. The live feed lists every coin: what was cut and why, what Jev
+was asked, what was bought and sold. Tap a coin to open its DexScreener chart.
 
 ## Stopping it
 
@@ -136,11 +139,19 @@ stays paused until you tap **Resume**.
 | `STOP_LOSS_PCT` | `0` (off) | also sell if the position is down this much |
 | `FEE_RESERVE_SOL` | `0.02` | SOL the bot never spends |
 | `RISK_POLL_SECONDS` | `300` | how often RISK checks an open position (at least 30) |
-| `CYCLE_SECONDS` | `900` | time between scans |
+| `CYCLE_SECONDS` | `300` | time between scans (5 minutes) |
 | `TRENDING_PAGES` | `1` | pages of GeckoTerminal trending pools scanned first (0 to 3; 0 = new pools only) |
 | `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
 | `TEST_SWAP_USD` | `1` | size of the Test swap round trip, $0.50 to $20 |
+
+| `DESK_TITLE` / `DESK_TAGLINE` | `GROKBOT + JEV` / `JEV PICKS, CODE TRADES` | the page's name and tagline |
+| `HARD_<NAME>` | thresholds.py | override one HARD number, e.g. `HARD_MAX_AGE_HOURS=168` |
+| `SOFT_<NAME>` | thresholds.py | override one SOFT limit, e.g. `SOFT_MOMENTUM_ALREADY_SPENT=0.75` |
+| `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
+
+Overrides change the desk's rules, in paper and in live alike. The thresholds.py panel on the page shows the
+numbers in force and lists which ones came from the variables.
 
 A variable that is set but isn't a valid number stops the desk and names the variable. It is never silently
 replaced with the default.
