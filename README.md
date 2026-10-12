@@ -37,7 +37,7 @@ Everything below works from an iPhone in Safari.
    | `JUPITER_API_KEY` | recommended: a free key from **portal.jup.ag**. Without one, Jupiter limits you harder. |
    | `SOLANA_RPC_URL` | recommended: `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` (free key at **helius.dev**) |
    | `PORT` | `8080` |
-   | `GOAL_USD` | optional: draws the goal bar, e.g. `2000` |
+   | `GOAL_USD` | optional: a starting goal for the bar at the top, e.g. `2000` (you can also set it from the page) |
 
    Then tap **Deploy** to apply the changes.
 5. **Your permanent link.** Go to the service's **Settings**, then **Networking**, then **Generate Domain**. If it asks
@@ -81,11 +81,40 @@ account like any other swap, so you can see them there, or sell by hand.
 
 | button | what it does |
 |---|---|
-| **Scan now** | runs the next scan right away instead of waiting out the 15 minutes (not while holding, not twice a minute) |
+| **Scan now** | runs the next scan right away instead of waiting out the 5 minutes (not when every slot is full, not twice a minute) |
 | **Test swap** | paper: asks Jupiter for real SOL→USDC→SOL quotes, sends nothing. Live: really swaps about `TEST_SWAP_USD` ($1) of SOL to USDC and back, with Solscan links for both transactions. Do this once after going live, before the bot trades a memecoin. |
-| **Pause / Resume** | stop / restart new buys. RISK keeps managing an open position. |
+| **Pause / Resume** | stop / restart new buys. RISK and WATCH keep managing the coins already held. |
+| **✎ goal** (top bar) | set your goal in dollars, like `10000` or `10k`; empty clears it |
 
-On the floor the crawler (the spider) carries the coin being read to the seat reading it, tickets fly to the
+## The page
+
+- **Top bar:** your bank (cash + coins at their last value) → your goal, the bar, and the % of the goal reached.
+- **Under BALANCE:** one banner per coin held: market cap at the buy → market cap now, % up or down, and its P&L.
+  Tap one and it goes on the big chart.
+- **JEV · ANALYSIS:** the big chart. The chips above it pick the coin: every coin held, plus the coin being
+  scanned. It opens on **● LIVE**, a candle chart built from every trade on the coin:
+  - **Top strip:** the coin's logo, name and age, its address (tap to copy), then Market cap, **Your entry MC**
+    (with % since the buy), **P&L now**, Price, 24H change, 24H Vol., Liquidity, Holders.
+  - **Toolbar:** candle size **1s / 5s / 15s / 1m / 5m**, candles or a line, **Price / MCap**.
+  - **On the chart:** your entry market cap as a white dashed line, the stop-loss and the next take-profit step,
+    a **B** where the desk bought and an **S** where it sold, volume bars, and the price now on the right.
+    Drag sideways to go back in time (**⇥ LIVE** returns), tap or hover a candle for its numbers, zoom with
+    **− / +**, **log** for a log scale.
+  - **Where the numbers come from:** trades from GeckoTerminal every 3.5 seconds, DexScreener's price and the
+    coin's info every 2.5 seconds, holders every 5 minutes. Your phone fetches them, and only while the chart is
+    on screen. LAST TRADES under it lists each trade with a Solscan link.
+  - **Under the chart:** **● LIVE**, **Candles** (DexScreener's own chart), **Open in FOMO**, **DexScreener ↗**,
+    **Solscan ↗**. The small charts on the side are the latest other coins; tap one to look at it for 2 minutes.
+- **POSITIONS · TRADE PLAN:** one line per coin (MC in → now, %, P&L) so all of them fit; tap a line for that
+  coin's whole plan. MONEY under it covers every coin together.
+- **FOMO:** FOMO's web app needs your login and has no public page or embed for a coin, so FOMO's own chart can't
+  sit inside this page; the LIVE chart is built from the same on-chain trades instead. **Open in FOMO**
+  copies the coin's address (paste it in FOMO's search). If you set `FOMO_LINK` to FOMO's link for one coin with
+  `{mint}` where the address goes, the button opens that coin directly.
+
+On the floor the seats walk around their desks and visit each other; when one has work it runs back to its desk.
+CHIEF does rounds of every desk from the head of the floor and carries each PICK over to SIZE. The crawler (the
+spider) carries the coin being read to the seat reading it, tickets fly to the
 shredder when a coin is cut and to the big screen when Jev is asked, and the screens show real numbers only: the
 big monitor draws the coin's 5-minute candles from GeckoTerminal (fetched by your phone) or says it has none, the
 desk monitors show the balance, fills, tickets, P&L and coins per scan. thresholds.py shows the coin under the
@@ -123,7 +152,7 @@ no action on a number it can't read):
 RISK's volume rule still runs every 5 minutes on top (volume ratio under 0.20 → sell everything). `WATCH=off`
 turns the price manager off; `0` turns a single rule off; `SCALE_OUT=off` removes the ladder. Every sale is its
 own row in TRADES (part sales are marked with the % sold); wins and losses count per coin, not per sale.
-The POSITION · TRADE PLAN panel shows the plan live: entry and price now, best so far, which ladder steps are done,
+The POSITIONS · TRADE PLAN panel shows each coin's plan live: entry and price now, best so far, which ladder steps are done,
 the exact price the trailing stop and the stop-loss sell at, and MONEY: cash, what's in the coin, the worst case to
 the stop, what's banked today and how much of the daily loss limit is left.
 
@@ -138,7 +167,7 @@ second leg up. Test them in paper first.
 | out of the position now | sell the token in Phantom (it's your bot account), then Pause. |
 | everything off | sell in Phantom first, then in Railway open the service's **Deployments** and **Remove** the active one. Nothing runs until you redeploy. |
 
-## What it does each cycle (every 15 min, unless it's holding)
+## What it does each cycle (every 5 min, while a slot is free)
 
 `free_kill` → `trade_kill` → `chain_kill` → `soft_kill` → `pick` → SIZE → FILLS → RISK
 
@@ -169,7 +198,8 @@ stays paused until you tap **Resume**.
 | `BOT_WALLET_KEY` | none | live only. The bot account's private key, in Phantom's export format. |
 | `JUPITER_API_KEY` | none | recommended |
 | `SOLANA_RPC_URL` | public endpoints | strongly recommended: `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` (free key at helius.dev). Public endpoints often refuse the holder lookup, and then every token is cut as `top_wallet_unknown`. |
-| `GOAL_USD` | none | the goal bar |
+| `GOAL_USD` | none | a starting goal for the top bar (a goal set from the page wins) |
+| `FOMO_LINK` | none | FOMO's link for one coin with `{mint}` for the address, e.g. copied from FOMO's share button; must start with `https://` |
 | `PAPER_BANK_USD` | `1000` | paper mode's starting cash |
 | `MIN_TICKET_USD` | `5` | no buy smaller than this |
 | `MAX_IMPACT_PCT` | `3` | refuse fills with more price impact |
@@ -184,12 +214,10 @@ stays paused until you tap **Resume**.
 | `MAX_POSITIONS` | `5` | coins held at once (1 to 10) |
 | `MAX_EXPOSURE_PCT` | `25` | all coins together, as % of cash + coins |
 | `TEST_SWAP_USD` | `1` | size of the Test swap round trip, $0.50 to $20 |
-
 | `DESK_TITLE` / `DESK_TAGLINE` | `GROKBOT + JEV` / `JEV PICKS, CODE TRADES` | the page's name and tagline |
 | `HARD_<NAME>` | thresholds.py | override one HARD number, e.g. `HARD_MAX_AGE_HOURS=168` |
 | `SOFT_<NAME>` | thresholds.py | override one SOFT limit, e.g. `SOFT_MOMENTUM_ALREADY_SPENT=0.75` |
 | `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
-
 | `PRACTICE_MODE` | none | `true` (paper only): opens the gates that keep most coins out, so you can watch the desk buy and sell. It sets `SHAPE_MIN_CROWD=0.25`, `PICK_MIN_WORTH=0.20`, `PICK_MIN_CONF=0.30`, momentum 0.90, concentration 0.80, dev 0.80, liquidity fit 0.35, age 168h, top wallet 12%, top 10 80%. Ignored in live mode. Paper results under it say nothing about the real rules. |
 
 Overrides change the desk's rules, in paper and in live alike. The thresholds.py panel on the page shows the

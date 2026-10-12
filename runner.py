@@ -53,6 +53,16 @@ DESK_TITLE = os.environ.get("DESK_TITLE", "GROKBOT + JEV").strip()[:40] or "GROK
 DESK_TAGLINE = os.environ.get("DESK_TAGLINE", "JEV PICKS, CODE TRADES").strip()[:60]
 
 
+def _fomo_link(raw):
+    """FOMO_LINK: your FOMO app's link for one coin, with {mint} where the coin's address goes. Unset: no link."""
+    raw = (raw or "").strip()
+    ok = raw.startswith("https://") and "{mint}" in raw and len(raw) <= 300 and not any(c in raw for c in "\"'<> \\")
+    return raw if ok else None
+
+
+FOMO_LINK = _fomo_link(os.environ.get("FOMO_LINK"))
+
+
 TRENDING_WINDOW = os.environ.get("TRENDING_WINDOW", "1h").strip()
 if TRENDING_WINDOW not in ("5m", "1h", "6h", "24h"):
     TRENDING_WINDOW = "1h"
@@ -465,7 +475,7 @@ class Runner:
             d = json.loads(json.dumps(self.state.data, default=str))
         d.update(mode="live" if self.cfg.live else "paper", wallet=self.seats.kp.address if self.seats.kp else None,
                  now=_now(), held=book.held(), nets=list(NETS), cycle_seconds=CYCLE_SECONDS,
-                 risk_poll_seconds=self.cfg.risk_poll_seconds, goal_usd=_goal(),
+                 risk_poll_seconds=self.cfg.risk_poll_seconds, goal_usd=_f(d.get("goal_usd")) or _goal(),
                  bank_usd=self.seats.bank() if not self.cfg.live else self.last_bank,   # paper: arithmetic, no network
                  thresholds={"HARD": thresholds.HARD, "SOFT": {k: list(v) for k, v in thresholds.SOFT.items()},
                              "PICK_MIN_WORTH": thresholds.PICK_MIN_WORTH, "PICK_MIN_CONF": thresholds.PICK_MIN_CONF,
@@ -476,13 +486,26 @@ class Runner:
                  next_cycle_at=None if full or d.get("paused") else
                  _iso(self.clock() if self.last_cycle is None else self.last_cycle + CYCLE_SECONDS),
                  next_risk_at=_iso(self.last_risk + self.cfg.risk_poll_seconds) if holding and self.last_risk else None,
-                 server_now=_iso(self.clock()), test_swap_usd=TEST_SWAP_USD, title=DESK_TITLE, tagline=DESK_TAGLINE,
+                 server_now=_iso(self.clock()), test_swap_usd=TEST_SWAP_USD, title=DESK_TITLE, tagline=DESK_TAGLINE, fomo_link=FOMO_LINK,
                  start_bank=self.cfg.paper_bank_usd if not self.cfg.live else None, overrides=OVERRIDES,
                  practice=PRACTICE["active"], practice_note=PRACTICE["note"], watch=self.cfg.watch_plan(),
                  max_daily_loss_pct=self.cfg.max_daily_loss_pct,
                  thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD})
         d.pop("shadow", None)
         return d
+
+    def set_goal(self, value):
+        """The goal on the bar at the top, set from the page. 0 or empty clears it (GOAL_USD then applies)."""
+        try:
+            g = float(value) if value not in (None, "") else 0.0
+        except (TypeError, ValueError):
+            return 400, "the goal must be a number of dollars"
+        if not math.isfinite(g) or g < 0 or g > 1e12:
+            return 400, "the goal must be between $0 and $1T"
+        with self.state.lock:
+            self.state.data["goal_usd"] = g or None
+            self.state.save()
+        return 200, (f"goal set: ${g:,.0f}" if g else "goal cleared")
 
     def set_paused(self, paused, reason=None):
         with self.state.lock:
@@ -532,7 +555,7 @@ def make_handler(runner, admin_token):
             return self._send(404, {"detail": "not found"})
 
         def do_POST(self):
-            if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap"):
+            if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap", "/api/goal"):
                 return self._send(404, {"detail": "not found"})
             given = self.headers.get("X-Admin-Token", "")
             if len(admin_token) < MIN_ADMIN_TOKEN or not hmac.compare_digest(given.encode(), admin_token.encode()):
@@ -542,6 +565,14 @@ def make_handler(runner, admin_token):
                 return self._send(code, {"detail": msg})
             if self.path == "/api/test-swap":
                 code, msg = runner.request_test()
+                return self._send(code, {"detail": msg})
+            if self.path == "/api/goal":
+                try:
+                    n = min(int(self.headers.get("Content-Length") or 0), 1000)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                except (ValueError, OSError):
+                    return self._send(400, {"detail": "send {\"goal_usd\": 100000}"})
+                code, msg = runner.set_goal(body.get("goal_usd") if isinstance(body, dict) else None)
                 return self._send(code, {"detail": msg})
             runner.set_paused(self.path == "/api/pause", "paused from the dashboard")
             return self._send(200, {"paused": bool(runner.status().get("paused"))})
@@ -650,6 +681,9 @@ class Stopped:
         return 409, self.reason
 
     def request_test(self):
+        return 409, self.reason
+
+    def set_goal(self, value):
         return 409, self.reason
 
     def tick(self):
