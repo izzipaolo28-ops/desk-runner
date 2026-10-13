@@ -386,11 +386,14 @@ class Runner:
         rep = self.sniper.check(tok["address"], "desk pick", purpose="desk")
         ratio = (rep.get("flow") or {}).get("ratio15")
         m5 = ((rep.get("facts") or {}).get("chg") or {}).get("m5")
+        h1 = ((rep.get("facts") or {}).get("chg") or {}).get("h1")
         blind = next((w for w in rep.get("wait") or [] if w.startswith("the bubble map couldn't be read")), None)
         if rep["verdict"] == "SKIP":
             ok, why = False, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"
         elif blind:
             ok, why = False, blind[:160]
+        elif isinstance(h1, (int, float)) and h1 <= -25:
+            ok, why = False, f"it's a falling knife: {h1:+.0f}% this hour (a bounce in a falling coin isn't an entry)"
         elif isinstance(m5, (int, float)) and self.cfg.snipe_max_m5_pct > 0 and m5 >= self.cfg.snipe_max_m5_pct:
             ok, why = False, f"it's spiking right now ({m5:+.1f}% in 5 min): not buying the top of the candle"
         elif (isinstance(m5, (int, float)) and m5 <= -8) or (isinstance(ratio, (int, float)) and ratio < 0.7):
@@ -490,8 +493,11 @@ class Runner:
             self.state.set_working(None)
         if collect.RPC_FAILURES:                 # a token cut for *_unknown because Solana refused: say so
             stats["rpc_failed"] = len(collect.RPC_FAILURES)
+            own = os.environ.get("SOLANA_RPC_URL", "").strip()
             self.state.error(f"Solana RPC refused {len(collect.RPC_FAILURES)} call(s) this cycle, last: "
-                             f"{collect.RPC_FAILURES[-1][:200]}. A free key from helius.dev in SOLANA_RPC_URL fixes this.")
+                             f"{collect.RPC_FAILURES[-1][:200]}. " + ("Your SOLANA_RPC_URL refused it too: a heavy request on a busy "
+                             "coin; RugCheck's holder list stood in where it could." if own else
+                             "A free key from helius.dev in SOLANA_RPC_URL fixes this."))
         self.report(order, stats)
         if order:
             ok, why = self.gate(order)

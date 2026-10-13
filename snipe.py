@@ -36,6 +36,7 @@ import requests
 import book
 import collect
 from collect import FetchFailed, _num
+from seats import ENTRY_TAGS, QUOTES_OK, entry_tags
 
 log = logging.getLogger("snipe")
 
@@ -142,7 +143,7 @@ def pair_facts(pairs):
         v = ((p.get("txns") or {}).get(w) or {}).get(side)
         return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else None
     created = [c for c in (_num(x.get("pairCreatedAt")) for x in pairs) if c]
-    info, bt = p.get("info") or {}, p.get("baseToken") or {}
+    info, bt, qt = p.get("info") or {}, p.get("baseToken") or {}, p.get("quoteToken") or {}
     socials = {}
     for s in info.get("socials") or []:
         if isinstance(s, dict) and https(s.get("url")):
@@ -160,6 +161,7 @@ def pair_facts(pairs):
             "chg": {w: win("priceChange", w) for w in ("m5", "h1", "h6", "h24")},
             "age_min": (time.time() * 1000 - min(created)) / 60000 if created else None,
             "name": clean(bt.get("name"), 40), "symbol": clean(bt.get("symbol"), 16), "image": https(info.get("imageUrl")),
+            "quote": clean(qt.get("symbol"), 16),
             "socials": socials, "sites": sites[:3], "boosts": int(_num((p.get("boosts") or {}).get("active")) or 0)}
 
 
@@ -1116,6 +1118,25 @@ def score_coin(r, cfg):
             mom_ok = False
     if h1c is not None and h1c > 300 and (m5c or 0) < -5:
         add("extended", f"already +{h1c:.0f}% this hour and turning down: late", -10)
+    if h1c is not None and h1c <= -20 and not desk:                    # .fun: down from $200K to $81K, bought on a bounce
+        wait.append(f"down {h1c:.0f}% this hour: a bounce in a falling coin is not a runner, it waits for the hour to turn up")
+    q = F.get("quote")
+    early = mcap is not None and mcap < cfg.snipe_early_mcap_usd and not desk
+    if early:                                  # an early bet: under $100K, where the 10x and the rugs both live
+        check("market", "early bet", None, f"under {money(cfg.snipe_early_mcap_usd)}: rising this hour, paired with SOL/USDC and a clean "
+              f"bubble map, at {cfg.snipe_early_size:g}x the ticket")
+        if h1c is not None and h1c < 0:
+            wait.append(f"an early bet must be rising this hour, and it's {h1c:+.0f}%")
+        if isinstance(q, str) and q.strip() and q.strip().upper() not in QUOTES_OK:
+            wait.append(f"an early bet must be paired with SOL or USDC, and this one trades against ${q}")
+        if (r.get("map") or {}).get("clusters"):
+            wait.append("an early bet needs a clean bubble map, and some top holders were funded by the same wallet")
+    if isinstance(q, str) and q.strip() and q.strip().upper() not in QUOTES_OK:
+        check("market", "pool paired with", False, f"${q}: every sale goes through another memecoin")
+        add("odd pair", f"its pool is paired with ${q}, not SOL or USDC", -8)
+    for tag, lesson in (r.get("learned") or {}).items():
+        if tag in entry_tags({"h1": h1c, "m5": m5c, "mcap": mcap, "age_min": age, "liq": liq, "quote": q}) and not desk:
+            wait.append(f"learned from its own trades: {lesson}")
     if m5c is not None and cfg.snipe_max_m5_pct > 0 and m5c >= cfg.snipe_max_m5_pct and not desk:
         wait.append(f"spiking {m5c:+.0f}% in 5 min: it waits for the candle to cool, never buys the top of one")
     # A big run alone isn't a reason: on a coin under a day old the 24h change is "since launch", and every coin that
@@ -1276,7 +1297,8 @@ def why_key(rep):
         return ("copycat" if "copycat" in v else "already ran" if "already ran" in v else "too old or too big" if "old (" in v or "past the sniper" in v
                 else "thin liquidity" if "liquidity" in v else "rug risk")
     w = " ".join((rep.get("wait") or [])[:1]).lower()
-    for key, label in (("bubble map couldn't", "bubble map unreadable"), ("spiking", "spiking: waiting for it to cool"), ("no narrative", "no narrative"), ("hype", "hype too slow"),
+    for key, label in (("learned from its own trades", "learned: avoided"), ("a bounce in a falling coin", "falling this hour"),
+                       ("bubble map couldn't", "bubble map unreadable"), ("spiking", "spiking: waiting for it to cool"), ("no narrative", "no narrative"), ("hype", "hype too slow"),
                        ("not enough room", "no 2x room"),
                        ("too new", "too new"), ("market cap", "market cap too small"), ("no dex pair", "no pair yet"),
                        ("authority", "chain didn't answer"), ("momentum", "no momentum reading"), ("sellers are ahead", "sellers ahead"),
@@ -1297,6 +1319,7 @@ class Sniper:
         self.names = {}                         # mint -> (when seen, words of its name, ticker): every coin the lists show
         self.pending = {}                       # mint -> a BUY waiting for its second look: {"rep", "price", "at", "sources"}
         self.maps = {}                          # mint -> (when, bubble map): who funded the top holders
+
         self.tally = deque(maxlen=600)          # (time, why) for every deep check: the page shows the last hour
         self.again, self.seen = {}, {}          # mint -> {"next", "tries", "source"} / mint -> when it was last checked
         self.last_round, self.rounds, self.note = None, 0, {}
@@ -1304,6 +1327,33 @@ class Sniper:
         with self.state.lock:
             for k, v in (("checks", []), ("radar", []), ("wallets", []), ("wallet_sigs", {})):
                 self.state.data.setdefault(k, v)
+
+    LESSON_COINS, LESSON_LOSSES = 15, 2
+
+    def lessons(self):
+        """What its own trades taught it: among the sniper's last 15 coins, a buy-time tag (fresh, thin, odd pair...) that
+        lost at least twice and never won is avoided from then on. {tag: why, with the coins}."""
+        coins, order = {}, []
+        for i, t in enumerate(self.state.data.get("trades") or []):          # newest first
+            if t.get("plan") != "snipe":
+                continue
+            k = t.get("order_id") or f"row{i}"
+            if k not in coins:
+                coins[k] = {"pnl": 0.0, "tags": None, "ticker": t.get("ticker"), "final": False}
+                order.append(k)
+            c = coins[k]
+            c["pnl"] += _f(t.get("pnl_usd")) or 0.0
+            if t.get("final") is not False:
+                c["final"] = True
+                c["tags"] = t.get("entry_tags")
+        done = [coins[k] for k in order if coins[k]["final"] and isinstance(coins[k]["tags"], list)][:self.LESSON_COINS]
+        out = {}
+        for tag, words in ENTRY_TAGS.items():
+            lost = [c for c in done if tag in c["tags"] and c["pnl"] < 0]
+            won = [c for c in done if tag in c["tags"] and c["pnl"] > 0]
+            if len(lost) >= self.LESSON_LOSSES and not won:
+                out[tag] = f"{len(lost)} losses and no wins on coins {words} (" + ", ".join("$" + (c["ticker"] or "?") for c in lost[:3]) + ")"
+        return out
 
     # what the page and the runner ask
     def mode(self):
@@ -1328,7 +1378,7 @@ class Sniper:
                 "watching": len(self.again), "queued": len(self.queue),
                 "confirming": [{"mint": m, "ticker": p["rep"].get("ticker"), "at": datetime.fromtimestamp(p["at"], timezone.utc).isoformat(timespec="seconds")
                                 if p["at"] > 1e9 else None} for m, p in self.pending.items()],
-                "confirm_seconds": self.cfg.snipe_confirm_seconds, "cooling": self.cooling(),
+                "confirm_seconds": self.cfg.snipe_confirm_seconds, "cooling": self.cooling(), "lessons": self.lessons(),
                 "story": {"need_narrative": self.cfg.snipe_need_narrative, "min_hype": self.cfg.snipe_min_hype},
                 "metas": [{k: m.get(k) for k in ("name", "h1", "h24", "tokens", "coins")} for m in self.metas.list[:10]],
                 "metas_status": self.metas.status,
@@ -1597,7 +1647,8 @@ class Sniper:
                     smart.setdefault(w["owner"], {"wallet": w["owner"], "label": followed[w["owner"]]})["holding_pct"] = w["pct"]
             for h in wallet_hits:
                 smart.setdefault(h["wallet"], {"wallet": h["wallet"], "label": followed.get(h["wallet"], h.get("label"))})["sol"] = h.get("sol")
-            rep.update(rug=rug, flow=flw, smart=list(smart.values()), followed_n=len(followed))
+            rep.update(rug=rug, flow=flw, smart=list(smart.values()), followed_n=len(followed),
+                       learned=self.lessons() if purpose != "desk" else {})
             if not self.cfg.snipe_map:
                 rep["map"] = {"status": "off (SNIPE_MAP=off)"}
             elif purpose == "desk" or manual or self._close_to_buy(rep, F):
@@ -1724,7 +1775,8 @@ class Sniper:
     def _finish(self, rep, F, error=None):
         rep["facts"] = {k: F.get(k) for k in ("price", "mcap", "fdv", "liq", "age_min", "dex", "dexes", "pair", "url", "image", "socials",
                                               "sites", "boosts", "holders", "dev_pct", "top_wallet_pct", "top10_pct", "decimals",
-                                              "mint_revoked", "freeze_revoked", "risky_extensions", "buys", "sells", "chg", "vol")}
+                                              "mint_revoked", "freeze_revoked", "risky_extensions", "buys", "sells", "chg", "vol",
+                                              "quote")}
         rep.setdefault("rug", {"status": "not checked", "risks": []})
         if error:
             rep.update(score=0, verdict="WATCH", veto=[], wait=[error], points=[], checks=[], setup="unknown", momentum_ok=None)
@@ -1775,15 +1827,22 @@ class Sniper:
         if not r.seats.daily_guard(bank):
             return False, "the daily loss limit paused the desk"
         factor = 0.5 if forced else (1.0 if rep["score"] >= 85 else 0.7) * (0.8 if rep.get("setup") == "fresh launch" else 1.0)
+        early = (F.get("mcap") or 0) and F["mcap"] < self.cfg.snipe_early_mcap_usd
+        if early and not forced:
+            factor *= self.cfg.snipe_early_size              # an early bet: a smaller ticket for the riskiest, biggest-upside coins
         signals = [("+ " if p["pts"] > 0 else "− ") + p["key"] for p in rep.get("points") or []]
         order = {"order_id": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "-snipe", "model": "sniper",
                  "token": {"ticker": rep.get("ticker"), "address": mint, "network_id": SOL_NET, "chain": "solana"},
-                 "size_factor": round(factor, 3), "size_cuts": ["bought by hand" if forced else f"sniper score {rep['score']}"],
+                 "size_factor": round(factor, 3), "size_cuts": ["bought by hand" if forced else f"sniper score {rep['score']}"]
+                 + ([f"early bet under {money(self.cfg.snipe_early_mcap_usd)}: {self.cfg.snipe_early_size:g}x"] if early and not forced else []),
                  "confidence": None, "worth_trading_at_all": None, "runner_up": [],
                  "facts": {"liquidity_usd": F.get("liq"), "price_usd": F.get("price"), "mcap_usd": F.get("mcap"),
                            "decimals": (rep.get("facts") or {}).get("decimals"), "age_minutes": F.get("age_min")},
                  "why": {}, "judge_calls": [], "plan": "snipe", "score": rep["score"], "setup": rep.get("setup"),
-                 "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else [])}
+                 "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else []),
+                 "entry_ctx": {"mcap": F.get("mcap"), "age_min": F.get("age_min"), "h1": (F.get("chg") or {}).get("h1"),
+                               "m5": (F.get("chg") or {}).get("m5"), "liq": F.get("liq"), "quote": F.get("quote"),
+                               "hype": (rep.get("hype") or {}).get("score"), "score": rep.get("score")}}
         book.take(order)
         before = len(self.state.data.get("feed") or [])
         pos = r.seats.send_to_seats(order, bank)
