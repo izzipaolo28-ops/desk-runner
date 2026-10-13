@@ -386,8 +386,11 @@ class Runner:
         rep = self.sniper.check(tok["address"], "desk pick", purpose="desk")
         ratio = (rep.get("flow") or {}).get("ratio15")
         m5 = ((rep.get("facts") or {}).get("chg") or {}).get("m5")
+        blind = next((w for w in rep.get("wait") or [] if w.startswith("the bubble map couldn't be read")), None)
         if rep["verdict"] == "SKIP":
             ok, why = False, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"
+        elif blind:
+            ok, why = False, blind[:160]
         elif isinstance(m5, (int, float)) and self.cfg.snipe_max_m5_pct > 0 and m5 >= self.cfg.snipe_max_m5_pct:
             ok, why = False, f"it's spiking right now ({m5:+.1f}% in 5 min): not buying the top of the candle"
         elif (isinstance(m5, (int, float)) and m5 <= -8) or (isinstance(ratio, (int, float)) and ratio < 0.7):

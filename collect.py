@@ -517,6 +517,34 @@ def _rpc(method, params):
     return None
 
 
+def helius_holders(mint, pages=3):
+    """With a Helius key in SOLANA_RPC_URL: every holder of the coin from Helius' DAS getTokenAccounts (1000 accounts a
+    page, up to `pages`), summed per owner, biggest first: [(owner, raw amount)]. None without Helius or when it fails.
+    The plain RPC only lists the 20 biggest accounts, and a bundle often sits just under them."""
+    url = os.environ.get("SOLANA_RPC_URL", "").strip()
+    if "helius-rpc.com" not in url:
+        return None
+    owners = {}
+    for page in range(1, pages + 1):
+        RPC_LIMIT.wait()
+        try:
+            r = HTTP.post(url, json={"jsonrpc": "2.0", "id": "holders", "method": "getTokenAccounts",
+                                     "params": {"mint": mint, "page": page, "limit": 1000}}, timeout=20)
+            res = (r.json() or {}).get("result")
+        except (requests.RequestException, ValueError, AttributeError):
+            res = None
+        accts = res.get("token_accounts") if isinstance(res, dict) else None
+        if not isinstance(accts, list):
+            return sorted(owners.items(), key=lambda kv: -kv[1]) if owners else None
+        for a in accts:
+            o, amt = (a or {}).get("owner"), (a or {}).get("amount")
+            if isinstance(o, str) and isinstance(amt, (int, float)) and not isinstance(amt, bool) and amt > 0:
+                owners[o] = owners.get(o, 0) + int(amt)
+        if len(accts) < 1000:
+            break
+    return sorted(owners.items(), key=lambda kv: -kv[1])
+
+
 RUGCHECK = "https://api.rugcheck.xyz/v1"
 _rug_cache: dict = {}
 
@@ -603,6 +631,7 @@ def sol_chain_facts(mint: str) -> dict:
             supply = int(minfo.get("supply"))
         except (TypeError, ValueError):
             supply = None
+        out["supply_raw"] = supply
     if not supply:
         return out
 

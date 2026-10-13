@@ -393,13 +393,13 @@ def _wallet_origin(wallet):
     return (f, "ok") if f else (None, "unreadable")
 
 
-def funding_map(wallets, workers=4):
+def funding_map(wallets, workers=4, max_wallets=20):
     """What Bubblemaps draws, from the chain itself: for each of the biggest holders (pools excluded), the wallet that
     funded it. Several top holders funded by one wallet are one person (a bundle: DOGGO's ring of ~100, OnlyDoge's two
     hubs). A funder with 1000+ transactions is an exchange or a service paying out to strangers: not a cluster.
     wallets: [{"owner", "pct"}]. Returns {"status", "read", "of", "clusters": [{"funder", "n", "pct", "wallets"}],
     "clustered_pct", "clustered_n"}."""
-    ws = [w for w in wallets or [] if isinstance(w, dict) and isinstance(w.get("owner"), str)][:20]
+    ws = [w for w in wallets or [] if isinstance(w, dict) and isinstance(w.get("owner"), str)][:max_wallets]
     out = {"status": "no holders to read", "read": 0, "of": len(ws), "active": 0, "exchange": 0, "clusters": [], "clustered_pct": 0.0,
            "clustered_n": 0}
     if not ws:
@@ -430,8 +430,45 @@ def funding_map(wallets, workers=4):
     out["clustered_pct"] = round(sum(c["pct"] for c in out["clusters"]), 3)
     out["clustered_n"] = sum(c["n"] for c in out["clusters"])
     readable = out["read"] + out["active"]
-    out["status"] = "ok" if readable >= max(3, len(ws) // 2) else f"partial: only {readable} of {len(ws)} holders could be read"
+    out["status"] = ("ok" if readable >= min(3, len(ws)) and readable >= len(ws) // 2
+                     else f"partial: only {readable} of {len(ws)} holders could be read")
     return out
+
+
+BUBBLEMAPS = "https://api.bubblemaps.io/v0"
+
+
+def bubblemaps_map(mint, key):
+    """Bubblemaps' own map of the coin (the one in the app), from its Data API: its clusters (share of supply, holder
+    count) and the supply share it counts in bundles. Needs a key from pro.bubblemaps.io (BUBBLEMAPS_API_KEY);
+    25 of its credits a map. Returns the same shape as funding_map, or None."""
+    try:
+        r = AI.get(f"{BUBBLEMAPS}/tokens/map/solana/{mint}", headers={"X-ApiKey": key}, timeout=30)
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return {"status": f"Bubblemaps answered HTTP {r.status_code}" + (" (out of credits)" if r.status_code == 429 else "")}
+    try:
+        body = r.json() or {}
+    except ValueError:
+        return None
+    cl = []
+    for c in body.get("clusters") or []:
+        if not isinstance(c, dict):
+            continue
+        share, n = _f(c.get("share")), c.get("holder_count")
+        if share is None or not isinstance(n, int) or n < 2:
+            continue
+        hs = [h for h in c.get("holders") or [] if isinstance(h, str)]
+        cl.append({"funder": (hs[0] if hs else "bubblemaps"), "n": n, "pct": round(share * 100, 3), "wallets": hs[:20],
+                   "source": "bubblemaps"})
+    cl.sort(key=lambda c: (-c["pct"], -c["n"]))
+    stats = ((body.get("metrics") or {}).get("supply_stats") or {}) if isinstance(body.get("metrics"), dict) else {}
+    bundles = _f(stats.get("bundles"))
+    return {"status": "ok", "source": "bubblemaps", "read": None, "of": None, "active": 0, "exchange": 0, "clusters": cl,
+            "clustered_pct": round(sum(c["pct"] for c in cl), 3), "clustered_n": sum(c["n"] for c in cl),
+            "bundles_pct": round(bundles * 100, 3) if bundles is not None else None,
+            "score": _f(((body.get("metrics") or {}).get("scores") or {}).get("bubblemaps_score"))}
 
 
 # ---------- the wallets you follow ----------
@@ -955,9 +992,15 @@ def score_coin(r, cfg):
     mp = r.get("map") or {}
     lbl = "bubble map (who funded the top holders)"
     cl = mp.get("clusters") or []
+    bp = mp.get("bundles_pct")
+    if bp is not None:
+        check("who", "bundles (Bubblemaps)", bp < cfg.snipe_map_cluster_pct, f"{bp:.1f}% of the supply")
+        if bp >= cfg.snipe_map_cluster_pct:
+            veto.append(f"Bubblemaps counts {bp:.1f}% of the supply in bundles")
     if cl:
         big = cl[0]
-        desc = (f"{big['n']} top holders funded by one wallet ({big['funder'][:4]}…{big['funder'][-4:]}) hold {big['pct']:.1f}%"
+        who = "in one Bubblemaps cluster" if big.get("source") == "bubblemaps" else f"funded by one wallet ({big['funder'][:4]}…{big['funder'][-4:]})"
+        desc = (f"{big['n']} top holders {who} hold {big['pct']:.1f}%"
                 + (f"; {len(cl)} clusters: {mp['clustered_n']} wallets, {mp['clustered_pct']:.1f}% in all" if len(cl) > 1 else ""))
         bad = ((big["n"] >= 3 and big["pct"] >= cfg.snipe_map_cluster_pct) or mp["clustered_pct"] >= cfg.snipe_map_total_pct
                or mp["clustered_n"] >= cfg.snipe_map_max_wallets)
@@ -1185,6 +1228,9 @@ def score_coin(r, cfg):
     if hy is not None:
         check("story", "hype, growing how fast", hy["score"] >= cfg.snipe_min_hype, f"{hy['score']}/100 (needs {cfg.snipe_min_hype:g})"
               + (": " + "; ".join(f"{p['label']} +{p['pts']}" for p in hy["parts"]) if hy["parts"] else ": nothing yet"))
+    if (r.get("gate", True) and not veto and cfg.snipe_map and mp.get("status") and mp.get("status") != "ok"
+            and not str(mp.get("status")).startswith(("off", "not read: the coin isn't close"))):
+        wait.append(f"the bubble map couldn't be read ({mp['status']}): no buying blind, it looks again")
     if r.get("gate", True) and not veto and not desk:
         if cfg.snipe_need_narrative and nar is not None and not nar["ok"]:
             wait.append("no narrative found: it only buys coins with a story people are piling into (a trending narrative, "
@@ -1230,7 +1276,7 @@ def why_key(rep):
         return ("copycat" if "copycat" in v else "already ran" if "already ran" in v else "too old or too big" if "old (" in v or "past the sniper" in v
                 else "thin liquidity" if "liquidity" in v else "rug risk")
     w = " ".join((rep.get("wait") or [])[:1]).lower()
-    for key, label in (("spiking", "spiking: waiting for it to cool"), ("no narrative", "no narrative"), ("hype", "hype too slow"),
+    for key, label in (("bubble map couldn't", "bubble map unreadable"), ("spiking", "spiking: waiting for it to cool"), ("no narrative", "no narrative"), ("hype", "hype too slow"),
                        ("not enough room", "no 2x room"),
                        ("too new", "too new"), ("market cap", "market cap too small"), ("no dex pair", "no pair yet"),
                        ("authority", "chain didn't answer"), ("momentum", "no momentum reading"), ("sellers are ahead", "sellers ahead"),
@@ -1556,7 +1602,7 @@ class Sniper:
                 rep["map"] = {"status": "off (SNIPE_MAP=off)"}
             elif purpose == "desk" or manual or self._close_to_buy(rep, F):
                 work("vet", "sniper: reading the bubble map")
-                rep["map"] = self._map(mint, chain.get("top_wallets"))
+                rep["map"] = self._map(mint, chain.get("top_wallets"), chain.get("supply_raw"))
             else:
                 rep["map"] = {"status": "not read: the coin isn't close to a BUY"}
             if purpose == "desk":
@@ -1592,17 +1638,31 @@ class Sniper:
         finally:
             st.set_working(None)
 
-    def _map(self, mint, top_wallets):
-        """The bubble map, read at most every 10 minutes per coin (the chain doesn't change that fast)."""
+    def _map(self, mint, top_wallets, supply_raw=None):
+        """The bubble map, read at most every 10 minutes per coin (the chain doesn't change that fast). Bubblemaps' own
+        map when BUBBLEMAPS_API_KEY is set; else ours: who funded each of the 50 biggest holders (the whole holder list
+        from Helius when SOLANA_RPC_URL is Helius), or of the 20 the plain RPC lists."""
         hit = self.maps.get(mint)
         if hit and time.time() - hit[0] < 600:
             return hit[1]
-        if not top_wallets:
-            return {"status": "not read: the chain didn't list the top holders"}
-        try:
-            m = funding_map(top_wallets)
-        except Exception as exc:                          # a map that can't be read is unknown, never a pass
-            return {"status": f"not read ({type(exc).__name__})"}
+        key = os.environ.get("BUBBLEMAPS_API_KEY", "").strip()
+        m = bubblemaps_map(mint, key) if key else None
+        if not m or m.get("status") != "ok":
+            wallets, via = top_wallets, "the top 20"
+            try:
+                hh = collect.helius_holders(mint) if supply_raw else None
+            except Exception:
+                hh = None
+            if hh:
+                big = [(o, a) for o, a in hh if collect.on_curve(o) is True][:50]      # pools and programs set apart
+                if big:
+                    wallets, via = [{"owner": o, "pct": round(100.0 * a / supply_raw, 3)} for o, a in big], f"the top {len(big)} (Helius)"
+            if not wallets:
+                return {"status": "not read: the chain didn't list the top holders"}
+            try:
+                m = funding_map(wallets, max_wallets=50) | {"source": via}
+            except Exception as exc:                      # a map that can't be read is unknown, never a pass
+                return {"status": f"not read ({type(exc).__name__})"}
         self.maps[mint] = (time.time(), m)
         if len(self.maps) > 300:
             for k in list(self.maps)[:100]:
