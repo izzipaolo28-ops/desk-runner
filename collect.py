@@ -123,6 +123,46 @@ class _Limiter:
 GT_LIMIT = _Limiter(int(os.environ.get("GT_MAX_CALLS_PER_MIN", 90 if GT_KEY else 8)))
 
 
+class _PerSecond:
+    """At most n calls in any one second, shared by every thread (the bubble map reads wallets in parallel)."""
+
+    def __init__(self, n):
+        self.n, self.sent, self.lock = max(1, n), deque(), threading.Lock()
+
+    def wait(self):
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                while self.sent and now - self.sent[0] >= 1.0:
+                    self.sent.popleft()
+                if len(self.sent) < self.n:
+                    self.sent.append(now)
+                    return
+                delay = 1.0 - (now - self.sent[0])
+            time.sleep(max(0.02, delay))
+
+
+try:
+    RPC_LIMIT = _PerSecond(int(os.environ.get("RPC_MAX_PER_SEC", "8")))
+except ValueError:
+    RPC_LIMIT = _PerSecond(8)
+
+
+def _rest(seconds):
+    """Sleep, watching the coins held meanwhile (WAIT_HOOK) in 2-second slices."""
+    end = time.monotonic() + seconds
+    while True:
+        left = end - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(2.0, left))
+        if WAIT_HOOK:
+            try:
+                WAIT_HOOK()
+            except Exception as exc:
+                log.warning("wait hook: %s", exc)
+
+
 def _get_json(url, params=None, limiter=None, tries=2):
     """GET -> parsed JSON. 404 -> None (nothing there). Everything else that fails raises FetchFailed.
     A 429 is never retried in place: GeckoTerminal pauses its limiter for a full minute, DexScreener
@@ -143,6 +183,10 @@ def _get_json(url, params=None, limiter=None, tries=2):
         if r.status_code == 429:
             if limiter is GT_LIMIT:
                 GT_LIMIT.pause(60)
+            elif "api.dexscreener.com" in url and attempt + 1 < tries:
+                last = "rate limited (429)"
+                _rest(3.0)                      # DexScreener: one more try a few seconds later (a shared Railway
+                continue                        # address hits its limit with other people's traffic)
             raise FetchFailed(url, "rate limited (429)", 429)
         if r.status_code in (500, 502, 503, 504):
             last = f"HTTP {r.status_code}"
@@ -453,6 +497,7 @@ def on_curve(address: str) -> bool | None:
 def _rpc(method, params):
     """The result, or None when every endpoint failed. A refusal is never read as an empty answer."""
     why = []
+    RPC_LIMIT.wait()
     for url in _rpc_urls():
         try:
             r = HTTP.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=10)
@@ -470,6 +515,55 @@ def _rpc(method, params):
     RPC_FAILURES.append(f"{method}: " + "; ".join(why))
     del RPC_FAILURES[:-20]
     return None
+
+
+RUGCHECK = "https://api.rugcheck.xyz/v1"
+_rug_cache: dict = {}
+
+
+def rugcheck_report(mint):
+    """RugCheck's full report, kept 2 minutes (the sniper's check and the chain facts both read it).
+    None when RugCheck has none; FetchFailed when it couldn't be read."""
+    hit = _rug_cache.get(mint)
+    if hit and time.time() - hit[0] < 120:
+        return hit[1]
+    body = _get_json(f"{RUGCHECK}/tokens/{mint}/report")
+    if len(_rug_cache) > 200:
+        _rug_cache.clear()
+    _rug_cache[mint] = (time.time(), body)
+    return body
+
+
+def _holders_from_rugcheck(mint, out):
+    """The Solana RPC wouldn't list the biggest holders (a busy or free endpoint refuses getTokenLargestAccounts):
+    RugCheck's own list of the top holders instead, pools and programs (off-curve owners) set apart as always."""
+    try:
+        body = rugcheck_report(mint)
+    except FetchFailed:
+        return out
+    rows = [h for h in (body or {}).get("topHolders") or [] if isinstance(h, dict)] if isinstance(body, dict) else []
+    wallets, programs = {}, {}
+    for h in rows:
+        owner, pct = h.get("owner"), _num(h.get("pct"))
+        if not isinstance(owner, str) or pct is None:
+            continue
+        kind = on_curve(owner)
+        if kind is True:
+            wallets[owner] = wallets.get(owner, 0.0) + pct
+        elif kind is False:
+            programs[owner] = programs.get(owner, 0.0) + pct
+    if not wallets and not programs:
+        return out
+    ranked = sorted(wallets.items(), key=lambda kv: -kv[1])
+    out["top_wallets"] = [{"owner": o, "pct": round(p, 3)} for o, p in ranked[:20]]
+    if programs:
+        out["top_program_account_percent"] = round(max(programs.values()), 3)
+    if len(rows) >= 10:
+        out["top10_wallets_percent"] = round(sum(p for _, p in ranked[:10]), 3)
+    if ranked:
+        out["top_wallet_percent"] = round(ranked[0][1], 3)
+    out["holders_source"] = "rugcheck"
+    return out
 
 
 def sol_chain_facts(mint: str) -> dict:
@@ -516,7 +610,7 @@ def sol_chain_facts(mint: str) -> dict:
     accounts = [(a.get("address"), int(a["amount"])) for a in top
                 if isinstance(a, dict) and isinstance(a.get("address"), str) and str(a.get("amount", "")).isdigit()]
     if not accounts:
-        return out
+        return _holders_from_rugcheck(mint, out)
     owners = ((_rpc("getMultipleAccounts", [[a for a, _ in accounts], {"encoding": "jsonParsed"}]) or {})
               .get("value")) or []
     wallets, programs, unknown = {}, {}, 0

@@ -359,7 +359,8 @@ stays paused until you tap **Resume**.
 | `LIVE_MODE` | `false` | exactly `true` or `false` |
 | `BOT_WALLET_KEY` | none | live only. The bot account's private key, in Phantom's export format. |
 | `JUPITER_API_KEY` | none | recommended |
-| `SOLANA_RPC_URL` | public endpoints | strongly recommended: `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` (free key at helius.dev). Public endpoints often refuse the holder lookup, and then every token is cut as `top_wallet_unknown`. |
+| `SOLANA_RPC_URL` | public endpoints | strongly recommended: `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` (free key at helius.dev; the `beta.helius-rpc.com` gateway is a public beta and refuses heavy holder lookups more often). Public endpoints often refuse the holder lookup; then the top holders come from RugCheck's list instead, and if that fails too the coin is cut as `top_wallet_unknown`. |
+| `RPC_MAX_PER_SEC` | `8` | Solana RPC calls a second at most, all together (the bubble map reads many wallets; free plans limit calls a second) |
 | `GOAL_USD` | none | a starting goal for the top bar (a goal set from the page wins) |
 | `FOMO_LINK` | none | FOMO's link for one coin with `{mint}` for the address, e.g. copied from FOMO's share button; must start with `https://` |
 | `PAPER_BANK_USD` | `1000` | paper mode's starting cash |

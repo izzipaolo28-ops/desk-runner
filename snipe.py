@@ -331,7 +331,7 @@ def rugcheck(mint):
                                  "value": clean(str(r["value"]) if r.get("value") is not None else None, 40),
                                  "description": clean(r.get("description"), 160)})
     try:
-        full = collect._get_json(f"{RUG}/tokens/{mint}/report")
+        full = collect.rugcheck_report(mint)
     except FetchFailed:
         full = None
     if isinstance(full, dict):
@@ -393,7 +393,7 @@ def _wallet_origin(wallet):
     return (f, "ok") if f else (None, "unreadable")
 
 
-def funding_map(wallets, workers=8):
+def funding_map(wallets, workers=4):
     """What Bubblemaps draws, from the chain itself: for each of the biggest holders (pools excluded), the wallet that
     funded it. Several top holders funded by one wallet are one person (a bundle: DOGGO's ring of ~100, OnlyDoge's two
     hubs). A funder with 1000+ transactions is an exchange or a service paying out to strangers: not a cluster.
