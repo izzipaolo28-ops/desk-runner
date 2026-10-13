@@ -96,6 +96,13 @@ class Config:
         self.derisk_pct = _env_num(env, "WATCH_DERISK_PCT", 50, high=100)    # ...sell this share of what's left
         self.pump_m5_pct = _env_num(env, "WATCH_PUMP_M5_PCT", 20)            # "spike": 5-min jump while in profit
         self.pump_sell_pct = _env_num(env, "WATCH_PUMP_SELL_PCT", 30, high=100)
+        # once up a lot (the trail armed): when the momentum dies (it slips off its best with sellers ahead and the volume
+        # drying up), or the trail / the lock hits, sell 75% of the bag and let the last 25% ride
+        self.momentum_sell_pct = _env_num(env, "MOMENTUM_SELL_PCT", 75, low=1, high=100)
+        self.runner_trail_pct = _env_num(env, "RUNNER_TRAIL_PCT", 30, high=100)    # the runner: out this far off its best
+        self.runner_floor_pct = _env_num(env, "RUNNER_FLOOR_PCT", 0, low=-100, high=100)   # ...or back at this gain
+        self.fade_volume_pace = _env_num(env, "FADE_VOLUME_PACE", 0.6, high=10)    # last 5 min's volume vs the hour's pace
+        self.fade_off_peak_pct = _env_num(env, "FADE_OFF_PEAK_PCT", 4, high=100)   # it has slipped this far off its best
         self.max_hold_hours = _env_num(env, "MAX_HOLD_HOURS", 24)
         self.max_positions = int(_env_num(env, "MAX_POSITIONS", 5, low=1, high=10))
         self.max_exposure_pct = _env_num(env, "MAX_EXPOSURE_PCT", 25, low=1, high=100)   # all coins together
@@ -184,7 +191,10 @@ class Config:
                 "trail_arm_pct": self.trail_arm_pct, "trail_pct": self.trail_pct, "scale_out": self.scale_out,
                 "drop_m5_pct": self.drop_m5_pct, "derisk_pct": self.derisk_pct, "pump_m5_pct": self.pump_m5_pct,
                 "pump_sell_pct": self.pump_sell_pct, "stall_minutes": self.stall_minutes, "stall_gain_pct": self.stall_gain_pct,
-                "ride_x": 1.0, "lock_pct": self.lock_pct, "fail_pct": 0.0, "fail_m5_pct": 0.0, "fail_minutes": 0.0}
+                "ride_x": 1.0, "lock_pct": self.lock_pct, "fail_pct": 0.0, "fail_m5_pct": 0.0, "fail_minutes": 0.0,
+                "momentum_sell_pct": self.momentum_sell_pct, "runner_trail_pct": self.runner_trail_pct,
+                "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
+                "fade_off_peak_pct": self.fade_off_peak_pct}
         if (pos or {}).get("plan") == "snipe":
             base.update(stop_loss_pct=self.snipe_stop_loss_pct, max_hold_hours=self.snipe_max_hold_hours,
                         trail_arm_pct=self.snipe_trail_arm_pct, trail_pct=self.snipe_trail_pct, scale_out=self.snipe_scale_out,
@@ -199,7 +209,8 @@ class Config:
                 "trail_arm_pct": self.trail_arm_pct, "trail_pct": self.trail_pct, "drop_m5_pct": self.drop_m5_pct,
                 "derisk_pct": self.derisk_pct, "pump_m5_pct": self.pump_m5_pct, "pump_sell_pct": self.pump_sell_pct,
                 "max_hold_hours": self.max_hold_hours, "stall_minutes": self.stall_minutes, "stall_gain_pct": self.stall_gain_pct,
-                "lock_pct": self.lock_pct,
+                "lock_pct": self.lock_pct, "momentum_sell_pct": self.momentum_sell_pct, "runner_trail_pct": self.runner_trail_pct,
+                "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
                 "snipe": {"stop_loss_pct": self.snipe_stop_loss_pct, "ladder": [list(r) for r in self.snipe_scale_out],
                           "trail_arm_pct": self.snipe_trail_arm_pct, "trail_pct": self.snipe_trail_pct,
                           "max_hold_hours": self.snipe_max_hold_hours, "stall_minutes": self.snipe_stall_minutes,
@@ -943,6 +954,16 @@ class Seats:
         sellers = buys is not None and sells is not None
         rolling = gain > 0 and m5 is not None and m5 >= 0 and sellers and buys >= sells   # still climbing, buyers ahead
         act, floor = None, None
+        runner = bool(pos.get("runner"))
+        vol = (pair.get("volume") or {}) if isinstance(pair.get("volume"), dict) else {}
+        v5, v1 = collect._num(vol.get("m5")), collect._num(vol.get("h1"))
+        pace = v5 * 12 / v1 if v5 is not None and v1 else None      # the last 5 minutes against the hour's pace
+
+        def momentum_exit(why):
+            """Up a lot and the move is over: most of the bag out, the rest rides (MOMENTUM_SELL_PCT=100: all out)."""
+            if c.momentum_sell_pct >= 100:
+                return (1.0, why + ": out", None)
+            return (c.momentum_sell_pct / 100, why + f": {c.momentum_sell_pct:g}% out, the rest rides", ("runner", now))
         if c.stop_loss_pct > 0 and gain <= -c.stop_loss_pct:
             act, floor = (1.0, f"stop-loss at {gain:+.1f}% (limit -{c.stop_loss_pct:g}%)", None), c.stop_loss_pct
         elif (c.fail_pct > 0 and age_h * 60 <= c.fail_minutes and gain <= -c.fail_pct and m5 is not None
@@ -956,19 +977,31 @@ class Seats:
         elif c.stall_minutes > 0 and age_h * 60 >= c.stall_minutes and peak_gain < c.stall_gain_pct:
             act = (1.0, f"no momentum: {age_h * 60:.0f} min in, best {peak_gain:+.1f}% (needed +{c.stall_gain_pct:g}% by "
                         f"{c.stall_minutes:g} min): in and out at {gain:+.1f}%", None)
+        elif runner:                              # the last 25%: it rides until it gives back a lot, never into a loss
+            if gain <= c.runner_floor_pct:
+                act = (1.0, f"the runner is back to {gain:+.1f}% (best {peak_gain:+.1f}%): out, it never turns into a loss", None)
+            elif c.runner_trail_pct > 0 and off_peak >= c.runner_trail_pct:
+                act = (1.0, f"the runner: {off_peak:.1f}% off its best ({peak_gain:+.1f}%), out at {gain:+.1f}%", None)
         elif c.lock_pct > 0 and c.trail_pct > 0 and peak_gain >= c.trail_arm_pct and gain <= c.lock_pct:
-            act = (1.0, f"locking in the profit: it was up {peak_gain:+.1f}%, back to {gain:+.1f}%: out before it turns into a loss", None)
+            act = momentum_exit(f"locking in the profit: it was up {peak_gain:+.1f}%, back to {gain:+.1f}%")
         elif c.trail_pct > 0 and peak_gain >= c.trail_arm_pct and off_peak >= c.trail_pct:
-            act = (1.0, f"trailing stop: {off_peak:.1f}% off the peak (best {peak_gain:+.1f}%, now {gain:+.1f}%): looks like the top", None)
+            act = momentum_exit(f"trailing stop: {off_peak:.1f}% off the peak (best {peak_gain:+.1f}%, now {gain:+.1f}%)")
         else:
             for g, pct in c.scale_out:
                 if g not in done and gain >= g:
                     share = min(1.0, pct / 100 * int(pos.get("tokens_raw_initial") or pos["tokens_raw"]) / int(pos["tokens_raw"]))
                     act = (share, f"take profit at +{g:g}% (now {gain:+.1f}%): {pct:g}% of the original bag", ("rung", g))
                     break
-        if act is None and sellers and m5 is not None:
+        armed = peak_gain >= c.trail_arm_pct > 0
+        if act is None and sellers and m5 is not None and not runner:
             if gain <= 0 and c.drop_m5_pct > 0 and m5 <= -2 * c.drop_m5_pct and sells > buys * 1.5:
                 act = (1.0, f"breaking down: {m5:+.1f}% in 5 min, {int(sells)} sells vs {int(buys)} buys, at {gain:+.1f}%", None)
+            elif armed and gain > 0 and c.drop_m5_pct > 0 and m5 <= -c.drop_m5_pct and sells > buys * 1.3:
+                act = momentum_exit(f"turning down: {m5:+.1f}% in 5 min, {int(sells)} sells vs {int(buys)} buys, at {gain:+.1f}%")
+            elif (armed and gain > 0 and off_peak >= c.fade_off_peak_pct and m5 <= 0 and sells >= buys and pace is not None
+                  and pace <= c.fade_volume_pace):
+                act = momentum_exit(f"momentum died: {off_peak:.1f}% off its best ({peak_gain:+.1f}%), {int(sells)} sells vs "
+                                    f"{int(buys)} buys, volume at {pace:.1f}x the hour's pace, at {gain:+.1f}%")
             elif (gain > 0 and c.drop_m5_pct > 0 and c.derisk_pct > 0 and m5 <= -c.drop_m5_pct and sells > buys * 1.3
                   and now - (pos.get("derisk_ts") or 0) > 600):
                 act = (c.derisk_pct / 100, f"turning down: {m5:+.1f}% in 5 min, {int(sells)} sells vs {int(buys)} buys: "
@@ -993,6 +1026,8 @@ class Seats:
                 if p is not None:
                     if mark[0] == "rung":
                         p["rungs_done"] = sorted(set(p.get("rungs_done") or []) | {mark[1]})
+                    elif mark[0] == "runner":
+                        p["runner"], p["runner_ts"] = True, mark[1]
                     else:
                         p[f"{mark[0]}_ts"] = mark[1]
                     self.state.save()

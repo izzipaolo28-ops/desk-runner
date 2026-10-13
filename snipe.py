@@ -763,7 +763,7 @@ def upside_read(F, metas_hit):
         out["room_x"] = round(lead["leader_mcap"] / mc, 1)
         out["leader"] = {"symbol": lead.get("leader"), "mcap": lead["leader_mcap"], "meta": lead["name"], "median": lead.get("median_mcap")}
     band, bx = (("micro cap", 10) if mc < 300_000 else ("small cap", 5) if mc < 2_000_000 else ("mid cap", 3) if mc < 10_000_000
-                else ("large cap", 1.5))
+                else ("large cap", 2) if mc < 50_000_000 else ("very large cap", 1.5))     # CRAWLER ran $18M -> $32M
     out["band"], out["band_x"] = band, bx
     out["potential_x"] = round(min(out["room_x"], 50), 1) if out["room_x"] else bx
     if h1 is not None and h1 > 0:
@@ -1407,8 +1407,8 @@ class Sniper:
             return False, f"it didn't hold: {chg:+.1f}% in the {secs:.0f}s since the check"
         if self.cfg.snipe_max_m5_pct > 0 and chg >= self.cfg.snipe_max_m5_pct:
             return False, f"it ran {chg:+.1f}% in {secs:.0f}s: that's the top of a candle, not an entry"
-        if b is not None and s5 is not None and s5 > b:
-            return False, f"sellers took over ({s5} sells vs {b} buys in 5 min)"
+        if b is not None and s5 is not None and s5 > b * 1.25 and chg <= 0:   # a near-tie isn't a takeover (CRAWLER: 437 vs 421)
+            return False, f"sellers took over ({s5} sells vs {b} buys in 5 min, price {chg:+.1f}%)"
         if m5 is not None and m5 <= -8:
             return False, f"falling: {m5:+.1f}% in 5 min"
         return True, (f"held up on a second look {secs:.0f}s later ({chg:+.1f}%"

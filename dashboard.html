@@ -937,6 +937,11 @@ function planBlock(p, W, i, n, bare){
     ["trailing stop", trail], ["stop-loss", stop],
     ["max hold", W.max_hold_hours ? (held === null ? W.max_hold_hours + "h" : Math.max(0, W.max_hold_hours - held).toFixed(1) + "h left of " + W.max_hold_hours + "h")
       + (W.ride_x > 1 ? `, rides up to ${W.ride_x}x longer while buyers lead` : "") : "off"],
+    ...(num(W.momentum_sell_pct) !== null && W.momentum_sell_pct < 100 ? [["momentum exit", p.runner
+      ? `done: ${W.momentum_sell_pct}% banked. The last ${100 - W.momentum_sell_pct}% rides: out ${W.runner_trail_pct}% off its best`
+        + (peakMC !== null ? ` (now under ${mcap(peakMC * (1 - W.runner_trail_pct / 100))} MC)` : "") + `, or back at ${W.runner_floor_pct ? "+" + W.runner_floor_pct + "%" : "break-even"}`
+      : `once up +${W.trail_arm_pct}%: when it slips off its best with sellers ahead and the volume drying up (or the trail or the lock hits), `
+        + `${W.momentum_sell_pct}% out, the last ${100 - W.momentum_sell_pct}% rides (out ${W.runner_trail_pct}% off its best, never into a loss)`]] : []),
     ...(W.fail_pct ? [["move failed", `out at -${W.fail_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 - W.fail_pct / 100))} MC)` : "")
       + ` if it's still falling ${W.fail_m5_pct}%+ in 5 min, in its first ${W.fail_minutes} min`]] : []),
     ...(W.stall_minutes ? [["no momentum", `out if it hasn't made +${W.stall_gain_pct}% within ${W.stall_minutes} min`]] : []),
@@ -1810,7 +1815,8 @@ function render(d){
   if (!ps.length){ pos.append(document.createTextNode(d.paused ? "no coins held · paused" : "no coins held · ")); const c = el("span"); c.id = "countdown"; pos.appendChild(c);
     if (W.enabled){ const plan = el("div", "muted mono"); plan.style.fontSize = "11px"; plan.style.marginTop = "8px";
       plan.textContent = `up to ${slots} coins at once · each: ` + ((W.ladder || []).map(([g, sh]) => `+${g}%→sell ${sh}%`).join(", ") || "no ladder") + ` · trail ${W.trail_pct ? W.trail_pct + "% off the best MC after +" + W.trail_arm_pct + "%" : "off"}` +
-        ` · stop ${W.stop_loss_pct ? "-" + W.stop_loss_pct + "%" : "off"} · max ${W.max_hold_hours ? W.max_hold_hours + "h" : "—"} · trims ${W.derisk_pct}% when it turns down`;
+        ` · stop ${W.stop_loss_pct ? "-" + W.stop_loss_pct + "%" : "off"} · max ${W.max_hold_hours ? W.max_hold_hours + "h" : "—"}`
+        + (W.momentum_sell_pct < 100 ? ` · once up +${W.trail_arm_pct}%, when the momentum dies: ${W.momentum_sell_pct}% out, the rest rides` : "");
       pos.appendChild(plan); } }
   else { const c = el("div", "muted mono"); c.style.fontSize = "11px"; c.style.marginTop = "6px"; c.append(document.createTextNode("next RISK check ")); const cd = el("span"); cd.id = "countdown"; c.appendChild(cd); pos.appendChild(c); }
   // money management: what's at stake right now, what the worst case is, how much of today's limit is used

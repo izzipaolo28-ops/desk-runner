@@ -275,11 +275,13 @@ no action on a number it can't read):
 | stop-loss | `STOP_LOSS_PCT=30` | down 30% from the buy → sell everything |
 | take-profit (all) | `TAKE_PROFIT_PCT=0` (off) | up X% → sell everything |
 | max hold | `MAX_HOLD_HOURS=24` | held this long → sell everything |
-| profit lock | `TRAIL_LOCK_PCT=8` | once it has been up 20%, it never lets it fall back under +8%: sells everything there instead of giving the gain back |
-| trailing stop | `TRAIL_ARM_PCT=20`, `TRAIL_PCT=15` | once it has been up 20%, a 15% drop from its best price sells everything: "looks like the top" |
+| **momentum died** | `MOMENTUM_SELL_PCT=75`, `FADE_OFF_PEAK_PCT=4`, `FADE_VOLUME_PACE=0.6` | once it has been up 20% (the sniper's coins: 30%): it slips 4%+ off its best, sellers are ahead in the last 5 minutes and the volume is drying up (the last 5 minutes at 0.6x the hour's pace or less) → **75% out, the last 25% rides** |
+| profit lock | `TRAIL_LOCK_PCT=8` | once it has been up 20%, it never lets it fall back under +8%: 75% out there, the rest rides |
+| trailing stop | `TRAIL_ARM_PCT=20`, `TRAIL_PCT=15` | once it has been up 20%, a 15% drop from its best price: 75% out, the rest rides |
+| the runner | `RUNNER_TRAIL_PCT=30`, `RUNNER_FLOOR_PCT=0` | the last 25% rides with no ladder and no trims: out when it's 30% off its best, or back at break-even (it never turns into a loss). `MOMENTUM_SELL_PCT=100` sells everything at once instead |
 | profit ladder | `SCALE_OUT=30:25,60:25,100:25` | at +30% sell 25% of the original bag, at +60% another 25%, at +100% another 25%; the last 25% rides on the trailing stop |
 | breaking down | `WATCH_DROP_M5_PCT=8` | in a loss and down 16%+ in 5 minutes with sellers 1.5× buyers → sell everything |
-| turning down | `WATCH_DROP_M5_PCT=8`, `WATCH_DERISK_PCT=50` | in profit, down 8%+ in 5 minutes with sellers 1.3× buyers → sell half of what's left (at most every 10 minutes) |
+| turning down | `WATCH_DROP_M5_PCT=8`, `WATCH_DERISK_PCT=50` | in profit, down 8%+ in 5 minutes with sellers 1.3× buyers → once it has been up 20%: 75% out, the rest rides; before that, half of what's left (at most every 10 minutes) |
 | spike | `WATCH_PUMP_M5_PCT=20`, `WATCH_PUMP_SELL_PCT=30` | up 20%+ in 5 minutes while 20%+ in profit → take 30% off (at most every 15 minutes) |
 
 RISK's volume rule still runs every 5 minutes on top: volume ratio under 0.20 on **two checks in a row** sells
