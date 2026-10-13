@@ -1204,6 +1204,8 @@ def score_coin(r, cfg):
             wait.append("no momentum reading right now")
     else:
         verdict = "WATCH"
+        if total >= cfg.snipe_buy_score and mom_ok is False:     # a high score with the sellers in charge right now
+            wait.append("sellers are ahead right now (more sold than bought, or the price falling): it waits for buyers to lead")
     return {"score": total, "verdict": verdict, "veto": veto, "wait": wait, "points": pts, "checks": checks, "setup": setup,
             "momentum_ok": mom_ok}
 
@@ -1231,7 +1233,8 @@ def why_key(rep):
     for key, label in (("spiking", "spiking: waiting for it to cool"), ("no narrative", "no narrative"), ("hype", "hype too slow"),
                        ("not enough room", "no 2x room"),
                        ("too new", "too new"), ("market cap", "market cap too small"), ("no dex pair", "no pair yet"),
-                       ("authority", "chain didn't answer"), ("momentum", "no momentum reading"), ("unavailable", "data unavailable")):
+                       ("authority", "chain didn't answer"), ("momentum", "no momentum reading"), ("sellers are ahead", "sellers ahead"),
+                       ("unavailable", "data unavailable")):
         if key in w:
             return label
     return "score too low" if rep.get("score") is not None and rep.get("score") < 70 else "other"
