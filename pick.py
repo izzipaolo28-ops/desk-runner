@@ -11,7 +11,7 @@ import math
 from datetime import datetime, timezone
 
 from filter import evidence_gaps
-from thresholds import DARK_TICKET_CUT, NO_SOCIAL_CUT, PICK_MIN_CONF, PICK_MIN_WORTH
+from thresholds import DARK_TICKET_CUT, NO_FAVOURITE_CUT, NO_SOCIAL_CUT, PICK_MIN_CONF, PICK_MIN_WORTH
 
 
 def _f(v):
@@ -76,6 +76,7 @@ def pick(judge, survivors):
     if worth < PICK_MIN_WORTH:
         return None, f"worth_trading_at_all {worth:.2f} < {PICK_MIN_WORTH}: not a day"
 
+    unsure = None
     if len(labels) == 1:
         label, confidence, runner_up = "c1", None, []
     else:
@@ -84,7 +85,9 @@ def pick(judge, survivors):
         if confidence is None:
             return None, "best came back without a confidence"
         if confidence < PICK_MIN_CONF:
-            return None, f"best confidence {confidence:.2f} < {PICK_MIN_CONF}: no favourite"
+            # Every candidate here passed every check. Jev not having a clear favourite between good coins is not a
+            # reason to buy none of them (that left the desk buying nothing all day): its top choice, half the ticket.
+            unsure = f"no clear favourite (confidence {confidence:.2f} < {PICK_MIN_CONF})"
         if label not in labels:
             return None, f"best chose {label!r}, which is not a candidate"
         probs = best.get("probabilities") if isinstance(best.get("probabilities"), dict) else {}
@@ -95,6 +98,9 @@ def pick(judge, survivors):
 
     d, ans, calls = labels[label]
     factor, cuts = size_factor(d, ans)
+    if unsure:
+        factor = round(factor * NO_FAVOURITE_CUT, 4)
+        cuts = cuts + [unsure]
     return {
         "order_id": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model": r.get("model"),

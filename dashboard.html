@@ -1974,6 +1974,9 @@ function sniperRender(d){
     ? `its ${SL.desk} slot${SL.desk === 1 ? " is" : "s are"} full: the next scan starts when one of its coins sells`
     : `all ${d.max_positions} slots are taken: the next scan starts when a coin sells`);
   else deskBits.push("scans for normal coins every " + Math.round((d.cycle_seconds || 300) / 60) + " min" + (leftS !== null ? (leftS > 0 ? ` · next scan in ${Math.floor(leftS / 60)}:${String(leftS % 60).padStart(2, "0")}` : " · scanning now or any second") : ""));
+  const DS = d.desk_sources || {};
+  if ((DS.trending || []).length) deskBits.push(`reads the coins trending over the last ${DS.trending.join(", ")}`
+    + (DS.metas ? " and the coins of DexScreener's trending narratives" : "") + (DS.new_pool_pages ? " plus new pools" : "") + (num(DS.min_age_minutes) !== null ? `, ${DS.min_age_minutes >= 60 ? DS.min_age_minutes / 60 + "h" : DS.min_age_minutes + " min"} old or more (newer ones are the sniper's)` : ""));
   if (C.time) deskBits.push(`last scan ${ago(C.time)} ago: ${st0.seen || 0} coins read` + (C.order ? `, picked $${C.order.ticker || "?"}` : st0.stood_down ? `, stood down (${clip(String(st0.stood_down), 80)})` : st0.no_order ? `, no pick (${clip(String(st0.no_order), 80)})` : ""));
   if (C.why) deskBits.push("cuts: " + clip(C.why, 160));
   deskBits.push(d.practice ? "practice mode on: looser gates, more trades" : "its own gates (practice mode off)");

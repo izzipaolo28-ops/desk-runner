@@ -17,6 +17,8 @@ CYCLE_SECONDS  = 900
 GT_PER_MINUTE  = 10         # free tier (collect stays under it at 8/min)
 UNIVERSE_PAGES = 2          # 3 chains x 2 pages = 6 GeckoTerminal slots. If 429s keep coming: 1
 GT_DOSSIER     = 3          # what is left for dossiers in the same minute
+CHAIN_DOSSIER  = 3          # Solana coins past those: a dossier from the chain alone (no GeckoTerminal call), so a
+                            # scan doesn't stop at the 4th good coin while 30 more wait
 DEX_BUDGET     = 25         # DexScreener calls per cycle, pass two only. If 429s keep coming: lower it
 TICKET_SHARE   = 0.06       # the most SIZE could ever allow, as a share of free cash
 JUDGE_LOG      = os.environ.get("JUDGE_LOG", "judge_log.jsonl")
@@ -73,7 +75,7 @@ def run_once(fomo, judge, desk, bank, shadow=True):
         return None, stats
 
     ask, survivors = _asker(judge), []
-    gt_slots, dex_slots = GT_DOSSIER, DEX_BUDGET
+    gt_slots, dex_slots, chain_slots = GT_DOSSIER, DEX_BUDGET, CHAIN_DOSSIER
 
     collect.UNIVERSE_FAILURES.clear()
     ids = universe(pages=UNIVERSE_PAGES)
@@ -104,8 +106,10 @@ def run_once(fomo, judge, desk, bank, shadow=True):
                 _count(stats, "free", k)
                 continue
 
-            if dex_slots <= 0 or gt_slots <= 0:
+            if dex_slots <= 0 or (gt_slots <= 0 and chain_slots <= 0):
                 break                            # out of budget, not out of ideas
+            if gt_slots <= 0 and CHAIN_SET.get(t["net"]) != "solana":
+                continue                         # only Solana has a chain to read instead; not benched
 
             t |= trade_counts(t)                 # pass two: one DexScreener call
             dex_slots -= 1
@@ -117,15 +121,20 @@ def run_once(fomo, judge, desk, bank, shadow=True):
                     book.sit(t["tid"], k)
                 continue
 
+            use_gt = gt_slots > 0
             try:
-                d = dossier(t)                   # pass three: one GeckoTerminal slot
+                d = dossier(t, use_gt=use_gt)    # pass three: one GeckoTerminal slot, or the chain alone
             except DossierFailed as e:
                 log.warning("dossier failed %s: %s", t["tid"], e)
-                gt_slots -= 1                    # a failed call still cost you the slot
+                gt_slots -= 1 if use_gt else 0   # a failed call still cost you the slot
+                chain_slots -= 0 if use_gt else 1
                 stats["dossier_failed"] += 1
                 book.sit(t["tid"], "dossier_failed")
                 continue                         # missing is missing, not a pass
-            gt_slots -= 1
+            if use_gt:
+                gt_slots -= 1
+            else:
+                chain_slots -= 1
 
             if (k := chain_kill(d)):
                 book.sit(t["tid"], k)            # facts bench longest

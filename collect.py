@@ -319,7 +319,7 @@ def trade_counts(t: dict) -> dict:
 
 
 # ---- pass three: dossier ---------------------------------------------------------------------------
-def dossier(t: dict) -> dict:
+def dossier(t: dict, use_gt: bool = True) -> dict:
     """One GeckoTerminal slot. Solana adds three free RPC calls: authorities, extensions and holders come
     from the chain itself. Fills what is really there, null where it is not.
     404 = not indexed (real nulls, normal on Robinhood). Any other failure raises DossierFailed.
@@ -330,7 +330,9 @@ def dossier(t: dict) -> dict:
     # On Solana the chain itself answers the safety facts (authorities, Token-2022, the biggest wallets), so a
     # GeckoTerminal 429 costs only its extras (holder count, dev share, X handle): those stay null, never invented.
     # Other chains have nothing else to read: there a failure still drops the coin.
-    if net == "solana" and GT_LIMIT.busy():
+    if net == "solana" and not use_gt:
+        body, gt_status = None, "not asked (this scan's GeckoTerminal slots are used): the chain's own facts only"
+    elif net == "solana" and GT_LIMIT.busy():
         body, gt_status = None, "skipped: GeckoTerminal rate limit, the chain's own facts only"
     else:
         try:
@@ -531,7 +533,7 @@ def sol_chain_facts(mint: str) -> dict:
     if programs:
         out["top_program_account_percent"] = round(100.0 * max(programs.values()) / supply, 3)
     ranked = sorted(wallets.items(), key=lambda kv: -kv[1])
-    out["top_wallets"] = [{"owner": o, "pct": round(100.0 * a / supply, 3)} for o, a in ranked[:10]]   # who holds it
+    out["top_wallets"] = [{"owner": o, "pct": round(100.0 * a / supply, 3)} for o, a in ranked[:20]]   # who holds it
     if len(accounts) >= 10 or not unknown:
         out["top10_wallets_percent"] = round(100.0 * sum(a for _, a in ranked[:10]) / supply, 3)       # pools excluded
     biggest_wallet = max(wallets.values()) if wallets else None

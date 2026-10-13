@@ -129,7 +129,7 @@ and tap **Check**. Within a minute you get a report and a score out of 100:
 | group | what it checks |
 |---|---|
 | rug safety | mint and freeze authority revoked (from the chain itself), Token-2022 traps, the biggest wallet and the top 10 (pools excluded), RugCheck's report (rugged, its danger list), liquidity locked or burned (or still on the bonding curve), people can actually sell |
-| who's behind it | how much the dev / creator still holds, the dev wallet's history (an old busy wallet vs one made right before the launch), RugCheck's insider wallets, a bundled launch (many wallets buying in the very first block), **copycats** (an older coin with the same ticker and 3x the liquidity = this one is a knock-off), holders |
+| who's behind it | **the bubble map**: who funded each of the 20 biggest holders (read from each wallet's first transaction on the chain). Several top holders funded by one wallet are one person: 3+ of them holding 4%+, all clusters together 10%+, or 5+ top holders in clusters is a SKIP (DOGGO's ring, OnlyDoge's two hubs); a single small pair costs points. Holders paid out by an exchange (a funder with 1000+ transactions) aren't a cluster. Also: top holders RugCheck ties to the insiders (10%+ = SKIP), how much the dev / creator still holds, the dev wallet's history, a bundled launch (many wallets buying in the very first block), **copycats** (an older coin with the same ticker and 3x the liquidity), holders |
 | where it is | age, market cap, liquidity, fresh launch / early runner / second leg, graduated from the curve |
 | momentum now | every trade on the pool: different wallets buying in the last 5 min, buy dollars vs sell dollars, the biggest buy, volume speeding up, the price in the last 5 min |
 | smart money | the wallets you follow: did they buy it, do they hold it |
@@ -228,7 +228,22 @@ The desk runs **two bots side by side**:
   sniper's **safety** checks only (no serious rug danger, no copycat, people able to sell, not already run and
   cooling, not dumping right now, a score of at least 25). Not the sniper's early-coin rules: a normal coin
   doesn't need a trending narrative, hype or a 72-hour age limit.
-- **the sniper** (early coins): every minute, the fast lane, with its narrative, hype and 2x-room rules.
+- **the sniper** (early coins): every minute, the fast lane, with its narrative, hype and 2x-room rules. It reads
+  new pools, GeckoTerminal's 5-minute trending, **pump.fun's busiest coins** (GeckoTerminal's top pools on pump.fun,
+  still on the curve), DexScreener's narratives, profiles and takeovers, and the wallets you follow.
+
+The desk reads **older coins**: GeckoTerminal's trending pools over the last hour, 6 hours and day (`DESK_TRENDING`),
+and the coins inside the narratives trending on DexScreener right now (up to 60, `DESK_METAS`; the 12 hottest
+narratives, read every 10 minutes), an hour old or more (`HARD_MIN_AGE_MINUTES`, 60). Minutes-old launches are the sniper's; `DESK_NEW_POOL_PAGES=1` adds
+new pools back to the desk.
+
+**FOMO, Phantom and pump.fun callouts.** FOMO's terms forbid automated access and it has no public list, so the bots
+can't read its trending tab. Phantom publishes no market-data API (its developer docs cover the wallet, not its
+trending list). DexScreener's official API has no "trending pairs" ranking either, but the bots read everything it does
+publish: its trending narratives, new and updated profiles, boosts, community takeovers and every pair's numbers. Pump.fun's callouts live inside its app as push notifications to a caller's followers, with no
+public feed either. What works instead: add the wallets of the callers you trust under **Wallets you follow**. A
+caller buys the coin they call, so the sniper checks it within a minute of their buy, with every rug check and the
+bubble map, before it buys anything.
 
 They split the slots so one can never crowd out the other: with `MAX_POSITIONS=5`, 3 are the desk's and 2 the
 sniper's (`DESK_SLOTS`, `SNIPE_SLOTS`). A coin you paste and tell it to buy may take any free slot. The POSITIONS
@@ -321,7 +336,10 @@ second leg up. Test them in paper first.
    excluded), and GeckoTerminal. Jev answers the market and Solana sets. A missing fact is sent as `null` and is
    never treated as fine.
 3. **Pick.** Jev chooses between the survivors, labelled c1, c2… and never by ticker. `worth_trading_at_all` must
-   pass.
+   pass. When Jev has no clear favourite (its confidence under `PICK_MIN_CONF`), it still buys Jev's top choice, with
+   half the ticket: every survivor passed every check, and buying none of them left the desk idle all evening.
+   A scan reads up to 3 coins with GeckoTerminal's dossier, then up to 3 more Solana coins from the chain alone, so it
+   doesn't stop at the 4th good coin.
 4. **Size.** The ticket is 6% of free cash × size_factor (×0.40 if a data source was dark, ×0.60 with no X read).
    It is never more than 2% of the pool, and never under `MIN_TICKET_USD`.
 5. **Fills.** A Jupiter order is refused if the price impact is over `MAX_IMPACT_PCT`. The bot signs the swap with
@@ -352,7 +370,10 @@ stays paused until you tap **Resume**.
 | `FEE_RESERVE_SOL` | `0.02` | SOL the bot never spends |
 | `RISK_POLL_SECONDS` | `300` | how often RISK checks an open position (at least 30) |
 | `CYCLE_SECONDS` | `300` | time between scans (5 minutes) |
-| `TRENDING_PAGES` | `1` | pages of GeckoTerminal trending pools scanned first (0 to 3; 0 = new pools only) |
+| `DESK_TRENDING` | `1h,6h,24h` | the trending windows the desk reads (any of 5m, 1h, 6h, 24h) |
+| `TRENDING_PAGES` | `1` | pages of each trending window (0 to 3) |
+| `DESK_NEW_POOL_PAGES` | `0` | pages of brand-new pools the desk also reads (0 to 3; new coins are the sniper's) |
+| `DESK_METAS` | `60` | coins from DexScreener's trending narratives the desk reads too (0 = none) |
 | `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
 | `MAX_POSITIONS` | `5` | coins held at once (1 to 10) |
@@ -383,6 +404,9 @@ stays paused until you tap **Resume**.
 | `SNIPE_MAX_HOLD_HOURS` / `SNIPE_RIDE_X` | `12` / `3` | max hold, and how much longer it rides while buyers lead |
 | `SNIPE_NEED_NARRATIVE` / `SNIPE_MIN_HYPE` | `on` / `50` | buy only coins with a narrative, and hype at least this |
 | `SNIPE_MIN_UPSIDE_X` | `2` | buy only with room for at least this many x |
+| `SNIPE_MAP` | `on` | the bubble map check (who funded the top holders); read for desk picks, your own checks and coins close to a BUY |
+| `SNIPE_MAP_CLUSTER_PCT` / `SNIPE_MAP_TOTAL_PCT` / `SNIPE_MAP_MAX_WALLETS` | `4` / `10` / `5` | SKIP when 3+ holders of one funder hold this %, all clusters hold this %, or this many top holders are in clusters |
+| `SNIPE_INSIDER_PCT` | `10` | SKIP when top holders RugCheck ties to the insiders hold this % |
 | `SMART_WALLETS` | none | wallets to follow: `address:name,address:name` (or add them on the page) |
 | `ANTHROPIC_API_KEY` | none | turns on the web search for buzz (X, Reddit, TikTok, news), from console.anthropic.com |
 | `BUZZ_PER_HOUR` / `BUZZ_MODEL` | `6` / `claude-haiku-5-5` | web-searched checks per hour (your own checks may use up to 30) |

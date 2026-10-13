@@ -144,6 +144,15 @@ class Config:
         self.snipe_loss_streak = int(_env_num(env, "SNIPE_LOSS_STREAK", 2, high=20))
         self.snipe_cooldown_minutes = _env_num(env, "SNIPE_COOLDOWN_MINUTES", 30, high=1440)
         self.buzz_per_hour = int(_env_num(env, "BUZZ_PER_HOUR", 6, high=120))
+        # the bubble map: several top holders funded by one wallet are one person holding a block of the supply
+        bm = str(env.get("SNIPE_MAP", "on")).strip().lower()
+        if bm not in ("on", "off"):
+            raise ValueError("SNIPE_MAP must be on or off")
+        self.snipe_map = bm == "on"
+        self.snipe_map_cluster_pct = _env_num(env, "SNIPE_MAP_CLUSTER_PCT", 4, high=100)    # 3+ wallets of one funder holding this
+        self.snipe_map_total_pct = _env_num(env, "SNIPE_MAP_TOTAL_PCT", 10, high=100)       # all clusters together
+        self.snipe_map_max_wallets = int(_env_num(env, "SNIPE_MAP_MAX_WALLETS", 5, low=2, high=20))   # top holders in clusters
+        self.snipe_insider_pct = _env_num(env, "SNIPE_INSIDER_PCT", 10, high=100)          # RugCheck's insider-tied holders
         # only coins with a story people are piling into, and attention growing fast
         need = str(env.get("SNIPE_NEED_NARRATIVE", "on")).strip().lower()
         if need not in ("on", "off"):

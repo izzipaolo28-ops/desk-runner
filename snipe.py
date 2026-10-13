@@ -28,6 +28,7 @@ import os
 import re
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import requests
@@ -312,7 +313,7 @@ def flow(rows, followed, pool_age_min, now=None):
 # ---------- RugCheck ----------
 def rugcheck(mint):
     out = {"status": None, "risks": [], "lp_locked": None, "score": None, "rugged": None, "creator": None,
-           "creator_pct": None, "insiders": None}
+           "creator_pct": None, "insiders": None, "insider_pct": None, "insider_holders": None}
     try:
         s = collect._get_json(f"{RUG}/tokens/{mint}/report/summary")
     except FetchFailed as exc:
@@ -343,6 +344,93 @@ def rugcheck(mint):
         out["insiders"] = int(ins) if isinstance(ins, (int, float)) and not isinstance(ins, bool) else None
         th = full.get("totalHolders")
         out["holders"] = int(th) if isinstance(th, (int, float)) and not isinstance(th, bool) and th > 0 else None
+        top = [h for h in full.get("topHolders") or [] if isinstance(h, dict)]
+        if top:                                        # RugCheck marks each top holder it ties to the insiders
+            flagged = [h for h in top if h.get("insider") is True]
+            out["insider_holders"] = len(flagged)
+            out["insider_pct"] = round(sum(_f(h.get("pct")) or 0.0 for h in flagged), 3)
+    return out
+
+
+# ---------- the bubble map: who funded the top holders ----------
+SYSTEM_FUNDING = ("transfer", "transferWithSeed", "createAccount", "createAccountWithSeed")
+
+
+def first_funder(tx, wallet):
+    """Who put the first SOL (or the first fee) into a wallet: the source of a system transfer / account creation to it
+    in its oldest transaction, else that transaction's fee payer. None when it can't be told."""
+    if not isinstance(tx, dict):
+        return None
+    msg = (tx.get("transaction") or {}).get("message") or {} if isinstance(tx.get("transaction"), dict) else {}
+    ins = [i for i in msg.get("instructions") or [] if isinstance(i, dict)]
+    for inner in (tx.get("meta") or {}).get("innerInstructions") or []:
+        ins += [i for i in (inner or {}).get("instructions") or [] if isinstance(i, dict)]
+    for i in ins:
+        p = i.get("parsed")
+        if i.get("program") == "system" and isinstance(p, dict) and p.get("type") in SYSTEM_FUNDING:
+            info = p.get("info") or {}
+            dest, src = info.get("destination") or info.get("newAccount"), info.get("source")
+            if dest == wallet and isinstance(src, str) and src != wallet and MINT_RE.match(src):
+                return src
+    keys = msg.get("accountKeys") or []
+    payer = (keys[0].get("pubkey") if isinstance(keys[0], dict) else keys[0]) if keys else None
+    return payer if isinstance(payer, str) and payer != wallet and MINT_RE.match(payer) else None
+
+
+def _wallet_origin(wallet):
+    """(funder or None, why). A wallet with 100+ transactions is an active trader: its funding is too far back to read
+    cheaply and it isn't the fresh kind a bundle is made of."""
+    sigs = collect._rpc("getSignaturesForAddress", [wallet, {"limit": 100}])
+    if not isinstance(sigs, list):
+        return None, "unreadable"
+    if len(sigs) >= 100:
+        return None, "active"
+    oldest = next((s.get("signature") for s in reversed(sigs) if isinstance(s, dict) and s.get("signature")), None)
+    if not oldest:
+        return None, "unreadable"
+    tx = collect._rpc("getTransaction", [oldest, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
+    f = first_funder(tx, wallet)
+    return (f, "ok") if f else (None, "unreadable")
+
+
+def funding_map(wallets, workers=8):
+    """What Bubblemaps draws, from the chain itself: for each of the biggest holders (pools excluded), the wallet that
+    funded it. Several top holders funded by one wallet are one person (a bundle: DOGGO's ring of ~100, OnlyDoge's two
+    hubs). A funder with 1000+ transactions is an exchange or a service paying out to strangers: not a cluster.
+    wallets: [{"owner", "pct"}]. Returns {"status", "read", "of", "clusters": [{"funder", "n", "pct", "wallets"}],
+    "clustered_pct", "clustered_n"}."""
+    ws = [w for w in wallets or [] if isinstance(w, dict) and isinstance(w.get("owner"), str)][:20]
+    out = {"status": "no holders to read", "read": 0, "of": len(ws), "active": 0, "exchange": 0, "clusters": [], "clustered_pct": 0.0,
+           "clustered_n": 0}
+    if not ws:
+        return out
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        origins = list(ex.map(lambda w: _wallet_origin(w["owner"]), ws))
+    groups = {}
+    for w, (funder, why) in zip(ws, origins):
+        if why == "active":
+            out["active"] += 1
+        if funder:
+            out["read"] += 1
+            groups.setdefault(funder, []).append(w)
+    multi = {f: g for f, g in groups.items() if len(g) >= 2}
+
+    def busy(funder):
+        s = collect._rpc("getSignaturesForAddress", [funder, {"limit": 1000}])
+        return isinstance(s, list) and len(s) >= 1000
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+        flags = dict(zip(multi, ex.map(busy, list(multi))))
+    for f, g in multi.items():
+        if flags.get(f):
+            out["exchange"] += len(g)
+            continue                                   # an exchange paying out: strangers, not one person
+        out["clusters"].append({"funder": f, "n": len(g), "pct": round(sum(_f(w.get("pct")) or 0.0 for w in g), 3),
+                                "wallets": [w["owner"] for w in g][:20]})
+    out["clusters"].sort(key=lambda c: (-c["pct"], -c["n"]))
+    out["clustered_pct"] = round(sum(c["pct"] for c in out["clusters"]), 3)
+    out["clustered_n"] = sum(c["n"] for c in out["clusters"])
+    readable = out["read"] + out["active"]
+    out["status"] = "ok" if readable >= max(3, len(ws) // 2) else f"partial: only {readable} of {len(ws)} holders could be read"
     return out
 
 
@@ -551,7 +639,7 @@ def families(words):
 class Metas:
     """DexScreener's trending narratives ("metas": a theme many coins share, like a person, an AI wave or a viral
     character, with that theme's market cap move), read every 10 minutes: which stories are hot and which coins are in them."""
-    EVERY, TOP = 600, 8
+    EVERY, TOP = 600, 12
 
     def __init__(self):
         self.at, self.list, self.by_mint, self.status = 0.0, [], {}, "not read yet"
@@ -648,7 +736,7 @@ def upside_read(F, metas_hit):
 
 
 CROWD_HOLDERS, CROWD_PER_HOUR, CROWD_HYPE = 1500, 1500, 70
-PAID_LISTS = {"boosted", "new profile"}          # lists a coin gets on by paying, not by being bought
+PAID_LISTS = {"boosted", "new profile", "profile updated"}     # lists a coin gets on by paying, not by being bought
 
 
 def narrative_read(F, metas_hit, categories, bz, orders=(), lists=(), themes=(), fams=(), crowd=None):
@@ -856,6 +944,37 @@ def score_coin(r, cfg):
         check("who", "insider wallets (RugCheck)", ins < 5, str(ins))
         if ins >= 5:
             add("insiders", f"RugCheck links {ins} insider wallets", -8)
+    ip = rug.get("insider_pct")
+    if ip is not None:
+        check("who", "top holders RugCheck ties to insiders", ip < cfg.snipe_insider_pct,
+              f"{rug.get('insider_holders') or 0} holding {ip:.1f}%", f"max {cfg.snipe_insider_pct:g}%")
+        if ip >= cfg.snipe_insider_pct:
+            veto.append(f"RugCheck ties top holders holding {ip:.1f}% of the supply to the insiders")
+        elif ip >= 3:
+            add("insider holders", f"RugCheck ties top holders holding {ip:.1f}% to the insiders", -6)
+    mp = r.get("map") or {}
+    lbl = "bubble map (who funded the top holders)"
+    cl = mp.get("clusters") or []
+    if cl:
+        big = cl[0]
+        desc = (f"{big['n']} top holders funded by one wallet ({big['funder'][:4]}…{big['funder'][-4:]}) hold {big['pct']:.1f}%"
+                + (f"; {len(cl)} clusters: {mp['clustered_n']} wallets, {mp['clustered_pct']:.1f}% in all" if len(cl) > 1 else ""))
+        bad = ((big["n"] >= 3 and big["pct"] >= cfg.snipe_map_cluster_pct) or mp["clustered_pct"] >= cfg.snipe_map_total_pct
+               or mp["clustered_n"] >= cfg.snipe_map_max_wallets)
+        check("who", lbl, not bad, desc)
+        if bad:
+            veto.append("bubble map: " + desc + ": one person holds a block of the supply and can dump it on you")
+        else:
+            add("map cluster", "bubble map: " + desc, -6 * min(2, len(cl)))
+    elif mp.get("status") == "ok" and mp.get("read", 0) >= 3:
+        check("who", lbl, True, f"{mp['read']} of {mp['of']} top holders traced: no one wallet funded several of them"
+              + (f" ({mp['exchange']} came from an exchange)" if mp.get("exchange") else "")
+              + (f", {mp['active']} more are active traders" if mp.get("active") else ""))
+        add("map clean", "bubble map clean: the top holders were funded by different wallets", 4)
+    elif mp.get("status") == "ok":
+        check("who", lbl, None, f"the top holders are active traders (100+ transactions each): no fresh wallets to group")
+    else:
+        check("who", lbl, None, mp.get("status") or "not read")
     fb = (fl or {}).get("first_block_buyers")
     if fb is not None:
         bundled = fb >= cfg.snipe_bundle_wallets
@@ -1128,6 +1247,7 @@ class Sniper:
         self.metas, self.holders_seen = Metas(), {}
         self.names = {}                         # mint -> (when seen, words of its name, ticker): every coin the lists show
         self.pending = {}                       # mint -> a BUY waiting for its second look: {"rep", "price", "at", "sources"}
+        self.maps = {}                          # mint -> (when, bubble map): who funded the top holders
         self.tally = deque(maxlen=600)          # (time, why) for every deep check: the page shows the last hour
         self.again, self.seen = {}, {}          # mint -> {"next", "tries", "source"} / mint -> when it was last checked
         self.last_round, self.rounds, self.note = None, 0, {}
@@ -1429,6 +1549,13 @@ class Sniper:
             for h in wallet_hits:
                 smart.setdefault(h["wallet"], {"wallet": h["wallet"], "label": followed.get(h["wallet"], h.get("label"))})["sol"] = h.get("sol")
             rep.update(rug=rug, flow=flw, smart=list(smart.values()), followed_n=len(followed))
+            if not self.cfg.snipe_map:
+                rep["map"] = {"status": "off (SNIPE_MAP=off)"}
+            elif purpose == "desk" or manual or self._close_to_buy(rep, F):
+                work("vet", "sniper: reading the bubble map")
+                rep["map"] = self._map(mint, chain.get("top_wallets"))
+            else:
+                rep["map"] = {"status": "not read: the coin isn't close to a BUY"}
             if purpose == "desk":
                 rep["jev"] = {"status": "the desk already asked Jev about this coin"}
             elif self._close_to_buy(rep, F):
@@ -1461,6 +1588,23 @@ class Sniper:
             return self._finish(rep, F)
         finally:
             st.set_working(None)
+
+    def _map(self, mint, top_wallets):
+        """The bubble map, read at most every 10 minutes per coin (the chain doesn't change that fast)."""
+        hit = self.maps.get(mint)
+        if hit and time.time() - hit[0] < 600:
+            return hit[1]
+        if not top_wallets:
+            return {"status": "not read: the chain didn't list the top holders"}
+        try:
+            m = funding_map(top_wallets)
+        except Exception as exc:                          # a map that can't be read is unknown, never a pass
+            return {"status": f"not read ({type(exc).__name__})"}
+        self.maps[mint] = (time.time(), m)
+        if len(self.maps) > 300:
+            for k in list(self.maps)[:100]:
+                self.maps.pop(k, None)
+        return m
 
     def _growth(self, mint, holders, age_min):
         """New holders an hour: from this coin's own earlier reading (3 to 60 min ago) when there is one, else since launch."""
@@ -1646,8 +1790,8 @@ class Sniper:
         for a, names in list(self.metas.by_mint.items())[:120]:
             add(a, "narrative: " + names[0], 15)
         # 3. what is new or being promoted right now
-        for path, name in (("/token-profiles/latest/v1", "new profile"), ("/token-boosts/latest/v1", "boosted"),
-                           ("/community-takeovers/latest/v1", "community takeover")):
+        for path, name in (("/token-profiles/latest/v1", "new profile"), ("/token-profiles/recent-updates/v1", "profile updated"),
+                           ("/token-boosts/latest/v1", "boosted"), ("/community-takeovers/latest/v1", "community takeover")):
             try:
                 got = dex_list(path)
             except FetchFailed as exc:
@@ -1656,9 +1800,12 @@ class Sniper:
             note[name] = len(got)
             for a in got[:20]:
                 add(a, name, 10)
-        for kind, params, name in (("new_pools", {}, "new pool"), ("trending_pools", {"duration": "5m"}, "trending 5m")):
+        for kind, params, name in (("new_pools", {}, "new pool"), ("trending_pools", {"duration": "5m"}, "trending 5m"),
+                                   ("dexes/pump-fun/pools", {}, "pump.fun hot")):
             if name == "trending 5m" and self.rounds % 2:
                 continue                                         # every other round: GeckoTerminal is rate-limited
+            if name == "pump.fun hot" and not self.rounds % 2:
+                continue                                         # the rounds in between: pump.fun's busiest coins
             if collect.GT_LIMIT.busy():
                 note[name] = "skipped (GeckoTerminal rate limit)"
                 continue
@@ -1669,7 +1816,7 @@ class Sniper:
                 continue
             note[name] = len(got)
             for a in got[:20]:
-                add(a, name, 20 if name == "trending 5m" else 5)
+                add(a, name, 20 if name == "trending 5m" else 15 if name == "pump.fun hot" else 5)
         for mint, w in list(self.again.items()):                 # WATCH coins, looked at again
             if now >= w["next"]:
                 add(mint, w["source"] + " (again)", 30)

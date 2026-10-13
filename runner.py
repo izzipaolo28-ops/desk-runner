@@ -82,13 +82,23 @@ def _fomo_link(raw):
 FOMO_LINK = _fomo_link(os.environ.get("FOMO_LINK"))
 
 
-TRENDING_WINDOW = os.environ.get("TRENDING_WINDOW", "1h").strip()
-if TRENDING_WINDOW not in ("5m", "1h", "6h", "24h"):
-    TRENDING_WINDOW = "1h"
+# THE DESK's coins: older coins with real volume that can still 2x-3x, read from GeckoTerminal's trending lists over
+# the last hour, 6 hours and day. Minutes-old launches are the sniper's (they'd only be cut for age here).
+_tw = os.environ.get("DESK_TRENDING", "").strip() or os.environ.get("TRENDING_WINDOW", "").strip() or "1h,6h,24h"
+DESK_TRENDING = [w for w in dict.fromkeys(x.strip() for x in _tw.split(",")) if w in ("5m", "1h", "6h", "24h")] or ["1h"]
+TRENDING_WINDOW = DESK_TRENDING[0]
 try:
     TRENDING_PAGES = max(0, min(3, int(os.environ.get("TRENDING_PAGES", "1"))))
 except ValueError:
     TRENDING_PAGES = 1
+try:
+    DESK_NEW_POOL_PAGES = max(0, min(3, int(os.environ.get("DESK_NEW_POOL_PAGES", "0"))))
+except ValueError:
+    DESK_NEW_POOL_PAGES = 0
+try:
+    DESK_METAS = max(0, min(200, int(os.environ.get("DESK_METAS", "60"))))   # coins from DexScreener's trending narratives
+except ValueError:
+    DESK_METAS = 60
 try:
     TEST_SWAP_USD = min(20.0, max(0.5, float(os.environ.get("TEST_SWAP_USD", "1"))))
 except ValueError:
@@ -106,11 +116,19 @@ def _f(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
 
 
-def universe(pages):
-    """Trending pools first (what is trading now), then main's new pools. One GeckoTerminal slot per page.
-    Either list failing is recorded in collect.UNIVERSE_FAILURES; only both failing stands the cycle down."""
-    fresh = collect.universe(nets=NETS, pages=pages)          # clears the failure list
-    hot = collect.trending(nets=NETS, pages=TRENDING_PAGES, duration=TRENDING_WINDOW) if TRENDING_PAGES else []
+def universe(pages=None):
+    """The desk's coins: GeckoTerminal's trending pools over each window in DESK_TRENDING (1h, 6h, 24h: what has been
+    trading for a while, not what launched a minute ago), then new pools only if DESK_NEW_POOL_PAGES asks for them.
+    One GeckoTerminal slot per page. A list failing is recorded in collect.UNIVERSE_FAILURES; only all of them failing
+    stands the cycle down."""
+    if DESK_NEW_POOL_PAGES:
+        fresh = collect.universe(nets=NETS, pages=DESK_NEW_POOL_PAGES)    # clears the failure list
+    else:
+        collect.UNIVERSE_FAILURES.clear()
+        fresh = []
+    hot = []
+    for w in DESK_TRENDING if TRENDING_PAGES else ():
+        hot += collect.trending(nets=NETS, pages=TRENDING_PAGES, duration=w)
     out, seen = [], set()
     for tid in hot + fresh:
         if tid not in seen:
@@ -162,7 +180,7 @@ class Runner:
         self.last_bank = None
         self.test_requested = False
         self.coin, self.seen_n, self.seen_of, self.coin_no, self.judge_ms = {}, 0, None, None, 0
-        main.universe = universe                  # trade only what Jupiter can, trending first
+        main.universe = self.universe             # trending first, then the coins of DexScreener's trending narratives
         main.book = SlotBook(self)                # main stands down only when every slot is full
         self._instrument()
         self.sniper = snipe.Sniper(self)          # your own checks, the wallets you follow, the fast lane
@@ -227,10 +245,10 @@ class Runner:
                 feed("crawler", "pass", f"trades ok: {t.get('trades_h24')} in 24h", t, "trade_kill", ms)
             return k
 
-        def dossier(t):
+        def dossier(t, use_gt=True):
             step("vet", "dossier", t)
             try:
-                d = timed(collect.dossier, t)
+                d = timed(collect.dossier, t, use_gt=use_gt)
             except collect.DossierFailed as exc:
                 feed("vet", "error", f"dossier failed: {str(exc)[:80]}", t, "dossier", R.ms.get("dossier"))
                 raise
@@ -321,6 +339,24 @@ class Runner:
                                       + (f", best {a['best'].get('choice')}" if "best" in a else ""),
                              a.get("worth_trading_at_all", {}).get("noul"), "worth")
         return r
+
+    def universe(self, pages=None):
+        """The desk's list: GeckoTerminal's trending windows, then the coins inside the narratives trending on DexScreener
+        right now (read at most every 10 minutes, shared with the sniper). A narrative coin under the desk's minimum age
+        is cut for free like any other."""
+        ids = universe(pages)
+        if DESK_METAS and "solana" in NETS:
+            try:
+                self.sniper.metas.refresh()
+            except Exception as exc:                  # a narrative list that can't be read never stops the scan
+                log.warning("metas for the desk: %s", exc)
+            seen = set(ids)
+            for mint in list(self.sniper.metas.by_mint)[:DESK_METAS]:
+                tid = f"{mint}:{collect.FOMO_NET['solana']}"
+                if tid not in seen:
+                    seen.add(tid)
+                    ids.append(tid)
+        return ids
 
     def watch_if_due(self):
         """WATCH between the steps of a scan or a check (they can take minutes, and a memecoin can drop 40% in one).
@@ -554,7 +590,9 @@ class Runner:
             self.state.agent("chief", f"no order: {stats.get('no_order') or 'nothing survived the cuts'}", None, "no order")
         else:
             t = order["token"]
-            self.state.agent("chief", f"pick {t.get('ticker') or t['address'][:6]} on {t['chain']}",
+            unsure = next((c for c in order.get("size_cuts") or [] if c.startswith("no clear favourite")), None)
+            self.state.agent("chief", f"pick {t.get('ticker') or t['address'][:6]} on {t['chain']}"
+                             + (f": {unsure}, its top choice at half the ticket" if unsure else ""),
                              order.get("confidence"), "confidence")
         self.state.agent("crawler", f"{stats.get('seen', 0)} seen, {stats.get('benched', 0)} benched · "
                                     + (why(stats) or "nothing cut"), stats.get("seen"), "seen")
@@ -608,7 +646,9 @@ class Runner:
                  practice=PRACTICE["active"], practice_note=PRACTICE["note"], watch=self.cfg.watch_plan(),
                  max_daily_loss_pct=self.cfg.max_daily_loss_pct,
                  thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD},
-                 sniper=self.sniper.status(), scorecard=snipe.scorecard(d.get("trades")), storage=STORAGE)
+                 sniper=self.sniper.status(), scorecard=snipe.scorecard(d.get("trades")), storage=STORAGE,
+                 desk_sources={"trending": DESK_TRENDING, "new_pool_pages": DESK_NEW_POOL_PAGES, "metas": DESK_METAS,
+                               "min_age_minutes": thresholds.HARD.get("min_age_minutes")})
         d.pop("shadow", None)
         d.pop("wallet_sigs", None)
         return d

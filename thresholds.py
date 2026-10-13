@@ -2,7 +2,7 @@
 # Every number that decides anything lives here. If you disagree with a pick, you disagree with a line below.
 
 HARD = {                        # stage 2, arithmetic, runs before anything costs money
-    "min_age_minutes":   15,    # younger than this and the data is noise
+    "min_age_minutes":   60,    # the desk's coins are an hour old or more: younger ones are the sniper's
     "max_age_hours":     72,    # older than this and it is not a launch any more
     "min_liquidity_usd": 12_000,
     "min_volume_h24":    40_000,
@@ -45,3 +45,4 @@ PICK_MIN_WORTH  = 0.60
 PICK_MIN_CONF   = 0.55
 DARK_TICKET_CUT = 0.40          # robinhood data_coverage == dark, or any "cut" question above with no evidence
 NO_SOCIAL_CUT   = 0.60          # no usable X handle: trade smaller, do not skip
+NO_FAVOURITE_CUT = 0.50         # several coins passed everything and Jev has no clear favourite: its top choice, half the ticket
