@@ -15,6 +15,7 @@ import logging
 import math
 import os
 import secrets
+import statistics
 import threading
 import time
 from datetime import datetime, timezone
@@ -108,6 +109,31 @@ try:
     DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "25"))))
 except ValueError:
     DESK_GATE_SCORE = 25.0
+# THE DESK waits for a retrace: a pick isn't bought at once (PQC: picked at $258K while it slid from $300K). It waits up to
+# DESK_RETRACE_MINUTES for the price to pull back DESK_RETRACE_PCT under its high since the pick and bounce (green 5 minutes,
+# buyers ahead), with the coin still up over 6 hours; down DESK_RETRACE_MAX_DROP since the pick, the pick is dropped.
+# PQC: bought with nobody buying it. A desk pick with fewer than this many buys in the last 5 minutes isn't bought.
+try:
+    DESK_MIN_BUYS_5M = max(0, int(float(os.environ.get("DESK_MIN_BUYS_5M", "5"))))
+except ValueError:
+    DESK_MIN_BUYS_5M = 5
+try:
+    DESK_RETRACE_PCT = max(0.0, min(50.0, float(os.environ.get("DESK_RETRACE_PCT", "8"))))
+    DESK_RETRACE_MINUTES = max(1.0, min(240.0, float(os.environ.get("DESK_RETRACE_MINUTES", "45"))))
+    DESK_RETRACE_MAX_DROP = max(1.0, min(90.0, float(os.environ.get("DESK_RETRACE_MAX_DROP", "20"))))
+    # no pullback but the buyers take over hard: up DESK_BREAKOUT_PCT since the pick, at its high, green 5 minutes (not a
+    # 30%+ candle), buyers 1.5x the sellers, 5-minute volume 1.5x the hour's pace, still up this hour, seen on 2 checks in a row
+    DESK_BREAKOUT_PCT = max(0.0, min(100.0, float(os.environ.get("DESK_BREAKOUT_PCT", "10"))))
+except ValueError:
+    DESK_RETRACE_PCT, DESK_RETRACE_MINUTES, DESK_RETRACE_MAX_DROP, DESK_BREAKOUT_PCT = 8.0, 45.0, 20.0, 10.0
+# THE DIAL: how hard to push today, 0.4 to 1, from the bots' own last 24 hours, today's losses and how the hot coins are
+# doing this hour. Every automatic ticket is multiplied by it; under DIAL_EARLY_MIN there are no early bets that day.
+DIAL = "off" if os.environ.get("DIAL", "on").strip().lower() == "off" else "on"
+try:
+    DIAL_MIN = max(0.1, min(1.0, float(os.environ.get("DIAL_MIN", "0.4"))))
+    DIAL_EARLY_MIN = max(0.0, min(1.0, float(os.environ.get("DIAL_EARLY_MIN", "0.75"))))
+except ValueError:
+    DIAL_MIN, DIAL_EARLY_MIN = 0.4, 0.75
 SCAN_NOW_COOLDOWN = 60          # seconds: "Scan now" can't fire twice inside a minute (GeckoTerminal, Jev credits)
 GATE_RETRY_SECONDS = 60         # the desk's pick failed the safety checks: the next scan starts this soon
 
@@ -184,8 +210,12 @@ class Runner:
         main.book = SlotBook(self)                # main stands down only when every slot is full
         self._instrument()
         self.sniper = snipe.Sniper(self)          # your own checks, the wallets you follow, the fast lane
+        self._dial = None
+        self.seats.dial_fn = lambda: self.dial()["value"]        # every automatic ticket, times today's dial
         self._watching = False
         self.sell_requests = []                   # coins you asked to sell from the page
+        self.pending_desk, self.last_entry_check = {}, None   # desk picks waiting for a retrace
+        self._gate_rep = None                                  # the sniper's report on the last desk pick
         collect.WAIT_HOOK = self.watch_if_due     # a scan waiting on GeckoTerminal keeps watching prices meanwhile
 
     # ---------- the live feed: main.run_once is the desk's code, unchanged; each step it calls is wrapped ----------
@@ -221,6 +251,9 @@ class Runner:
             step("crawler", "free_kill", t)
             if t.get("addr") in {p.get("mint") for p in st.positions()}:
                 st.feed("crawler", "info", "already held: RISK is managing it", **_coin(t))
+                return "already_held"
+            if t.get("addr") in R.pending_desk:
+                st.feed("crawler", "info", "already picked: waiting for its retrace", **_coin(t))
                 return "already_held"
             k = timed(desk_filter.free_kill, t)
             st.lens(t, "free_kill", k, R.coin_no)
@@ -379,6 +412,7 @@ class Runner:
         """Every desk pick gets the sniper's full check before a cent goes in: RugCheck, locked liquidity, the dev
         wallet, bundles, copycats, people able to sell, buyers vs sellers right now. (True, why) to buy."""
         tok = order["token"]
+        self._gate_rep = None
         if DESK_GATE == "off":
             return True, "gate off"
         # Normal coins: the safety checks only (rugs, copycats, can't sell, already ran and cooling, sellers ahead).
@@ -388,10 +422,18 @@ class Runner:
         m5 = ((rep.get("facts") or {}).get("chg") or {}).get("m5")
         h1 = ((rep.get("facts") or {}).get("chg") or {}).get("h1")
         blind = next((w for w in rep.get("wait") or [] if w.startswith("the bubble map couldn't be read")), None)
+        ran = next((w for w in rep.get("wait") or [] if w.startswith("it just ran")), None)
+        b5 = (((rep.get("facts") or {}).get("buys") or {}).get("m5"))
+        s5 = (((rep.get("facts") or {}).get("sells") or {}).get("m5"))
         if rep["verdict"] == "SKIP":
             ok, why = False, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"
         elif blind:
             ok, why = False, blind[:160]
+        elif ran:
+            ok, why = False, ran[:160]
+        elif isinstance(b5, int) and b5 < DESK_MIN_BUYS_5M:
+            ok, why = False, (f"nobody is buying it right now ({b5} buys vs {s5 if s5 is not None else '?'} sells in 5 min): "
+                              "a coin nobody buys only falls")
         elif isinstance(h1, (int, float)) and h1 <= -25:
             ok, why = False, f"it's a falling knife: {h1:+.0f}% this hour (a bounce in a falling coin isn't an entry)"
         elif isinstance(m5, (int, float)) and self.cfg.snipe_max_m5_pct > 0 and m5 >= self.cfg.snipe_max_m5_pct:
@@ -403,11 +445,67 @@ class Runner:
             ok, why = False, f"sniper score {rep.get('score')} is under {DESK_GATE_SCORE:g}"
         else:
             ok, why = True, f"sniper score {rep.get('score')}"
-        rep["action"] = ("desk pick: passed the sniper's checks, buying" if ok else f"desk pick not bought: {why}")
+        self._gate_rep = rep
+        rep["action"] = ("desk pick: passed the sniper's checks" + (", waiting for a retrace" if DESK_RETRACE_PCT > 0 else ", buying")
+                         if ok else f"desk pick not bought: {why}")
         self.sniper._save(rep)
         if not ok:
             self.state.feed("chief", "cut", f"desk pick stopped by the sniper's checks: {why}", tok.get("ticker"), tok["address"])
         return ok, why
+
+    # ---------- THE DIAL: how hard to push today ----------
+    def dial(self):
+        now = self.clock()
+        if self._dial is None or now - self._dial[0] >= 60 or now < self._dial[0]:
+            self._dial = (now, self._read_dial(now))
+        return self._dial[1]
+
+    def _read_dial(self, now):
+        if DIAL == "off":
+            return {"value": 1.0, "on": False, "early_min": None, "why": ["off (DIAL=off)"]}
+        v, why = 1.0, []
+        coins = {}                                         # 1. its own last 24 hours, both bots, each coin once
+        for i, t in enumerate(self.state.data.get("trades") or []):
+            c = coins.setdefault(t.get("order_id") or f"row{i}", {"pnl": 0.0, "closed": None})
+            c["pnl"] += _f(t.get("pnl_usd")) or 0.0
+            if t.get("final") is not False and c["closed"] is None:
+                c["closed"] = snipe._ts(t.get("closed_at"))
+        recent = [c for c in coins.values() if c["closed"] and 0 <= time.time() - c["closed"] <= 86400]
+        if len(recent) >= 4:
+            wins = sum(1 for c in recent if c["pnl"] > 0)
+            f = 1.0 if wins / len(recent) >= 0.5 else 0.8 if wins / len(recent) >= 0.25 else 0.6
+            v *= f
+            why.append(f"its last 24h: {wins} of {len(recent)} coins won" + (f" (x{f:g})" if f < 1 else ""))
+        else:
+            why.append(f"its last 24h: {len(recent)} coin{'s' if len(recent) != 1 else ''} closed, too few to judge")
+        d = self.state.data                                # 2. today's losses
+        start, lost, limit = _f(d.get("day_start_bank")), -(_f(d.get("realized_today")) or 0.0), self.cfg.max_daily_loss_pct
+        if d.get("day") == datetime.now(timezone.utc).date().isoformat() and start and limit > 0 and lost >= start * limit / 200:
+            v *= 0.75
+            why.append(f"down ${lost:,.2f} today, half the daily loss limit (x0.75)")
+        moves = [h for t, h in list(self.sniper.mood) if 0 <= now - t <= 1800]   # 3. the hot coins, the last 30 minutes
+        if len(moves) >= 15:
+            med = statistics.median(moves)
+            f = 1.0 if med >= 10 else 0.9 if med >= 0 else 0.7
+            v *= f
+            why.append(f"the market: the hot coins' median hour {med:+.0f}% ({len(moves)} read)" + (f" (x{f:g})" if f < 1 else ""))
+        else:
+            why.append("the market: not enough hot coins read yet")
+        return {"value": round(max(DIAL_MIN, min(1.0, v)), 2), "on": True, "early_min": DIAL_EARLY_MIN, "why": why}
+
+    def _why_bought(self, order):
+        """The desk's reasons, kept on the position: Jev's pick and the checks it passed, with the numbers at the pick."""
+        rep, out = getattr(self, "_gate_rep", None) or {}, []
+        w, c = order.get("worth_trading_at_all"), order.get("confidence")
+        out.append("Jev's pick" + (f": worth trading {w:.2f}" if isinstance(w, (int, float)) else "")
+                   + (f", confidence {c:.2f}" if isinstance(c, (int, float)) else ", the only coin left") + f"; ticket x{order.get('size_factor')}")
+        if rep:
+            good = [p["label"] for p in sorted(rep.get("points") or [], key=lambda p: -p["pts"]) if p["pts"] > 0][:3]
+            ch = (rep.get("facts") or {}).get("chg") or {}
+            out.append(f"safety checks score {rep.get('score')}/100" + (": " + "; ".join(good) if good else ""))
+            out.append("at the pick: " + ", ".join(f"{k} {v:+.0f}%" for k, v in (("5m", ch.get("m5")), ("1h", ch.get("h1")), ("6h", ch.get("h6")))
+                                                    if isinstance(v, (int, float))))
+        return out
 
     def slots_free(self):
         return len(self.state.positions()) < self.cfg.max_positions
@@ -420,12 +518,120 @@ class Runner:
 
     def desk_slots_free(self):
         total, desk, _ = self.held_counts()
-        return total < self.cfg.max_positions and desk < self.cfg.desk_slots
+        waiting = len(self.pending_desk)                  # a pick waiting for its retrace holds its slot
+        return total + waiting < self.cfg.max_positions and desk + waiting < self.cfg.desk_slots
+
+    # ---------- the desk's entry: wait for a retrace and a bounce ----------
+    def wait_entry(self, order, rep, now):
+        tok, F = order["token"], (rep or {}).get("facts") or {}
+        price = _f(F.get("price")) or _f((order.get("facts") or {}).get("price_usd"))
+        if not price:
+            return False
+        self.pending_desk[tok["address"]] = {"order": order, "at": now, "price0": price, "high": price, "low": price,
+                                             "mcap0": _f(F.get("mcap")) or _f((order.get("facts") or {}).get("mcap_usd")), "ticker": tok.get("ticker"), "last": None, "strong": 0}
+        if not self.state.positions():
+            book.release()                               # nothing bought yet: taken again when it's bought
+        self.state.feed("chief", "info", f"picked at MC {snipe.money(self.pending_desk[tok['address']]['mcap0'])}: waiting up to {DESK_RETRACE_MINUTES:g} min for a "
+                        f"{DESK_RETRACE_PCT:g}%+ pullback and a bounce before buying (it doesn't buy the top)", tok.get("ticker"), tok["address"])
+        return True
+
+    def entries_due(self, now):
+        return bool(self.pending_desk) and (self.last_entry_check is None or now - self.last_entry_check >= 20)
+
+    def run_entries(self, now):
+        self.last_entry_check = now
+        mints = list(self.pending_desk)[:30]
+        try:
+            rows = snipe.dex_rows(mints)
+        except collect.FetchFailed:
+            return "entry: no price right now"
+        did = "entry: waiting"
+        for m in mints:
+            p = self.pending_desk[m]
+            F = snipe.pair_facts(snipe.pairs_for(rows, m))
+            price, age_min = _f(F.get("price")), (now - p["at"]) / 60
+            if price:
+                p["high"], p["low"] = max(p["high"], price), min(p["low"], price)
+                chg, b5, s5 = F.get("chg") or {}, (F.get("buys") or {}).get("m5"), (F.get("sells") or {}).get("m5")
+                m5, h6 = chg.get("m5"), chg.get("h6")
+                pull, drop = (1 - price / p["high"]) * 100, (1 - price / p["price0"]) * 100
+                p["last"] = {"pull": round(pull, 1), "vs_pick": round(-drop, 1), "mcap": F.get("mcap"), "m5": m5, "h6": h6}
+                if drop >= DESK_RETRACE_MAX_DROP:
+                    did = self._drop_entry(m, now, f"it kept falling: {-drop:+.0f}% since it was picked, no entry")
+                    continue
+                if (pull >= DESK_RETRACE_PCT and isinstance(m5, (int, float)) and m5 > 0 and b5 is not None and s5 is not None
+                        and b5 >= s5 and b5 >= max(1, DESK_MIN_BUYS_5M) and (h6 is None or h6 >= 0)):
+                    did = self._buy_entry(m, now, f"bought the retrace: {pull:.0f}% under its high since the pick, bouncing "
+                                                  f"({m5:+.1f}% in 5 min, {b5} buys vs {s5} sells), at MC {snipe.money(F.get('mcap'))}")
+                    continue
+                strong = self._breakout(F, p, price)
+                p["strong"] = p["strong"] + 1 if strong else 0
+                if strong and p["strong"] >= 2:                  # held on two checks in a row: not a one-candle wick
+                    did = self._buy_entry(m, now, f"bought the breakout: no pullback came, it ran {-drop:+.0f}% since the pick and the "
+                                                  f"buyers took over ({strong}), at MC {snipe.money(F.get('mcap'))}")
+                    continue
+                if strong:
+                    did = "entry: breakout building"
+            if age_min >= DESK_RETRACE_MINUTES:
+                ran = price and price > p["price0"]
+                did = self._drop_entry(m, now, f"no clean entry in {DESK_RETRACE_MINUTES:g} min"
+                                          + (f": it drifted {(price / p['price0'] - 1) * 100:+.0f}% up without a pullback or a breakout with "
+                                             "the buyers heavily ahead, and it doesn't chase" if ran
+                                             else ": it never bounced with the buyers ahead in an uptrend"))
+        self.snapshot()
+        return did
+
+    def _breakout(self, F, p, price):
+        """Momentum shifting up hard without a pullback. Returns what it saw, or None."""
+        if DESK_BREAKOUT_PCT <= 0:
+            return None
+        chg, vol = F.get("chg") or {}, F.get("vol") or {}
+        b5, s5 = (F.get("buys") or {}).get("m5"), (F.get("sells") or {}).get("m5")
+        m5, h1, h6, v5, vh = chg.get("m5"), chg.get("h1"), chg.get("h6"), _f(vol.get("m5")), _f(vol.get("h1"))
+        rise, pull = (price / p["price0"] - 1) * 100, (1 - price / p["high"]) * 100
+        spike = self.cfg.snipe_max_m5_pct if self.cfg.snipe_max_m5_pct > 0 else 30
+        if (rise < DESK_BREAKOUT_PCT or pull > 3 or not isinstance(m5, (int, float)) or not 3 <= m5 < spike
+                or not isinstance(h1, (int, float)) or h1 <= 0 or (isinstance(h6, (int, float)) and h6 < 0)
+                or b5 is None or s5 is None or b5 < 15 or b5 < 1.5 * s5 or not v5 or not vh or v5 < 1.5 * vh / 12):
+            return None
+        return f"{m5:+.1f}% in 5 min, {b5} buys vs {s5} sells, volume {v5 / (vh / 12):.1f}x its hourly pace"
+
+    def _buy_entry(self, mint, now, why):
+        p = self.pending_desk.pop(mint)
+        order = p["order"]
+        order["why_bought"] = list(order.get("why_bought") or []) + [why]
+        total, desk, _ = self.held_counts()
+        if total >= self.cfg.max_positions or desk >= self.cfg.desk_slots or mint in {x.get("mint") for x in self.state.positions()}:
+            self.pending_desk[mint] = p                   # back in line until the wait runs out
+            return self._drop_entry(mint, now, "the slots filled up while it waited (a coin you bought)")
+        bank = self.last_bank = self.seats.bank()
+        if bank is None or not self.seats.daily_guard(bank):
+            self.seats.release_unfilled(order, "no bank or the daily loss limit")
+            return "entry: not bought"
+        book.take(order)                                 # the desk holds it from here, as with any desk buy
+        try:
+            self.seats.send_to_seats(order, bank)
+        finally:
+            self.state.set_working(None)
+        self.last_risk = self.last_watch = now
+        self.state.feed("chief", "pick", why[:180], p.get("ticker"), mint)
+        return "entry: bought"
+
+    def _drop_entry(self, mint, now, why):
+        p = self.pending_desk.pop(mint)
+        order = p["order"]
+        book.sit(f"{mint}:{order['token'].get('network_id') or collect.FOMO_NET['solana']}", "sniper_gate")
+        self.seats.release_unfilled(order, why)
+        self.state.feed("chief", "cut", f"desk pick dropped: {why}"[:180], p.get("ticker"), mint)
+        if self.last_cycle is not None:                  # the slot is free again: the next pick in a minute, not five
+            self.last_cycle = min(self.last_cycle, now - max(0.0, CYCLE_SECONDS - GATE_RETRY_SECONDS))
+        return "entry: dropped"
 
     def snipe_slots_free(self, yours=False):
         """The sniper's own slots; a coin you asked for yourself may take any free slot."""
         total, _, snipe = self.held_counts()
-        return total < self.cfg.max_positions and (yours or snipe < self.cfg.snipe_slots)
+        waiting = 0 if yours else len(self.pending_desk)          # a desk pick waiting for its entry keeps its slot
+        return total + waiting < self.cfg.max_positions and (yours or snipe < self.cfg.snipe_slots)
 
     def tick(self):
         """One step of the loop: WATCH and RISK manage every open coin on their clocks, and while a slot is free
@@ -463,6 +669,8 @@ class Runner:
                 done.append((4, "risk: closed") if trade else (2, "risk: holding"))
             if done:
                 self.snapshot()
+        if self.pending_desk and self.entries_due(now) and not self.state.data.get("paused"):
+            done.append((3, self.run_entries(now)))      # the desk's picks waiting for their retrace
         ran_cycle = False
         if self.desk_slots_free():
             if self.state.data.get("paused"):
@@ -508,6 +716,12 @@ class Runner:
                 self.last_cycle = now - max(0.0, CYCLE_SECONDS - GATE_RETRY_SECONDS)
                 self.snapshot()
                 return "cycle: gate said no"
+            order["why_bought"] = self._why_bought(order)
+            if self._gate_rep:                           # what it bought into, so a loss gets its review too
+                order["entry_ctx"] = snipe.Sniper._fingerprint(self._gate_rep, self._gate_rep.get("facts") or {})
+            if DESK_RETRACE_PCT > 0 and self.wait_entry(order, self._gate_rep, now):
+                self.snapshot()
+                return "cycle: waiting for a retrace"
             try:
                 self.seats.send_to_seats(order, bank)
             finally:
@@ -646,6 +860,7 @@ class Runner:
         d.update(slots={"desk": self.cfg.desk_slots, "sniper": self.cfg.snipe_slots, "desk_held": desk_n, "sniper_held": snipe_n,
                         "desk_free": self.desk_slots_free(), "sniper_free": self.snipe_slots_free()},
                  desk_gate={"on": DESK_GATE == "on", "score": DESK_GATE_SCORE})
+        d["dial"] = self.dial()
         d.update(max_positions=self.cfg.max_positions, max_exposure_pct=self.cfg.max_exposure_pct,
                  next_cycle_at=None if full or d.get("paused") else
                  _iso(self.clock() if self.last_cycle is None else self.last_cycle + CYCLE_SECONDS),
@@ -656,6 +871,11 @@ class Runner:
                  max_daily_loss_pct=self.cfg.max_daily_loss_pct,
                  thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD},
                  sniper=self.sniper.status(), scorecard=snipe.scorecard(d.get("trades")), storage=STORAGE,
+                 desk_waiting=[{"mint": m, "ticker": p.get("ticker"), "mcap0": p.get("mcap0"), "minutes_left":
+                                round(max(0.0, DESK_RETRACE_MINUTES - (self.clock() - p["at"]) / 60), 1), "last": p.get("last")}
+                               for m, p in self.pending_desk.items()],
+                 desk_retrace={"pct": DESK_RETRACE_PCT, "minutes": DESK_RETRACE_MINUTES, "max_drop": DESK_RETRACE_MAX_DROP,
+                               "breakout_pct": DESK_BREAKOUT_PCT},
                  desk_sources={"trending": DESK_TRENDING, "new_pool_pages": DESK_NEW_POOL_PAGES, "metas": DESK_METAS,
                                "min_age_minutes": thresholds.HARD.get("min_age_minutes")})
         d.pop("shadow", None)

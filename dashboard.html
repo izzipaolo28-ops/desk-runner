@@ -945,9 +945,12 @@ function planBlock(p, W, i, n, bare){
       : `once up +${W.trail_arm_pct}%: when it slips off its best with sellers ahead and the volume drying up (or the trail or the lock hits), `
         + `${W.momentum_sell_pct}% out, the last ${100 - W.momentum_sell_pct}% rides (out ${W.runner_trail_pct}% off its best, never into a loss)`]] : []),
     ...(W.red_pct ? [["never green", `out at -${W.red_pct}% if it hasn't gone green ${W.red_minutes} min in`]] : []),
+    ...(W.dead_loss_pct ? [["nobody buying", `out at -${W.dead_loss_pct}% or worse if nobody's buying (${W.dead_max_buys} buys or fewer in 5 min, or the sellers 3x the buyers) and it isn't rising, for ${W.dead_seconds}s`]] : []),
     ...(W.fail_pct ? [["move failed", `out at -${W.fail_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 - W.fail_pct / 100))} MC)` : "")
       + ` if it's still falling ${W.fail_m5_pct}%+ in 5 min, in its first ${W.fail_minutes} min`]] : []),
     ...(W.stall_minutes ? [["no momentum", `out if it hasn't made +${W.stall_gain_pct}% within ${W.stall_minutes} min`]] : []),
+    ...((p.why_bought || []).length ? [["why it bought", p.why_bought.join(" · ")]] : []),
+    ...(p.early ? [["early bet", `bought under ${mcap(num(W.under_mcap_usd))}: a smaller ticket, out at -${W.stop_loss_pct}%, profits taken fast, the last ${W.keep_pct}% rides`]] : []),
     ["bought by", p.plan === "snipe" ? "the sniper" + (p.source ? ` (${p.source})` : "") + (num(p.score) !== null ? `, score ${p.score}/100` : "") : "the desk (Jev's pick)"],
     ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells all under 0.20)"]];
   for (const [k, v] of rows){ const tr = el("tr"), td = el("td", k === "open P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : "");
@@ -1433,7 +1436,7 @@ function liveDraw(now){
   ctx.strokeStyle = "#1b2233"; ctx.beginPath(); ctx.moveTo(plotR + .5, 0); ctx.lineTo(plotR + .5, plotB); ctx.moveTo(0, plotB + .5); ctx.lineTo(W, plotB + .5); ctx.stroke();
   if (!L){ say("no coin under the lens yet"); liveUi(null); return; }
   const k = liveSupply(L), useMc = view.liveScale === "mc" && !!k, val = p => useMc ? p * k : p, fmt = v => useMc ? "$" + compact(v) : fmtP(v);
-  const bars = liveBars(L, view.liveIv), cur = livePrice(L), q = liveHeld(L.mint), W0 = (lastStatus && lastStatus.watch) || {}, Wt = q && q.plan === "snipe" ? Object.assign({}, W0, W0.snipe || {}) : W0;
+  const bars = liveBars(L, view.liveIv), cur = livePrice(L), q = liveHeld(L.mint), W0 = (lastStatus && lastStatus.watch) || {}, Wt = q && q.plan === "snipe" ? Object.assign({}, W0, W0.snipe || {}, q.early ? W0.early || {} : {}) : W0;
   const entryP = q && num(q.entry_price_usd) ? q.entry_price_usd : q && num(q.entry_mcap) && k ? q.entry_mcap / k : null;
   const entryMc = q ? (num(q.entry_mcap) ?? (entryP !== null && k ? entryP * k : null)) : null;
   if (now - liveUiAt > 250){ liveUiAt = now; liveUi(L, k, cur, entryMc, q, bars); }
@@ -1803,7 +1806,7 @@ function render(d){
     sm.append(tt, el("span", "m", `MC ${mcap(n.entry)} → ${mcap(n.now)}`),
       el("b", n.g === null ? "" : n.g >= 0 ? "pos" : "neg", pcTxt(n.g)), el("b", n.pnl === null ? "" : n.pnl >= 0 ? "pos" : "neg", n.pnl === null ? "P&L —" : signed(n.pnl)));
     det.appendChild(sm);
-    const Wq = q.plan === "snipe" ? Object.assign({}, W, W.snipe || {}) : W;      // a sniper buy runs the sniper's exits
+    const Wq = q.plan === "snipe" ? Object.assign({}, W, W.snipe || {}, q.early ? W.early || {} : {}) : W;   // a sniper buy runs the sniper's exits (an early bet its own)
     const inner = el("div", "inner");
     const sb = el("button", "btn sellbtn", "Sell all now"); sb.type = "button";
     sb.addEventListener("click", () => { const live = lastStatus && lastStatus.mode === "live";
@@ -1983,11 +1986,16 @@ function sniperRender(d){
   $("deskNote").textContent = SL.desk !== undefined ? `${SL.desk_held}/${SL.desk} DESK SLOTS` : "";
   const deskBits = [];
   if (d.paused) deskBits.push("paused: tap Resume");
+  else if (SL.desk_free === false && (d.desk_waiting || []).length) deskBits.push("its pick is waiting for a good entry: no new scan until it buys or drops it");
   else if (SL.desk_free === false) deskBits.push(SL.desk_held >= SL.desk
     ? `its ${SL.desk} slot${SL.desk === 1 ? " is" : "s are"} full: the next scan starts when one of its coins sells`
     : `all ${d.max_positions} slots are taken: the next scan starts when a coin sells`);
   else deskBits.push("scans for normal coins every " + Math.round((d.cycle_seconds || 300) / 60) + " min" + (leftS !== null ? (leftS > 0 ? ` · next scan in ${Math.floor(leftS / 60)}:${String(leftS % 60).padStart(2, "0")}` : " · scanning now or any second") : ""));
-  const DS = d.desk_sources || {};
+  const DS = d.desk_sources || {}, DL = d.dial || {};
+  if (DL.on && num(DL.value) !== null) deskBits.push(`today's dial ${DL.value.toFixed(2)}: ` + (DL.value < 1 ? `every ticket x${DL.value.toFixed(2)}` : "full tickets")
+    + (num(DL.early_min) !== null && DL.value < DL.early_min ? `, no early bets (they need ${DL.early_min})` : "") + ` (${(DL.why || []).join(" · ")})`);
+  (d.desk_waiting || []).forEach(w => deskBits.push(`waiting for a retrace or a breakout on $${clip(w.ticker || w.mint.slice(0, 5), 10)} (picked at MC ${mcap(num(w.mcap0))}`
+    + (w.last ? `, now ${pcTxt(w.last.vs_pick)} vs the pick, ${w.last.pull}% under its high` : "") + `, ${w.minutes_left} min left)`));
   if ((DS.trending || []).length) deskBits.push(`reads the coins trending over the last ${DS.trending.join(", ")}`
     + (DS.metas ? " and the coins of DexScreener's trending narratives" : "") + (DS.new_pool_pages ? " plus new pools" : "") + (num(DS.min_age_minutes) !== null ? `, ${DS.min_age_minutes >= 60 ? DS.min_age_minutes / 60 + "h" : DS.min_age_minutes + " min"} old or more (newer ones are the sniper's)` : ""));
   if (C.time) deskBits.push(`last scan ${ago(C.time)} ago: ${st0.seen || 0} coins read` + (C.order ? `, picked $${C.order.ticker || "?"}` : st0.stood_down ? `, stood down (${clip(String(st0.stood_down), 80)})` : st0.no_order ? `, no pick (${clip(String(st0.no_order), 80)})` : ""));
@@ -2006,7 +2014,8 @@ function sniperRender(d){
   const note = S.note || {};
   $("laneNote").textContent = (S.last_round ? `last look ${ago(S.last_round)} ago · ${note.candidates ?? 0} candidates · ${note.checked ?? 0} checked deep` : mode === "off" ? "off" : "first look soon")
     + ((S.confirming || []).length ? ` · second look on ${S.confirming.map(c => "$" + clip(c.ticker || c.mint.slice(0, 5), 10)).join(", ")}` : "")
-    + (S.cooling ? ` · RESTING after ${S.cooling.why}: no fast-lane buys until ${S.cooling.at}` : "");
+    + (S.cooling ? ` · RESTING after ${S.cooling.why}: no fast-lane buys until ${S.cooling.at}` : "")
+    + (d.dial && d.dial.on && num(d.dial.value) !== null && d.dial.value < 1 ? ` · dial ${d.dial.value.toFixed(2)}` + (d.dial.value < (d.dial.early_min ?? 0) ? ": no early bets today" : "") : "");
   const rb = $("radar"), radar = d.radar || [], rkey = radar.map(x => x.mint + (x.verdict || "") + (x.score ?? "")).join("|") + Math.floor(Date.now() / 30000);
   if (rb.dataset.key !== rkey){ rb.dataset.key = rkey; rb.textContent = "";
     if (!radar.length) rb.appendChild(el("div", "empty", mode === "off" ? "the fast lane is off: set WATCH or AUTO" : "nothing looked at yet"));

@@ -123,11 +123,29 @@ class Config:
         self.snipe_min_age_minutes = _env_num(env, "SNIPE_MIN_AGE_MINUTES", 10)   # the first minutes are the dev's and the bots' dump
         self.snipe_max_age_hours = _env_num(env, "SNIPE_MAX_AGE_HOURS", 72, low=1)
         self.snipe_min_liquidity_usd = _env_num(env, "SNIPE_MIN_LIQUIDITY_USD", 8000)
-        self.snipe_min_mcap_usd = _env_num(env, "SNIPE_MIN_MCAP_USD", 20000)
-        # under this, an "early bet": the coins that can 10x, and the ones that lost the most. Bought only rising this hour,
-        # paired with SOL / USDC, with a clean bubble map, and with half the ticket
+        # the floor: $20K, with "early bets" under $100K (PUTBACK: sniped at $43.5K, sold 60% at +48-50% for +$14.86)
+        self.snipe_min_mcap_usd = _env_num(env, "SNIPE_MIN_MCAP_USD", 20_000)
+        # under this, an "early bet": the coins that can 10x, and the ones that lost the most. Extra careful in, against
+        # rugs and tops, not against good coins like PUTBACK: rising this hour, paired with SOL / USDC, a clean bubble map
+        # that was actually read, 15+ min old, no 20%+ 5-min candle, insiders under 5%, buyers 1.2x the sellers, half the ticket
         self.snipe_early_mcap_usd = _env_num(env, "SNIPE_EARLY_MCAP_USD", 100_000)
         self.snipe_early_size = _env_num(env, "SNIPE_EARLY_SIZE", 0.5, low=0.05, high=1)
+        self.snipe_early_buy_score = _env_num(env, "SNIPE_EARLY_BUY_SCORE", 70, high=100)   # raise it to be pickier
+        self.snipe_early_min_age_minutes = _env_num(env, "SNIPE_EARLY_MIN_AGE_MINUTES", 15)
+        self.snipe_early_max_m5_pct = _env_num(env, "SNIPE_EARLY_MAX_M5_PCT", 20)
+        self.snipe_early_insider_pct = _env_num(env, "SNIPE_EARLY_INSIDER_PCT", 5, high=100)
+        self.snipe_early_buyers_x = _env_num(env, "SNIPE_EARLY_BUYERS_X", 1.2, high=10)   # 5-min buys at least this x sells
+        # ...and fast profits out: 40% at +25%, 35% more at +50% (75% banked), the last 25% rides (30% trail, never a loss).
+        # Up 15% and it turns (15% off its best, or back to +5%, or the momentum dies): down to the last 25% at once.
+        self.snipe_early_scale_out = parse_ladder(env.get("SNIPE_EARLY_SCALE_OUT", "25:40,50:35"), "SNIPE_EARLY_SCALE_OUT")
+        self.snipe_early_keep_pct = _env_num(env, "SNIPE_EARLY_KEEP_PCT", 25, high=90)
+        self.snipe_early_stop_loss_pct = _env_num(env, "SNIPE_EARLY_STOP_LOSS_PCT", 15, high=100)
+        self.snipe_early_fail_pct = _env_num(env, "SNIPE_EARLY_FAIL_PCT", 8, high=100)
+        self.snipe_early_fail_m5_pct = _env_num(env, "SNIPE_EARLY_FAIL_M5_PCT", 6, high=100)
+        self.snipe_early_trail_arm_pct = _env_num(env, "SNIPE_EARLY_TRAIL_ARM_PCT", 15)
+        self.snipe_early_trail_pct = _env_num(env, "SNIPE_EARLY_TRAIL_PCT", 15, high=100)
+        self.snipe_early_lock_pct = _env_num(env, "SNIPE_EARLY_LOCK_PCT", 5, high=100)
+        self.snipe_early_red_pct = _env_num(env, "SNIPE_EARLY_RED_PCT", 4, high=100)
         self.snipe_max_mcap_usd = _env_num(env, "SNIPE_MAX_MCAP_USD", 30_000_000, low=1)
         self.snipe_max_top_wallet_pct = _env_num(env, "SNIPE_MAX_TOP_WALLET_PCT", 8, high=100)
         self.snipe_max_top10_pct = _env_num(env, "SNIPE_MAX_TOP10_PCT", 45, high=100)
@@ -151,6 +169,14 @@ class Config:
         self.desk_fail_pct = _env_num(env, "DESK_FAIL_PCT", 15, high=100)
         self.desk_fail_m5_pct = _env_num(env, "DESK_FAIL_M5_PCT", 10, high=100)
         self.desk_fail_minutes = _env_num(env, "DESK_FAIL_MINUTES", 60)
+        # PQC (a desk pick): bought with nobody buying it, held through a slow slide to the -25% stop (-$9.73). Now:
+        # down 3% with nobody buying (2 buys or fewer in 5 minutes, or the sellers 3x the buyers) and not rising, for a
+        # minute: out, both bots. And the desk's coins get a never-green rule: 45 minutes in, never green, at -8%: out.
+        self.dead_loss_pct = _env_num(env, "DEAD_LOSS_PCT", 3, high=100)
+        self.dead_max_buys = _env_num(env, "DEAD_MAX_BUYS", 2, high=1000)
+        self.dead_seconds = _env_num(env, "DEAD_SECONDS", 60, high=3600)
+        self.desk_red_minutes = _env_num(env, "DESK_RED_MINUTES", 45)
+        self.desk_red_pct = _env_num(env, "DESK_RED_PCT", 8, high=100)
         # a snipe that never goes green: PUMPATAR sat at +0.0% best for 20 minutes and went out at -8.8%
         self.snipe_red_minutes = _env_num(env, "SNIPE_RED_MINUTES", 10)
         self.snipe_red_pct = _env_num(env, "SNIPE_RED_PCT", 5, high=100)
@@ -158,6 +184,9 @@ class Config:
         self.snipe_confirm_seconds = _env_num(env, "SNIPE_CONFIRM_SECONDS", 60, high=600)
         self.snipe_confirm_drop_pct = _env_num(env, "SNIPE_CONFIRM_DROP_PCT", 4, high=100)
         self.snipe_max_m5_pct = _env_num(env, "SNIPE_MAX_M5_PCT", 30)      # +30% in 5 min = the top of a candle: wait
+        # nobody chases a run that just did +500% (CATBOT: +508% in 80 minutes, then its creator pulled the money): over the
+        # last hour (coins an hour old or more) or 6 hours (6 hours old or more), both bots wait for it to settle (0 = off)
+        self.snipe_max_run_pct = _env_num(env, "SNIPE_MAX_RUN_PCT", 500, high=100_000)
         # after this many sniper losses in a row, the fast lane stops buying for a while (your own checks still can)
         self.snipe_loss_streak = int(_env_num(env, "SNIPE_LOSS_STREAK", 2, high=20))
         self.snipe_cooldown_minutes = _env_num(env, "SNIPE_COOLDOWN_MINUTES", 30, high=1440)
@@ -171,6 +200,11 @@ class Config:
         self.snipe_map_total_pct = _env_num(env, "SNIPE_MAP_TOTAL_PCT", 10, high=100)       # all clusters together
         self.snipe_map_max_wallets = int(_env_num(env, "SNIPE_MAP_MAX_WALLETS", 5, low=2, high=20))   # top holders in clusters
         self.snipe_insider_pct = _env_num(env, "SNIPE_INSIDER_PCT", 10, high=100)          # RugCheck's insider-tied holders
+        # DOPEUS: no clusters at all, every holder paired with one other wallet. The supply split across brand-new wallets
+        # (under 100 transactions, first one in the last 3 days, or born holding the coin): this share of the traced top
+        # holders is a SKIP (0 = off)
+        self.snipe_map_fresh_pct = _env_num(env, "SNIPE_MAP_FRESH_PCT", 40, high=100)
+        self.snipe_map_fresh_days = _env_num(env, "SNIPE_MAP_FRESH_DAYS", 3, low=0.1, high=60)
         # only coins with a story people are piling into, and attention growing fast
         need = str(env.get("SNIPE_NEED_NARRATIVE", "on")).strip().lower()
         if need not in ("on", "off"):
@@ -203,17 +237,27 @@ class Config:
                 "drop_m5_pct": self.drop_m5_pct, "derisk_pct": self.derisk_pct, "pump_m5_pct": self.pump_m5_pct,
                 "pump_sell_pct": self.pump_sell_pct, "stall_minutes": self.stall_minutes, "stall_gain_pct": self.stall_gain_pct,
                 "ride_x": 1.0, "lock_pct": self.lock_pct, "fail_pct": self.desk_fail_pct, "fail_m5_pct": self.desk_fail_m5_pct,
-                "fail_minutes": self.desk_fail_minutes, "red_minutes": 0.0, "red_pct": 0.0,
+                "fail_minutes": self.desk_fail_minutes, "red_minutes": self.desk_red_minutes, "red_pct": self.desk_red_pct,
+                "dead_loss_pct": self.dead_loss_pct, "dead_max_buys": self.dead_max_buys, "dead_seconds": self.dead_seconds,
                 "momentum_sell_pct": self.momentum_sell_pct, "runner_trail_pct": self.runner_trail_pct,
                 "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
-                "fade_off_peak_pct": self.fade_off_peak_pct}
+                "fade_off_peak_pct": self.fade_off_peak_pct, "keep_pct": 0.0}
         if (pos or {}).get("plan") == "snipe":
             base.update(stop_loss_pct=self.snipe_stop_loss_pct, max_hold_hours=self.snipe_max_hold_hours,
                         trail_arm_pct=self.snipe_trail_arm_pct, trail_pct=self.snipe_trail_pct, scale_out=self.snipe_scale_out,
                         stall_minutes=self.snipe_stall_minutes, stall_gain_pct=self.snipe_stall_gain_pct, ride_x=self.snipe_ride_x,
                         lock_pct=self.snipe_lock_pct, fail_pct=self.snipe_fail_pct, fail_m5_pct=self.snipe_fail_m5_pct,
                         fail_minutes=self.snipe_fail_minutes, red_minutes=self.snipe_red_minutes, red_pct=self.snipe_red_pct)
+            if pos.get("early"):                     # an early bet: tighter loss rules, profits taken fast, the last 25% rides
+                base.update(self.early_plan())
         return type("Plan", (), base)
+
+    def early_plan(self):
+        return {"stop_loss_pct": self.snipe_early_stop_loss_pct, "scale_out": self.snipe_early_scale_out,
+                "fail_pct": self.snipe_early_fail_pct, "fail_m5_pct": self.snipe_early_fail_m5_pct,
+                "trail_arm_pct": self.snipe_early_trail_arm_pct, "trail_pct": self.snipe_early_trail_pct,
+                "lock_pct": self.snipe_early_lock_pct, "red_pct": self.snipe_early_red_pct, "keep_pct": self.snipe_early_keep_pct,
+                "momentum_sell_pct": 100 - self.snipe_early_keep_pct if self.snipe_early_keep_pct > 0 else self.momentum_sell_pct}
 
     def watch_plan(self):
         return {"enabled": self.watch, "seconds": self.watch_seconds, "stop_loss_pct": self.stop_loss_pct,
@@ -224,13 +268,17 @@ class Config:
                 "lock_pct": self.lock_pct, "momentum_sell_pct": self.momentum_sell_pct, "runner_trail_pct": self.runner_trail_pct,
                 "fail_pct": self.desk_fail_pct, "fail_m5_pct": self.desk_fail_m5_pct, "fail_minutes": self.desk_fail_minutes,
                 "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
+                "red_minutes": self.desk_red_minutes, "red_pct": self.desk_red_pct, "dead_loss_pct": self.dead_loss_pct,
+                "dead_max_buys": self.dead_max_buys, "dead_seconds": self.dead_seconds,
                 "snipe": {"stop_loss_pct": self.snipe_stop_loss_pct, "ladder": [list(r) for r in self.snipe_scale_out],
                           "trail_arm_pct": self.snipe_trail_arm_pct, "trail_pct": self.snipe_trail_pct,
                           "max_hold_hours": self.snipe_max_hold_hours, "stall_minutes": self.snipe_stall_minutes,
                           "stall_gain_pct": self.snipe_stall_gain_pct, "ride_x": self.snipe_ride_x,
                           "lock_pct": self.snipe_lock_pct, "fail_pct": self.snipe_fail_pct, "fail_m5_pct": self.snipe_fail_m5_pct,
                           "fail_minutes": self.snipe_fail_minutes, "red_minutes": self.snipe_red_minutes,
-                          "red_pct": self.snipe_red_pct}}
+                          "red_pct": self.snipe_red_pct},
+                "early": {k: ([list(r) for r in v] if k == "scale_out" else v) for k, v in self.early_plan().items()}
+                | {"ladder": [list(r) for r in self.snipe_early_scale_out], "under_mcap_usd": self.snipe_early_mcap_usd}}
 
 
 # What a coin looked like when it was bought, as tags the sniper can learn from: a tag that keeps losing is avoided.
@@ -243,11 +291,28 @@ ENTRY_TAGS = {
     "thin": "with thin liquidity (under $30K)",
     "chasing": "bought right after a big 5-minute jump",
     "late_runner": "already up 150%+ that hour",
+    # the warning signs the checks saw but let through: what it should have stopped at
+    "fresh_holders": "with many brand-new wallets among the top holders (supply split across fresh wallets)",
+    "clustered": "with a cluster on the bubble map (top holders funded by one wallet)",
+    "insiders": "with insiders among the top holders (3%+)",
+    "thin_buyers": "bought with the buyers under 1.5x the sellers",
+    "concentrated": "with the top 10 holders over 30%",
+    "near_bar": "that scored under 80 (just over the bar)",
+    "no_buyers": "bought with (almost) nobody buying it",
 }
+# a fast dump (down 20%+ within 10 minutes of the buy) counts twice for these: they are what it should have seen
+WARNING_TAGS = {"falling_hour", "odd_pair", "chasing", "late_runner", "fresh_holders", "clustered", "insiders", "thin_buyers",
+                "concentrated", "no_buyers"}
+NOT_A_SOURCE = {"you", "desk pick", "desk scan", ""}
+
+
+def tag_words(tag):
+    return ENTRY_TAGS.get(tag) or (f"found on {tag[5:]}" if tag.startswith("from:") else tag)
 
 
 def entry_tags(ctx):
-    """The tags of a coin at the moment of the buy (ctx: mcap, age_min, h1, m5, liq, quote). Unknown is no tag."""
+    """The tags of a coin at the moment of the buy (ctx: mcap, age_min, h1, m5, liq, quote, and what the checks saw:
+    fresh_share, clustered_pct, insider_pct, top10, buyers_x, score, source). Unknown is no tag."""
     c, out = ctx or {}, []
     h1, m5, mc, age, liq, q = (_f(c.get(k)) if k != "quote" else c.get(k) for k in ("h1", "m5", "mcap", "age_min", "liq", "quote"))
     if h1 is not None and h1 <= -20:
@@ -264,6 +329,25 @@ def entry_tags(ctx):
         out.append("chasing")
     if h1 is not None and h1 >= 150:
         out.append("late_runner")
+    fs, cp, ip, t10, bx, sc = (_f(c.get(k)) for k in ("fresh_share", "clustered_pct", "insider_pct", "top10", "buyers_x", "score"))
+    if fs is not None and fs >= 20:
+        out.append("fresh_holders")
+    if cp is not None and cp > 0:
+        out.append("clustered")
+    if ip is not None and ip >= 3:
+        out.append("insiders")
+    if bx is not None and bx < 1.5:
+        out.append("thin_buyers")
+    if t10 is not None and t10 > 30:
+        out.append("concentrated")
+    if sc is not None and sc < 80:
+        out.append("near_bar")
+    b5 = _f(c.get("buys5"))
+    if b5 is not None and b5 <= 2:
+        out.append("no_buyers")
+    src = c.get("source")
+    if isinstance(src, str) and src.strip().lower() not in NOT_A_SOURCE:
+        out.append("from:" + src.strip()[:30])
     return out
 
 
@@ -286,8 +370,27 @@ def review(ctx, total_pct, held_min, reason):
             bits.append(f"bought right after a {c['m5']:+.0f}% 5-minute jump: the top of the candle")
         elif t == "late_runner":
             bits.append(f"already up {c['h1']:.0f}% that hour: late")
+        elif t == "fresh_holders":
+            bits.append(f"{c.get('fresh_n') or '?'} of the {c.get('traced') or '?'} top holders it traced were brand-new wallets "
+                        f"({c['fresh_share']:.0f}%): the supply split across fresh wallets, a hidden bundle")
+        elif t == "clustered":
+            bits.append(f"a cluster on the bubble map: {c['clustered_pct']:.1f}% held by top holders one wallet funded")
+        elif t == "insiders":
+            bits.append(f"insiders held {c['insider_pct']:.1f}%")
+        elif t == "thin_buyers":
+            bits.append(f"the buyers were only {c['buyers_x']:.1f}x the sellers when it bought")
+        elif t == "concentrated":
+            bits.append(f"the top 10 holders had {c['top10']:.0f}%")
+        elif t == "near_bar":
+            bits.append(f"its score was {c['score']:.0f}, close to the bar")
+        elif t == "no_buyers":
+            bits.append(f"only {c['buys5']:.0f} buys in the 5 minutes before it bought: nobody was buying it")
+        elif t.startswith("from:"):
+            bits.append(f"found on {t[5:]}")
     if held_min is not None and held_min <= 15:
-        bits.append(f"it fell {abs(total_pct):.0f}% within {held_min:.0f} min of the buy")
+        bits.append(f"it fell {abs(total_pct):.0f}% within {held_min:.0f} min of the buy"
+                    + (": a fast dump, sold into right after the buy (counts twice in what it learns)"
+                       if total_pct <= -20 and held_min <= 10 else ""))
     if "still falling" in (reason or "") and total_pct < -20:
         bits.append("it dropped faster than a sale could be made at the -12% line")
     return bits
@@ -604,7 +707,9 @@ class Seats:
                     "model": order.get("model"), "size_factor": order.get("size_factor"),
                     "plan": order.get("plan") or "desk", "source": order.get("source") or "desk scan",
                     "score": order.get("score"), "setup": order.get("setup"), "signals": list(order.get("signals") or [])[:24],
-                    "entry_ctx": order.get("entry_ctx") if isinstance(order.get("entry_ctx"), dict) else None}
+                    "entry_ctx": order.get("entry_ctx") if isinstance(order.get("entry_ctx"), dict) else None,
+                    "why_bought": [str(x)[:200] for x in order.get("why_bought") or []][:8],
+                    "early": bool(order.get("early"))}
         if self.cfg.live:
             with self.state.lock:                    # write-ahead: a crash after sending is never a lost position
                 self.state.put({**position, "status": "sending", "tokens_raw": None,
@@ -644,6 +749,10 @@ class Seats:
 
     def send_to_seats(self, order, bank):
         """SIZE, then FILLS. If nothing is bought, RISK is told so and frees the book (it is still RISK's call)."""
+        dial = self.dial_fn() if callable(getattr(self, "dial_fn", None)) and order.get("source") != "you" else None
+        if dial is not None and dial < 1 and _f(order.get("size_factor")) is not None:   # how hard to push today
+            order["size_factor"] = round(order["size_factor"] * dial, 3)
+            order["size_cuts"] = list(order.get("size_cuts") or []) + [f"today's dial {dial:.2f}"]
         ticket, why = self.size(order, bank)
         tok = order["token"]
         label = tok.get("ticker") or tok["address"][:6]
@@ -1048,17 +1157,36 @@ class Seats:
         v5, v1 = collect._num(vol.get("m5")), collect._num(vol.get("h1"))
         pace = v5 * 12 / v1 if v5 is not None and v1 else None      # the last 5 minutes against the hour's pace
 
+        keep = c.keep_pct / 100 if c.keep_pct > 0 else 0.0     # an early bet: the share of the original bag that rides
+        init = int(pos.get("tokens_raw_initial") or pos["tokens_raw"]) or 1
+        left = int(pos["tokens_raw"]) / init
+        room = (1 - keep / left if left > keep else 0.0) if keep else 1.0   # what profit-taking may still sell of what's held
+
         def momentum_exit(why):
             """Up a lot and the move is over: most of the bag out, the rest rides (MOMENTUM_SELL_PCT=100: all out)."""
+            if keep:
+                return (room, why + f": down to the last {keep * 100:g}% of the bag, which rides", ("runner", now))
             if c.momentum_sell_pct >= 100:
                 return (1.0, why + ": out", None)
             return (c.momentum_sell_pct / 100, why + f": {c.momentum_sell_pct:g}% out, the rest rides", ("runner", now))
+        dead = (c.dead_loss_pct > 0 and gain <= -c.dead_loss_pct and sellers and (m5 is None or m5 <= 0) and age_h * 60 >= 3
+                and (buys <= c.dead_max_buys or buys * 3 <= sells))
+        with self.state.lock:                     # seen dead once is a reading; still dead a minute later is a fact
+            p = self.state.find(pos) or pos
+            if not dead:
+                p.pop("dead_ts", None)
+            elif not _f(p.get("dead_ts")):
+                p["dead_ts"] = now
+            dead_for = now - p["dead_ts"] if dead else None
         if c.stop_loss_pct > 0 and gain <= -c.stop_loss_pct:
             act, floor = (1.0, f"stop-loss at {gain:+.1f}% (limit -{c.stop_loss_pct:g}%)", None), c.stop_loss_pct
         elif (c.fail_pct > 0 and age_h * 60 <= c.fail_minutes and gain <= -c.fail_pct and m5 is not None
               and m5 <= -c.fail_m5_pct):
             act, floor = (1.0, (f"the snipe failed" if pos.get("plan") == "snipe" else "the move failed")
                           + f": {gain:+.1f}% and still falling ({m5:+.1f}% in 5 min): out before the stop", None), c.fail_pct
+        elif dead_for is not None and dead_for >= c.dead_seconds:
+            act, floor = (1.0, f"nobody's buying: {int(buys)} buys vs {int(sells)} sells in 5 min, at {gain:+.1f}% and not rising, "
+                               f"for {dead_for:.0f}s: out before it bleeds to the stop", None), c.dead_loss_pct
         elif c.red_pct > 0 and age_h * 60 >= c.red_minutes and peak_gain < 2 and gain <= -c.red_pct:
             act, floor = (1.0, f"never went green: {age_h * 60:.0f} min in, best {peak_gain:+.1f}%, now {gain:+.1f}%: out early", None), c.red_pct
         elif c.take_profit_pct > 0 and gain >= c.take_profit_pct:
@@ -1102,6 +1230,12 @@ class Seats:
                   and now - (pos.get("spike_ts") or 0) > 900):
                 act = (c.pump_sell_pct / 100, f"spike: {m5:+.1f}% in 5 min at {gain:+.1f}%: taking {c.pump_sell_pct:g}% off",
                        ("spike", now))
+        if keep and act is not None and act[2] is not None and act[2][0] in ("rung", "spike", "derisk", "runner"):
+            if room <= 0.01:                          # only the last 25% is left: it's the runner now, nothing to take
+                self._mark(pos, act[2], now, runner=True)
+                act = None
+            elif act[0] > room:
+                act = (room, act[1] + f" (the last {keep * 100:g}% of the bag rides)", act[2])
         if act is None:
             nxt = next((g for g, _ in c.scale_out if g not in done), None)
             trail = (f"trail armed, sells at -{c.trail_pct:g}% off the peak" if peak_gain >= c.trail_arm_pct
@@ -1112,18 +1246,31 @@ class Seats:
             return None
         share, why, mark = act
         trade = self.sell(pos, share, why, floor_pct=floor)
+        if keep and trade is not None and not trade.get("final"):
+            p = self.state.find(pos)
+            if p is not None and int(p.get("tokens_raw") or 0) / init <= keep + 0.01:
+                self._mark(pos, mark, now, runner=True)   # 75% banked: the rest is the runner
+                mark = None
         if trade is not None and mark is not None and not trade.get("final"):
-            with self.state.lock:
-                p = self.state.find(pos)
-                if p is not None:
-                    if mark[0] == "rung":
-                        p["rungs_done"] = sorted(set(p.get("rungs_done") or []) | {mark[1]})
-                    elif mark[0] == "runner":
-                        p["runner"], p["runner_ts"] = True, mark[1]
-                    else:
-                        p[f"{mark[0]}_ts"] = mark[1]
-                    self.state.save()
+            self._mark(pos, mark, now)
         return trade
+
+    def _mark(self, pos, mark, now, runner=False):
+        """What a sale (or a sale it no longer needs) leaves on the position: a rung done, a clock, the runner."""
+        with self.state.lock:
+            p = self.state.find(pos)
+            if p is None:
+                return
+            if mark is not None:
+                if mark[0] == "rung":
+                    p["rungs_done"] = sorted(set(p.get("rungs_done") or []) | {mark[1]})
+                elif mark[0] == "runner":
+                    runner = True
+                else:
+                    p[f"{mark[0]}_ts"] = mark[1]
+            if runner and not p.get("runner"):
+                p["runner"], p["runner_ts"] = True, now
+            self.state.save()
 
     def _rebuild(self, held):
         """The state file was lost but the book says we hold something: read the wallet, never guess the entry."""
