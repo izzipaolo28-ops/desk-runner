@@ -517,7 +517,7 @@ def _rpc(method, params):
     return None
 
 
-def helius_holders(mint, pages=3, complete_only=False):
+def helius_holders(mint, pages=3):
     """With a Helius key in SOLANA_RPC_URL: every holder of the coin from Helius' DAS getTokenAccounts (1000 accounts a
     page, up to `pages`), summed per owner, biggest first: [(owner, raw amount)]. None without Helius or when it fails.
     The plain RPC only lists the 20 biggest accounts, and a bundle often sits just under them."""
@@ -542,9 +542,6 @@ def helius_holders(mint, pages=3, complete_only=False):
                 owners[o] = owners.get(o, 0) + int(amt)
         if len(accts) < 1000:
             break
-    else:
-        if complete_only:                              # every page was full: there are more holders than it read
-            return None
     return sorted(owners.items(), key=lambda kv: -kv[1])
 
 
@@ -563,30 +560,6 @@ def rugcheck_report(mint):
         _rug_cache.clear()
     _rug_cache[mint] = (time.time(), body)
     return body
-
-
-def _holders_from_helius(mint, supply, out):
-    """Second fallback: Helius' full holder list (DAS), only when it is complete (a cut-off list could miss a whale)."""
-    hh = helius_holders(mint, complete_only=True)
-    if not hh or not supply:
-        return out
-    wallets, programs = {}, {}
-    for o, amt in hh:
-        kind = on_curve(o)
-        if kind is True:
-            wallets[o] = amt
-        elif kind is False:
-            programs[o] = amt
-    if not wallets:
-        return out
-    ranked = sorted(wallets.items(), key=lambda kv: -kv[1])
-    out["top_wallets"] = [{"owner": o, "pct": round(100.0 * a / supply, 3)} for o, a in ranked[:20]]
-    out["top10_wallets_percent"] = round(100.0 * sum(a for _, a in ranked[:10]) / supply, 3)
-    out["top_wallet_percent"] = round(100.0 * ranked[0][1] / supply, 3)
-    if programs:
-        out["top_program_account_percent"] = round(100.0 * max(programs.values()) / supply, 3)
-    out["holders_source"] = "helius"
-    return out
 
 
 def _holders_from_rugcheck(mint, out):
@@ -662,18 +635,11 @@ def sol_chain_facts(mint: str) -> dict:
     if not supply:
         return out
 
-    n_failed = len(RPC_FAILURES)
     top = ((_rpc("getTokenLargestAccounts", [mint]) or {}).get("value")) or []
     accounts = [(a.get("address"), int(a["amount"])) for a in top
                 if isinstance(a, dict) and isinstance(a.get("address"), str) and str(a.get("amount", "")).isdigit()]
     if not accounts:
-        refused = RPC_FAILURES[-1] if len(RPC_FAILURES) > n_failed or (RPC_FAILURES and n_failed >= 20) else None
-        out = _holders_from_rugcheck(mint, out)
-        if out.get("top_wallets") is None:
-            out = _holders_from_helius(mint, supply, out)
-        if out.get("top_wallets") is not None and str(refused).startswith("getTokenLargestAccounts") and refused in RPC_FAILURES:
-            RPC_FAILURES.remove(refused)                # filled in from another source: not a failure worth showing
-        return out
+        return _holders_from_rugcheck(mint, out)
     owners = ((_rpc("getMultipleAccounts", [[a for a, _ in accounts], {"encoding": "jsonParsed"}]) or {})
               .get("value")) or []
     wallets, programs, unknown = {}, {}, 0
