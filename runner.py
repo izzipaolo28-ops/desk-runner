@@ -45,7 +45,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-14 desk fixes"          # which build is running: the summary page says it
+VERSION = "2026-10-14 trade-flow tune v1"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -108,37 +108,37 @@ except ValueError:
     TEST_SWAP_USD = 1.0
 DESK_GATE = "off" if os.environ.get("DESK_GATE", "on").strip().lower() == "off" else "on"
 try:
-    DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "65"))))
+    DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "60"))))
 except ValueError:
-    DESK_GATE_SCORE = 65.0
+    DESK_GATE_SCORE = 60.0
 # The night of Oct 13-14: the desk's picks were most of the losses (Catnip, Altai, Buddy, DOPE, ARCADES, ROSE): scores
 # of 42-61 against a bar of 25, buyers only 1.0-1.2x the sellers, micro caps on $26-28K pools, bought right after a
 # +17-28% candle. The desk now holds its picks to the sniper's standard.
 try:
-    DESK_MIN_MCAP_USD = max(0.0, float(os.environ.get("DESK_MIN_MCAP_USD", "150000")))
-    DESK_MAX_M5_PCT = max(0.0, float(os.environ.get("DESK_MAX_M5_PCT", "15")))
-    DESK_MIN_BUYERS_X = max(0.0, float(os.environ.get("DESK_MIN_BUYERS_X", "1.5")))
+    DESK_MIN_MCAP_USD = max(0.0, float(os.environ.get("DESK_MIN_MCAP_USD", "100000")))
+    DESK_MAX_M5_PCT = max(0.0, float(os.environ.get("DESK_MAX_M5_PCT", "20")))
+    DESK_MIN_BUYERS_X = max(0.0, float(os.environ.get("DESK_MIN_BUYERS_X", "1.25")))
     DESK_LOSS_STREAK = max(0, int(float(os.environ.get("DESK_LOSS_STREAK", "2"))))
     DESK_COOLDOWN_MINUTES = max(0.0, float(os.environ.get("DESK_COOLDOWN_MINUTES", "60")))
 except ValueError:
-    DESK_MIN_MCAP_USD, DESK_MAX_M5_PCT, DESK_MIN_BUYERS_X, DESK_LOSS_STREAK, DESK_COOLDOWN_MINUTES = 150000.0, 15.0, 1.5, 2, 60.0
+    DESK_MIN_MCAP_USD, DESK_MAX_M5_PCT, DESK_MIN_BUYERS_X, DESK_LOSS_STREAK, DESK_COOLDOWN_MINUTES = 100000.0, 20.0, 1.25, 2, 60.0
 # THE DESK waits for a retrace: a pick isn't bought at once (PQC: picked at $258K while it slid from $300K). It waits up to
 # DESK_RETRACE_MINUTES for the price to pull back DESK_RETRACE_PCT under its high since the pick and bounce (green 5 minutes,
 # buyers ahead), with the coin still up over 6 hours; down DESK_RETRACE_MAX_DROP since the pick, the pick is dropped.
 # PQC: bought with nobody buying it. A desk pick with fewer than this many buys in the last 5 minutes isn't bought.
 try:
-    DESK_MIN_BUYS_5M = max(0, int(float(os.environ.get("DESK_MIN_BUYS_5M", "5"))))
+    DESK_MIN_BUYS_5M = max(0, int(float(os.environ.get("DESK_MIN_BUYS_5M", "3"))))
 except ValueError:
-    DESK_MIN_BUYS_5M = 5
+    DESK_MIN_BUYS_5M = 3
 try:
-    DESK_RETRACE_PCT = max(0.0, min(50.0, float(os.environ.get("DESK_RETRACE_PCT", "8"))))
-    DESK_RETRACE_MINUTES = max(1.0, min(240.0, float(os.environ.get("DESK_RETRACE_MINUTES", "45"))))
-    DESK_RETRACE_MAX_DROP = max(1.0, min(90.0, float(os.environ.get("DESK_RETRACE_MAX_DROP", "20"))))
+    DESK_RETRACE_PCT = max(0.0, min(50.0, float(os.environ.get("DESK_RETRACE_PCT", "5"))))
+    DESK_RETRACE_MINUTES = max(1.0, min(240.0, float(os.environ.get("DESK_RETRACE_MINUTES", "60"))))
+    DESK_RETRACE_MAX_DROP = max(1.0, min(90.0, float(os.environ.get("DESK_RETRACE_MAX_DROP", "18"))))
     # no pullback but the buyers take over hard: up DESK_BREAKOUT_PCT since the pick, at its high, green 5 minutes (not a
     # 30%+ candle), buyers 1.5x the sellers, 5-minute volume 1.5x the hour's pace, still up this hour, seen on 2 checks in a row
     DESK_BREAKOUT_PCT = max(0.0, min(100.0, float(os.environ.get("DESK_BREAKOUT_PCT", "10"))))
 except ValueError:
-    DESK_RETRACE_PCT, DESK_RETRACE_MINUTES, DESK_RETRACE_MAX_DROP, DESK_BREAKOUT_PCT = 8.0, 45.0, 20.0, 10.0
+    DESK_RETRACE_PCT, DESK_RETRACE_MINUTES, DESK_RETRACE_MAX_DROP, DESK_BREAKOUT_PCT = 5.0, 60.0, 18.0, 10.0
 # THE DIAL: how hard to push today, 0.4 to 1, from the bots' own last 24 hours, today's losses and how the hot coins are
 # doing this hour. Every automatic ticket is multiplied by it; under DIAL_EARLY_MIN there are no early bets that day.
 DIAL = "off" if os.environ.get("DIAL", "on").strip().lower() == "off" else "on"

@@ -414,24 +414,24 @@ ARCADES, ROSE): scores of 42-61 against a bar of 25, buyers only 1.0-1.2x the se
 bought right after a +17-28% candle. So now a desk pick isn't bought when:
 - the check is a SKIP, the bubble map couldn't be read, or the coin just ran (300%+ in an hour);
 - one of the lessons below says so (both bots learn from both bots' trades);
-- nobody's buying (under 5 buys in 5 minutes), or the buyers aren't at least 1.5x the sellers (`DESK_MIN_BUYERS_X`);
-- it's a micro cap under $150K (`DESK_MIN_MCAP_USD`): those are the sniper's early bets, with their stricter checks;
-- it's spiking 15%+ in 5 minutes (`DESK_MAX_M5_PCT`), falling 25%+ this hour, or dumping right now;
-- its score is under 65 (`DESK_GATE_SCORE`, the sniper's own bar is 70).
-The retrace entry asks the same of the bounce: buyers 1.5x the sellers, and a calm green candle, not a 15%+ one. After
+- nobody's buying (under 3 buys in 5 minutes), or the buyers aren't at least 1.25x the sellers (`DESK_MIN_BUYERS_X`);
+- it's a micro cap under $100K (`DESK_MIN_MCAP_USD`): those are the sniper's early bets, with their stricter checks;
+- it's spiking 20%+ in 5 minutes (`DESK_MAX_M5_PCT`), falling 25%+ this hour, or dumping right now;
+- its score is under 60 (`DESK_GATE_SCORE`, the sniper's own bar is 70).
+The retrace entry asks the same of the bounce: buyers at least 1.25x the sellers, and a calm green candle, not a 15%+ one. After
 2 desk losses in a row the desk rests for an hour (`DESK_LOSS_STREAK` / `DESK_COOLDOWN_MINUTES`), shown in THE DESK
 box. When the checks stop a pick, that coin sits out an hour and the desk scans again a minute later (not five).
 `DESK_GATE=off` turns the checks off.
 
 **The desk waits for its entry.** A pick that passes isn't bought on the spot (PQC: bought at $258K while it slid from
-$300K, and sat −22%). It waits up to 45 minutes (`DESK_RETRACE_MINUTES`) and holds its slot meanwhile, then buys one of two ways:
-- **the retrace:** 8%+ under its high since the pick (`DESK_RETRACE_PCT`), then bouncing (green over 5 minutes, buyers
+$300K, and sat −22%). It waits up to 60 minutes (`DESK_RETRACE_MINUTES`) and holds its slot meanwhile, then buys one of two ways:
+- **the retrace:** 5%+ under its high since the pick (`DESK_RETRACE_PCT`), then bouncing (green over 5 minutes, buyers
   at least even with sellers) and still up over 6 hours. A bounce in a coin down over 6 hours is not an entry;
 - **the breakout:** no pullback, but momentum shifts up hard: up 10%+ since the pick (`DESK_BREAKOUT_PCT`) and at its
   high, +3% to +30% over 5 minutes (a 30%+ candle is the top, not an entry), buyers 1.5x the sellers (15 buys at least),
   5-minute volume 1.5x the hour's pace, and still up this hour, on two checks in a row (20 seconds apart), so one wick
   doesn't buy.
-Down 20% since the pick (`DESK_RETRACE_MAX_DROP`), it's dropped: it kept falling. After 45 minutes with neither, it's
+Down 18% since the pick (`DESK_RETRACE_MAX_DROP`), it's dropped: it kept falling. After 60 minutes with neither, it's
 dropped too: it doesn't chase a slow drift up. A dropped pick sits out an hour and the desk scans again a minute later.
 `DESK_RETRACE_PCT=0` buys at once, as before; `DESK_BREAKOUT_PCT=0` turns the breakout off.
 
@@ -529,10 +529,10 @@ stays paused until you tap **Resume**.
 | `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
 | `WATCH_SECONDS` | `10` | how often WATCH reads the price of each coin held (5 at least) |
 | `TRAIL_LOCK_PCT` / `SNIPE_TRAIL_LOCK_PCT` | `8` / `10` | once the trail is armed, sell rather than fall back under this gain |
-| `DESK_GATE` / `DESK_GATE_SCORE` | `on` / `65` | every desk pick must pass the sniper's safety checks, not be dumping, and score at least this |
-| `DESK_MIN_BUYERS_X` / `DESK_MIN_MCAP_USD` / `DESK_MAX_M5_PCT` | `1.5` / `150000` / `15` | a desk pick needs buyers this many times the sellers, this market cap, and no 5-min candle this big |
+| `DESK_GATE` / `DESK_GATE_SCORE` | `on` / `60` | every desk pick must pass the sniper's safety checks, not be dumping, and score at least this |
+| `DESK_MIN_BUYERS_X` / `DESK_MIN_MCAP_USD` / `DESK_MAX_M5_PCT` | `1.25` / `100000` / `20` | a desk pick needs buyers this many times the sellers, this market cap, and no 5-min candle this big |
 | `DESK_LOSS_STREAK` / `DESK_COOLDOWN_MINUTES` | `2` / `60` | after this many desk losses in a row, the desk rests this long |
-| `DESK_RETRACE_PCT` / `DESK_RETRACE_MINUTES` / `DESK_RETRACE_MAX_DROP` | `8` / `45` / `20` | a desk pick waits for a pullback this deep and a bounce, this long at most, and is dropped if it falls this far (`0` = buy at once) |
+| `DESK_RETRACE_PCT` / `DESK_RETRACE_MINUTES` / `DESK_RETRACE_MAX_DROP` | `5` / `60` / `18` | a desk pick waits for a pullback this deep and a bounce, this long at most, and is dropped if it falls this far (`0` = buy at once) |
 | `DESK_BREAKOUT_PCT` | `10` | or buys a breakout: up this much since the pick with the buyers and volume heavily ahead (`0` = off) |
 | `DESK_SLOTS` / `SNIPE_SLOTS` | 60% / 40% of `MAX_POSITIONS` (3 / 2) | the slots each bot may fill |
 | `SNIPE_MODE` | `auto`, `watch` with `LIVE_MODE=true` | the fast lane: `off`, `watch` (never buys) or `auto`; the page's buttons change it |
@@ -560,7 +560,7 @@ stays paused until you tap **Resume**.
 | `BUBBLEMAPS_API_KEY` | none | Bubblemaps' own map (key from pro.bubblemaps.io, a paid plan; 25 of its credits a coin, read at most every 10 minutes) |
 | `SNIPE_MAP` | `on` | the bubble map check (who funded the top holders); read for desk picks, your own checks and coins close to a BUY |
 | `SNIPE_MAP_CLUSTER_PCT` / `SNIPE_MAP_TOTAL_PCT` / `SNIPE_MAP_MAX_WALLETS` | `4` / `10` / `5` | SKIP when 3+ holders of one funder hold this %, all clusters hold this %, or this many top holders are in clusters |
-| `DESK_MIN_BUYS_5M` | `5` | a desk pick with fewer buys than this in the last 5 minutes isn't bought |
+| `DESK_MIN_BUYS_5M` | `3` | a desk pick with fewer buys than this in the last 5 minutes isn't bought |
 | `DEAD_LOSS_PCT` / `DEAD_MAX_BUYS` / `DEAD_SECONDS` | `3` / `2` / `60` | down this much with this few buys in 5 min (or the sellers 3x the buyers), not rising, this long: out (`0` = off) |
 | `DESK_RED_MINUTES` / `DESK_RED_PCT` | `45` / `8` | a desk coin that never went green this long and is down this much: out |
 | `SNIPE_MAX_RUN_H1_PCT` / `SNIPE_HOT_H1_PCT` | `300` / `150` | up this much in the last hour: wait; up between the two: a hot entry, half the ticket on the fast plan with nothing left riding (`SNIPE_HOT_SCALE_OUT=25:50,50:50`) |
