@@ -216,8 +216,13 @@ of SOL, under an hour old, thin liquidity, bought right after a big 5-minute jum
 fast it fell. Among the sniper's last 15 coins, any of those that lost twice and never won is **avoided from then on**
 ("AVOIDS NOW" on the page); one win with it lifts that. Two rules are fixed: the sniper doesn't buy a coin down 20%+
 in the last hour ($.fun: bought at $81.5K on a bounce, an hour after it topped near $200K), and the desk doesn't buy
-one down 25%+. A pool paired with another memecoin costs 8 points. The sniper's market cap floor is $100K
-(`SNIPE_MIN_MCAP_USD`): the micro caps lost the most.
+one down 25%+. A pool paired with another memecoin costs 8 points.
+
+**Early bets under $100K.** The coins that can 10x and the ones that lost the most. The sniper still buys them
+(from $20K, `SNIPE_MIN_MCAP_USD`), but under $100K (`SNIPE_EARLY_MCAP_USD`) only when the coin is rising this hour,
+paired with SOL or USDC, with a clean bubble map (no top holders funded by the same wallet), and with half the ticket
+(`SNIPE_EARLY_SIZE=0.5`). If early bets keep losing, "under $100K market cap" shows up under AVOIDS NOW like any other
+lesson; one early win lifts it.
 
 **What it learned.** Every closed sniper trade keeps the signals it was bought on. The page shows, for each signal,
 how many coins, how many won, the average result and the P&L, so you can see which signals actually pay and raise or
@@ -281,7 +286,9 @@ no action on a number it can't read):
 
 | rule | default | what it does |
 |---|---|---|
-| stop-loss | `STOP_LOSS_PCT=30` | down 30% from the buy → sell everything |
+| stop-loss | `STOP_LOSS_PCT=25` | down 25% from the buy → sell everything (the sniper's coins: `SNIPE_STOP_LOSS_PCT=25`) |
+| move failed | `DESK_FAIL_PCT=15`, `DESK_FAIL_M5_PCT=10`, `DESK_FAIL_MINUTES=60` | in its first hour, down 15% and still falling 10%+ in 5 minutes → out before the stop (the sniper's line: −12% in 30 minutes) |
+| never went green | `SNIPE_RED_MINUTES=10`, `SNIPE_RED_PCT=5` | the sniper's coins: 10 minutes in, never above +2% and now down 5% → out early |
 | take-profit (all) | `TAKE_PROFIT_PCT=0` (off) | up X% → sell everything |
 | max hold | `MAX_HOLD_HOURS=24` | held this long → sell everything |
 | **momentum died** | `MOMENTUM_SELL_PCT=75`, `FADE_OFF_PEAK_PCT=4`, `FADE_VOLUME_PACE=0.6` | once it has been up 20% (the sniper's coins: 30%): it slips 4%+ off its best, sellers are ahead in the last 5 minutes and the volume is drying up (the last 5 minutes at 0.6x the hour's pace or less) → **75% out, the last 25% rides** |
@@ -378,7 +385,7 @@ stays paused until you tap **Resume**.
 | `MIN_TICKET_USD` | `5` | no buy smaller than this |
 | `MAX_IMPACT_PCT` | `3` | refuse fills with more price impact |
 | `MAX_DAILY_LOSS_PCT` | `20` | pause the desk after losing this % of the day's opening bank |
-| `STOP_LOSS_PCT` | `30` | sell everything if the position is down this much (`0` = off) |
+| `STOP_LOSS_PCT` | `25` | sell everything if the position is down this much (`0` = off) |
 | `FEE_RESERVE_SOL` | `0.02` | SOL the bot never spends |
 | `RISK_POLL_SECONDS` | `300` | how often RISK checks an open position (at least 30) |
 | `CYCLE_SECONDS` | `300` | time between scans (5 minutes) |
@@ -408,7 +415,8 @@ stays paused until you tap **Resume**.
 | `SNIPE_LOSS_STREAK` / `SNIPE_COOLDOWN_MINUTES` | `2` / `30` | after this many sniper losses in a row, no fast-lane buys for this long |
 | `SNIPE_FAIL_PCT` / `SNIPE_FAIL_M5_PCT` / `SNIPE_FAIL_MINUTES` | `12` / `10` / `30` | the move failed: out at −12% while still falling 10% in 5 min, in the first 30 min |
 | `SNIPE_MIN_LIQUIDITY_USD` | `8000` | thinner than this is too hard to get out of |
-| `SNIPE_MIN_MCAP_USD` / `SNIPE_MAX_MCAP_USD` | `100000` / `30000000` | the market cap window |
+| `SNIPE_MIN_MCAP_USD` / `SNIPE_MAX_MCAP_USD` | `20000` / `30000000` | the market cap window |
+| `SNIPE_EARLY_MCAP_USD` / `SNIPE_EARLY_SIZE` | `100000` / `0.5` | under this market cap, an early bet: rising this hour, SOL/USDC pair, clean bubble map, this share of the ticket |
 | `SNIPE_MAX_TOP_WALLET_PCT` / `SNIPE_MAX_TOP10_PCT` / `SNIPE_MAX_DEV_PCT` | `8` / `45` / `10` | rug lines |
 | `SNIPE_BUNDLE_WALLETS` | `8` | this many wallets in the launch block = a bundled launch |
 | `SNIPE_STOP_LOSS_PCT`, `SNIPE_SCALE_OUT`, `SNIPE_TRAIL_ARM_PCT`, `SNIPE_TRAIL_PCT` | `25`, `50:30,100:30,200:20`, `30`, `20` | the sniper's exits (sells at +50%, 2x and 3x) |

@@ -493,8 +493,11 @@ class Runner:
             self.state.set_working(None)
         if collect.RPC_FAILURES:                 # a token cut for *_unknown because Solana refused: say so
             stats["rpc_failed"] = len(collect.RPC_FAILURES)
+            own = os.environ.get("SOLANA_RPC_URL", "").strip()
             self.state.error(f"Solana RPC refused {len(collect.RPC_FAILURES)} call(s) this cycle, last: "
-                             f"{collect.RPC_FAILURES[-1][:200]}. A free key from helius.dev in SOLANA_RPC_URL fixes this.")
+                             f"{collect.RPC_FAILURES[-1][:200]}. " + ("Your SOLANA_RPC_URL refused it too: a heavy request on a busy "
+                             "coin; RugCheck's holder list stood in where it could." if own else
+                             "A free key from helius.dev in SOLANA_RPC_URL fixes this."))
         self.report(order, stats)
         if order:
             ok, why = self.gate(order)

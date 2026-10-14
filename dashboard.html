@@ -944,6 +944,7 @@ function planBlock(p, W, i, n, bare){
         + (peakMC !== null ? ` (now under ${mcap(peakMC * (1 - W.runner_trail_pct / 100))} MC)` : "") + `, or back at ${W.runner_floor_pct ? "+" + W.runner_floor_pct + "%" : "break-even"}`
       : `once up +${W.trail_arm_pct}%: when it slips off its best with sellers ahead and the volume drying up (or the trail or the lock hits), `
         + `${W.momentum_sell_pct}% out, the last ${100 - W.momentum_sell_pct}% rides (out ${W.runner_trail_pct}% off its best, never into a loss)`]] : []),
+    ...(W.red_pct ? [["never green", `out at -${W.red_pct}% if it hasn't gone green ${W.red_minutes} min in`]] : []),
     ...(W.fail_pct ? [["move failed", `out at -${W.fail_pct}%` + (entryMC !== null ? ` (${mcap(entryMC * (1 - W.fail_pct / 100))} MC)` : "")
       + ` if it's still falling ${W.fail_m5_pct}%+ in 5 min, in its first ${W.fail_minutes} min`]] : []),
     ...(W.stall_minutes ? [["no momentum", `out if it hasn't made +${W.stall_gain_pct}% within ${W.stall_minutes} min`]] : []),
@@ -1848,7 +1849,9 @@ function render(d){
   $("wallet").textContent = d.wallet ? "bot wallet " + d.wallet : d.mode === "stopped" ? "desk stopped: fix the variable named above" : "no bot wallet set (paper mode)";
   $("walletMode").textContent = (d.nets || []).join(", ") + (d.cycle_seconds ? " · scans every " + Math.round(d.cycle_seconds / 60) + " min" : "");
   const errs = $("errors"); errs.textContent = "";
-  for (const e of (d.errors || []).slice(0, 5)) errs.appendChild(el("div", "err mono", ago(e.time) + " ago · " + e.text));
+  const recent = (d.errors || []).filter(e => Date.now() - Date.parse(e.time) < 3600000);
+  for (const e of recent.slice(0, 5)) errs.appendChild(el("div", "err mono", ago(e.time) + " ago · " + e.text));
+  if (!recent.length && (d.errors || []).length) errs.appendChild(el("div", "muted mono small", "no errors in the last hour"));
   const tests = $("tests"); tests.textContent = "";
   for (const t of (d.tests || []).slice(0, 3)){
     const row = el("div", "mono"); row.style.fontSize = "12px"; row.style.margin = "4px 0";

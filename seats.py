@@ -78,7 +78,7 @@ class Config:
         self.max_impact_pct = _env_num(env, "MAX_IMPACT_PCT", 3, high=50)
         self.fee_reserve_sol = _env_num(env, "FEE_RESERVE_SOL", 0.02)
         self.max_daily_loss_pct = _env_num(env, "MAX_DAILY_LOSS_PCT", 20, high=100)
-        self.stop_loss_pct = _env_num(env, "STOP_LOSS_PCT", 30, high=100)   # sell everything at -30%; 0 = off
+        self.stop_loss_pct = _env_num(env, "STOP_LOSS_PCT", 25, high=100)   # sell everything at -25%; 0 = off
         self.risk_poll_seconds = _env_num(env, "RISK_POLL_SECONDS", 300, low=30)
         self.data_dir = env.get("DATA_DIR", "data")
         # WATCH: the price manager that runs while a position is open (all percentages, all 0 = that rule off)
@@ -123,7 +123,11 @@ class Config:
         self.snipe_min_age_minutes = _env_num(env, "SNIPE_MIN_AGE_MINUTES", 10)   # the first minutes are the dev's and the bots' dump
         self.snipe_max_age_hours = _env_num(env, "SNIPE_MAX_AGE_HOURS", 72, low=1)
         self.snipe_min_liquidity_usd = _env_num(env, "SNIPE_MIN_LIQUIDITY_USD", 8000)
-        self.snipe_min_mcap_usd = _env_num(env, "SNIPE_MIN_MCAP_USD", 100_000)   # micro caps under $100K lost the most
+        self.snipe_min_mcap_usd = _env_num(env, "SNIPE_MIN_MCAP_USD", 20000)
+        # under this, an "early bet": the coins that can 10x, and the ones that lost the most. Bought only rising this hour,
+        # paired with SOL / USDC, with a clean bubble map, and with half the ticket
+        self.snipe_early_mcap_usd = _env_num(env, "SNIPE_EARLY_MCAP_USD", 100_000)
+        self.snipe_early_size = _env_num(env, "SNIPE_EARLY_SIZE", 0.5, low=0.05, high=1)
         self.snipe_max_mcap_usd = _env_num(env, "SNIPE_MAX_MCAP_USD", 30_000_000, low=1)
         self.snipe_max_top_wallet_pct = _env_num(env, "SNIPE_MAX_TOP_WALLET_PCT", 8, high=100)
         self.snipe_max_top10_pct = _env_num(env, "SNIPE_MAX_TOP10_PCT", 45, high=100)
@@ -143,6 +147,13 @@ class Config:
         self.snipe_fail_pct = _env_num(env, "SNIPE_FAIL_PCT", 12, high=100)
         self.snipe_fail_m5_pct = _env_num(env, "SNIPE_FAIL_M5_PCT", 10, high=100)
         self.snipe_fail_minutes = _env_num(env, "SNIPE_FAIL_MINUTES", 30)
+        # the desk's coins get the same early exit, a little wider (older coins swing less): OSPREY rode to the -30% stop
+        self.desk_fail_pct = _env_num(env, "DESK_FAIL_PCT", 15, high=100)
+        self.desk_fail_m5_pct = _env_num(env, "DESK_FAIL_M5_PCT", 10, high=100)
+        self.desk_fail_minutes = _env_num(env, "DESK_FAIL_MINUTES", 60)
+        # a snipe that never goes green: PUMPATAR sat at +0.0% best for 20 minutes and went out at -8.8%
+        self.snipe_red_minutes = _env_num(env, "SNIPE_RED_MINUTES", 10)
+        self.snipe_red_pct = _env_num(env, "SNIPE_RED_PCT", 5, high=100)
         # a BUY is looked at again before the money goes in: the price must hold and the buyers stay ahead
         self.snipe_confirm_seconds = _env_num(env, "SNIPE_CONFIRM_SECONDS", 60, high=600)
         self.snipe_confirm_drop_pct = _env_num(env, "SNIPE_CONFIRM_DROP_PCT", 4, high=100)
@@ -191,7 +202,8 @@ class Config:
                 "trail_arm_pct": self.trail_arm_pct, "trail_pct": self.trail_pct, "scale_out": self.scale_out,
                 "drop_m5_pct": self.drop_m5_pct, "derisk_pct": self.derisk_pct, "pump_m5_pct": self.pump_m5_pct,
                 "pump_sell_pct": self.pump_sell_pct, "stall_minutes": self.stall_minutes, "stall_gain_pct": self.stall_gain_pct,
-                "ride_x": 1.0, "lock_pct": self.lock_pct, "fail_pct": 0.0, "fail_m5_pct": 0.0, "fail_minutes": 0.0,
+                "ride_x": 1.0, "lock_pct": self.lock_pct, "fail_pct": self.desk_fail_pct, "fail_m5_pct": self.desk_fail_m5_pct,
+                "fail_minutes": self.desk_fail_minutes, "red_minutes": 0.0, "red_pct": 0.0,
                 "momentum_sell_pct": self.momentum_sell_pct, "runner_trail_pct": self.runner_trail_pct,
                 "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
                 "fade_off_peak_pct": self.fade_off_peak_pct}
@@ -200,7 +212,7 @@ class Config:
                         trail_arm_pct=self.snipe_trail_arm_pct, trail_pct=self.snipe_trail_pct, scale_out=self.snipe_scale_out,
                         stall_minutes=self.snipe_stall_minutes, stall_gain_pct=self.snipe_stall_gain_pct, ride_x=self.snipe_ride_x,
                         lock_pct=self.snipe_lock_pct, fail_pct=self.snipe_fail_pct, fail_m5_pct=self.snipe_fail_m5_pct,
-                        fail_minutes=self.snipe_fail_minutes)
+                        fail_minutes=self.snipe_fail_minutes, red_minutes=self.snipe_red_minutes, red_pct=self.snipe_red_pct)
         return type("Plan", (), base)
 
     def watch_plan(self):
@@ -210,13 +222,15 @@ class Config:
                 "derisk_pct": self.derisk_pct, "pump_m5_pct": self.pump_m5_pct, "pump_sell_pct": self.pump_sell_pct,
                 "max_hold_hours": self.max_hold_hours, "stall_minutes": self.stall_minutes, "stall_gain_pct": self.stall_gain_pct,
                 "lock_pct": self.lock_pct, "momentum_sell_pct": self.momentum_sell_pct, "runner_trail_pct": self.runner_trail_pct,
+                "fail_pct": self.desk_fail_pct, "fail_m5_pct": self.desk_fail_m5_pct, "fail_minutes": self.desk_fail_minutes,
                 "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
                 "snipe": {"stop_loss_pct": self.snipe_stop_loss_pct, "ladder": [list(r) for r in self.snipe_scale_out],
                           "trail_arm_pct": self.snipe_trail_arm_pct, "trail_pct": self.snipe_trail_pct,
                           "max_hold_hours": self.snipe_max_hold_hours, "stall_minutes": self.snipe_stall_minutes,
                           "stall_gain_pct": self.snipe_stall_gain_pct, "ride_x": self.snipe_ride_x,
                           "lock_pct": self.snipe_lock_pct, "fail_pct": self.snipe_fail_pct, "fail_m5_pct": self.snipe_fail_m5_pct,
-                          "fail_minutes": self.snipe_fail_minutes}}
+                          "fail_minutes": self.snipe_fail_minutes, "red_minutes": self.snipe_red_minutes,
+                          "red_pct": self.snipe_red_pct}}
 
 
 # What a coin looked like when it was bought, as tags the sniper can learn from: a tag that keeps losing is avoided.
@@ -1043,7 +1057,10 @@ class Seats:
             act, floor = (1.0, f"stop-loss at {gain:+.1f}% (limit -{c.stop_loss_pct:g}%)", None), c.stop_loss_pct
         elif (c.fail_pct > 0 and age_h * 60 <= c.fail_minutes and gain <= -c.fail_pct and m5 is not None
               and m5 <= -c.fail_m5_pct):
-            act, floor = (1.0, f"the snipe failed: {gain:+.1f}% and still falling ({m5:+.1f}% in 5 min): out before the stop", None), c.fail_pct
+            act, floor = (1.0, (f"the snipe failed" if pos.get("plan") == "snipe" else "the move failed")
+                          + f": {gain:+.1f}% and still falling ({m5:+.1f}% in 5 min): out before the stop", None), c.fail_pct
+        elif c.red_pct > 0 and age_h * 60 >= c.red_minutes and peak_gain < 2 and gain <= -c.red_pct:
+            act, floor = (1.0, f"never went green: {age_h * 60:.0f} min in, best {peak_gain:+.1f}%, now {gain:+.1f}%: out early", None), c.red_pct
         elif c.take_profit_pct > 0 and gain >= c.take_profit_pct:
             act = (1.0, f"take-profit at {gain:+.1f}% (target +{c.take_profit_pct:g}%)", None)
         elif c.max_hold_hours > 0 and age_h >= c.max_hold_hours and not (rolling and age_h < c.max_hold_hours * c.ride_x):

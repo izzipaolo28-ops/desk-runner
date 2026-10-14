@@ -1121,6 +1121,16 @@ def score_coin(r, cfg):
     if h1c is not None and h1c <= -20 and not desk:                    # .fun: down from $200K to $81K, bought on a bounce
         wait.append(f"down {h1c:.0f}% this hour: a bounce in a falling coin is not a runner, it waits for the hour to turn up")
     q = F.get("quote")
+    early = mcap is not None and mcap < cfg.snipe_early_mcap_usd and not desk
+    if early:                                  # an early bet: under $100K, where the 10x and the rugs both live
+        check("market", "early bet", None, f"under {money(cfg.snipe_early_mcap_usd)}: rising this hour, paired with SOL/USDC and a clean "
+              f"bubble map, at {cfg.snipe_early_size:g}x the ticket")
+        if h1c is not None and h1c < 0:
+            wait.append(f"an early bet must be rising this hour, and it's {h1c:+.0f}%")
+        if isinstance(q, str) and q.strip() and q.strip().upper() not in QUOTES_OK:
+            wait.append(f"an early bet must be paired with SOL or USDC, and this one trades against ${q}")
+        if (r.get("map") or {}).get("clusters"):
+            wait.append("an early bet needs a clean bubble map, and some top holders were funded by the same wallet")
     if isinstance(q, str) and q.strip() and q.strip().upper() not in QUOTES_OK:
         check("market", "pool paired with", False, f"${q}: every sale goes through another memecoin")
         add("odd pair", f"its pool is paired with ${q}, not SOL or USDC", -8)
@@ -1817,10 +1827,14 @@ class Sniper:
         if not r.seats.daily_guard(bank):
             return False, "the daily loss limit paused the desk"
         factor = 0.5 if forced else (1.0 if rep["score"] >= 85 else 0.7) * (0.8 if rep.get("setup") == "fresh launch" else 1.0)
+        early = (F.get("mcap") or 0) and F["mcap"] < self.cfg.snipe_early_mcap_usd
+        if early and not forced:
+            factor *= self.cfg.snipe_early_size              # an early bet: a smaller ticket for the riskiest, biggest-upside coins
         signals = [("+ " if p["pts"] > 0 else "− ") + p["key"] for p in rep.get("points") or []]
         order = {"order_id": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "-snipe", "model": "sniper",
                  "token": {"ticker": rep.get("ticker"), "address": mint, "network_id": SOL_NET, "chain": "solana"},
-                 "size_factor": round(factor, 3), "size_cuts": ["bought by hand" if forced else f"sniper score {rep['score']}"],
+                 "size_factor": round(factor, 3), "size_cuts": ["bought by hand" if forced else f"sniper score {rep['score']}"]
+                 + ([f"early bet under {money(self.cfg.snipe_early_mcap_usd)}: {self.cfg.snipe_early_size:g}x"] if early and not forced else []),
                  "confidence": None, "worth_trading_at_all": None, "runner_up": [],
                  "facts": {"liquidity_usd": F.get("liq"), "price_usd": F.get("price"), "mcap_usd": F.get("mcap"),
                            "decimals": (rep.get("facts") or {}).get("decimals"), "age_minutes": F.get("age_min")},
