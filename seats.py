@@ -7,6 +7,7 @@ Up to MAX_POSITIONS coins at once (default 5), each with its own plan; RISK alon
 when the last one is sold.
 Never an invented number: a seat that lacks a figure it needs refuses and says which one.
 """
+import contextlib
 import json
 import logging
 import math
@@ -78,6 +79,8 @@ class Config:
         self.max_impact_pct = _env_num(env, "MAX_IMPACT_PCT", 3, high=50)
         self.fee_reserve_sol = _env_num(env, "FEE_RESERVE_SOL", 0.02)
         self.max_daily_loss_pct = _env_num(env, "MAX_DAILY_LOSS_PCT", 20, high=100)
+        # real money: no single buy over this many dollars, however big the bot wallet is
+        self.real_max_ticket_usd = _env_num(env, "REAL_MAX_TICKET_USD", 25, low=1)
         self.stop_loss_pct = _env_num(env, "STOP_LOSS_PCT", 25, high=100)   # sell everything at -25%; 0 = off
         self.risk_poll_seconds = _env_num(env, "RISK_POLL_SECONDS", 300, low=30)
         self.data_dir = env.get("DATA_DIR", "data")
@@ -187,6 +190,28 @@ class Config:
         # nobody chases a run that just did +500% (CATBOT: +508% in 80 minutes, then its creator pulled the money): over the
         # last hour (coins an hour old or more) or 6 hours (6 hours old or more), both bots wait for it to settle (0 = off)
         self.snipe_max_run_pct = _env_num(env, "SNIPE_MAX_RUN_PCT", 500, high=100_000)
+        # ...and over one hour the line is lower: the simulation's worst losses were coins bought +180-270% into the hour,
+        # just before the rug. Up 300%+ in the hour: wait. Up 150-300%: bought on the fast plan (below), at half the ticket.
+        self.snipe_max_run_h1_pct = _env_num(env, "SNIPE_MAX_RUN_H1_PCT", 300, high=100_000)
+        self.snipe_hot_h1_pct = _env_num(env, "SNIPE_HOT_H1_PCT", 150, high=100_000)
+        # a coin an hour old or more is bought only if it's already moving this hour (big wins in a short time come from
+        # coins in motion; the flat ones were in-and-out for a dollar or two in the simulation). 0 = off
+        self.snipe_min_h1_pct = _env_num(env, "SNIPE_MIN_H1_PCT", 15, low=-100, high=1000)
+        # buyers ahead: the last 5 minutes' buys at least this many times the sells. In the simulation every buy under 1.5x
+        # was a coin going sideways (26 of them, -$15 between them); the movers were at 2-3x. 0 = off
+        self.snipe_min_buyers_x = _env_num(env, "SNIPE_MIN_BUYERS_X", 1.5, high=100)
+        # a hot entry (already +150% this hour) rides nothing: half out at +25%, the rest at +50%. In the simulation the
+        # 25% left riding on those was lost to the rug every time; on early bets it rides (you asked for that)
+        self.snipe_hot_scale_out = parse_ladder(env.get("SNIPE_HOT_SCALE_OUT", "25:50,50:50"), "SNIPE_HOT_SCALE_OUT")
+        self.snipe_hot_keep_pct = _env_num(env, "SNIPE_HOT_KEEP_PCT", 0, high=90)
+        # THE TIME BOX: big wins in a short time, long holds only on the way to a 2x. Past BOX_MINUTES, a coin that isn't up
+        # BOX_GAIN_PCT is sold (the last 25% riding after 75% was banked is exempt: it's already a winner).
+        self.snipe_box_minutes = _env_num(env, "SNIPE_BOX_MINUTES", 45)
+        self.snipe_box_gain_pct = _env_num(env, "SNIPE_BOX_GAIN_PCT", 25, low=-100, high=1000)
+        self.desk_box_minutes = _env_num(env, "DESK_BOX_MINUTES", 120)
+        self.desk_box_gain_pct = _env_num(env, "DESK_BOX_GAIN_PCT", 20, low=-100, high=1000)
+        self.fast_box_minutes = _env_num(env, "FAST_BOX_MINUTES", 30)
+        self.fast_box_gain_pct = _env_num(env, "FAST_BOX_GAIN_PCT", 15, low=-100, high=1000)
         # after this many sniper losses in a row, the fast lane stops buying for a while (your own checks still can)
         self.snipe_loss_streak = int(_env_num(env, "SNIPE_LOSS_STREAK", 2, high=20))
         self.snipe_cooldown_minutes = _env_num(env, "SNIPE_COOLDOWN_MINUTES", 30, high=1440)
@@ -239,6 +264,7 @@ class Config:
                 "ride_x": 1.0, "lock_pct": self.lock_pct, "fail_pct": self.desk_fail_pct, "fail_m5_pct": self.desk_fail_m5_pct,
                 "fail_minutes": self.desk_fail_minutes, "red_minutes": self.desk_red_minutes, "red_pct": self.desk_red_pct,
                 "dead_loss_pct": self.dead_loss_pct, "dead_max_buys": self.dead_max_buys, "dead_seconds": self.dead_seconds,
+                "box_minutes": self.desk_box_minutes, "box_gain_pct": self.desk_box_gain_pct,
                 "momentum_sell_pct": self.momentum_sell_pct, "runner_trail_pct": self.runner_trail_pct,
                 "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
                 "fade_off_peak_pct": self.fade_off_peak_pct, "keep_pct": 0.0}
@@ -247,9 +273,13 @@ class Config:
                         trail_arm_pct=self.snipe_trail_arm_pct, trail_pct=self.snipe_trail_pct, scale_out=self.snipe_scale_out,
                         stall_minutes=self.snipe_stall_minutes, stall_gain_pct=self.snipe_stall_gain_pct, ride_x=self.snipe_ride_x,
                         lock_pct=self.snipe_lock_pct, fail_pct=self.snipe_fail_pct, fail_m5_pct=self.snipe_fail_m5_pct,
-                        fail_minutes=self.snipe_fail_minutes, red_minutes=self.snipe_red_minutes, red_pct=self.snipe_red_pct)
+                        fail_minutes=self.snipe_fail_minutes, red_minutes=self.snipe_red_minutes, red_pct=self.snipe_red_pct,
+                        box_minutes=self.snipe_box_minutes, box_gain_pct=self.snipe_box_gain_pct)
             if pos.get("early"):                     # an early bet: tighter loss rules, profits taken fast, the last 25% rides
                 base.update(self.early_plan())
+                if str(pos.get("fast_why") or "").startswith("hot"):   # a hot entry: the same, with nothing left riding
+                    base.update(scale_out=self.snipe_hot_scale_out, keep_pct=self.snipe_hot_keep_pct,
+                                momentum_sell_pct=100 - self.snipe_hot_keep_pct if self.snipe_hot_keep_pct > 0 else 100)
         return type("Plan", (), base)
 
     def early_plan(self):
@@ -257,6 +287,7 @@ class Config:
                 "fail_pct": self.snipe_early_fail_pct, "fail_m5_pct": self.snipe_early_fail_m5_pct,
                 "trail_arm_pct": self.snipe_early_trail_arm_pct, "trail_pct": self.snipe_early_trail_pct,
                 "lock_pct": self.snipe_early_lock_pct, "red_pct": self.snipe_early_red_pct, "keep_pct": self.snipe_early_keep_pct,
+                "box_minutes": self.fast_box_minutes, "box_gain_pct": self.fast_box_gain_pct,
                 "momentum_sell_pct": 100 - self.snipe_early_keep_pct if self.snipe_early_keep_pct > 0 else self.momentum_sell_pct}
 
     def watch_plan(self):
@@ -269,6 +300,7 @@ class Config:
                 "fail_pct": self.desk_fail_pct, "fail_m5_pct": self.desk_fail_m5_pct, "fail_minutes": self.desk_fail_minutes,
                 "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
                 "red_minutes": self.desk_red_minutes, "red_pct": self.desk_red_pct, "dead_loss_pct": self.dead_loss_pct,
+                "box_minutes": self.desk_box_minutes, "box_gain_pct": self.desk_box_gain_pct,
                 "dead_max_buys": self.dead_max_buys, "dead_seconds": self.dead_seconds,
                 "snipe": {"stop_loss_pct": self.snipe_stop_loss_pct, "ladder": [list(r) for r in self.snipe_scale_out],
                           "trail_arm_pct": self.snipe_trail_arm_pct, "trail_pct": self.snipe_trail_pct,
@@ -276,9 +308,11 @@ class Config:
                           "stall_gain_pct": self.snipe_stall_gain_pct, "ride_x": self.snipe_ride_x,
                           "lock_pct": self.snipe_lock_pct, "fail_pct": self.snipe_fail_pct, "fail_m5_pct": self.snipe_fail_m5_pct,
                           "fail_minutes": self.snipe_fail_minutes, "red_minutes": self.snipe_red_minutes,
-                          "red_pct": self.snipe_red_pct},
+                          "red_pct": self.snipe_red_pct, "box_minutes": self.snipe_box_minutes, "box_gain_pct": self.snipe_box_gain_pct},
                 "early": {k: ([list(r) for r in v] if k == "scale_out" else v) for k, v in self.early_plan().items()}
-                | {"ladder": [list(r) for r in self.snipe_early_scale_out], "under_mcap_usd": self.snipe_early_mcap_usd}}
+                | {"ladder": [list(r) for r in self.snipe_early_scale_out], "under_mcap_usd": self.snipe_early_mcap_usd},
+                "hot": {"ladder": [list(r) for r in self.snipe_hot_scale_out], "keep_pct": self.snipe_hot_keep_pct,
+                        "momentum_sell_pct": 100 - self.snipe_hot_keep_pct if self.snipe_hot_keep_pct > 0 else 100}}
 
 
 # What a coin looked like when it was bought, as tags the sniper can learn from: a tag that keeps losing is avoided.
@@ -610,6 +644,8 @@ def volume_ratio(volume: dict, age_minutes):
 class Seats:
     def __init__(self, cfg: Config, jupiter, rpc, keypair, state: State, sleep=time.sleep):
         self.cfg, self.jup, self.rpc, self.kp, self.state, self._sleep = cfg, jupiter, rpc, keypair, state, sleep
+        # real SOL moves one at a time: a real buy, a real sale and a withdrawal never read the wallet at the same moment
+        self.money_lock = threading.RLock()
         if cfg.live and keypair is None:
             raise ValueError("LIVE_MODE=true needs BOT_WALLET_KEY")
 
@@ -640,14 +676,50 @@ class Seats:
         free = max(0.0, lamports / LAMPORTS - self.cfg.fee_reserve_sol)
         return round(free * price, 2)
 
+    # ---------- each money's own day: real losses never reset by switching to fake and back ----------
+    def money(self):
+        return "live" if self.cfg.live else "paper"
+
+    def _tracker(self, mode, today):
+        """Today's tally for one money ("paper" = fake, "live" = real). Called with the state lock held."""
+        d = self.state.data
+        daily = d.get("daily")
+        first = not isinstance(daily, dict)
+        if first:
+            daily = d["daily"] = {}
+        t = daily.get(mode)
+        if not isinstance(t, dict) or t.get("day") != today:
+            seed = first and mode == self.money() and d.get("day") == today      # a state from before: its day is this money's
+            t = daily[mode] = {"day": today, "start": _f(d.get("day_start_bank")) if seed else None,
+                               "realized": (_f(d.get("realized_today")) or 0.0) if seed else 0.0}
+        return t
+
+    def mirror_daily(self):
+        """The day fields the page and the dial read show the money that's on now."""
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self.state.lock:
+            t, d = self._tracker(self.money(), today), self.state.data
+            d["day"], d["day_start_bank"], d["realized_today"] = t["day"], t["start"], t["realized"]
+
+    def book_daily(self, mode, pnl):
+        """A sale's P&L goes on its own money's day, whichever money is on now."""
+        today = datetime.now(timezone.utc).date().isoformat()
+        with self.state.lock:
+            t = self._tracker(mode, today)
+            t["realized"] = round(t["realized"] + pnl, 2)
+        if mode == self.money():
+            self.mirror_daily()
+
     def daily_guard(self, bank):
         """Stops new entries once today's realized loss reaches MAX_DAILY_LOSS_PCT of the day's opening bank."""
         day = datetime.now(timezone.utc).date().isoformat()
         with self.state.lock:
+            t = self._tracker(self.money(), day)
+            if t["start"] is None and _f(bank) is not None:
+                t["start"] = bank                        # the day's (or this money's) first look sets its opening bank
             d = self.state.data
-            if d["day"] != day:
-                d["day"], d["day_start_bank"], d["realized_today"] = day, bank, 0.0
-            start, lost = d["day_start_bank"], -(d["realized_today"] or 0.0)
+            d["day"], d["day_start_bank"], d["realized_today"] = t["day"], t["start"], t["realized"]
+            start, lost = t["start"], -(t["realized"] or 0.0)
             limit = self.cfg.max_daily_loss_pct
             if limit > 0 and _f(start) and lost >= start * limit / 100:
                 d["paused"], d["pause_reason"] = True, f"daily loss limit: -${lost:,.2f} today ({limit:g}% of ${start:,.2f})"
@@ -665,7 +737,10 @@ class Seats:
         if factor is None:
             return 0.0, "no size factor on the order"
         ticket = min(bank * TICKET_SHARE * factor, liq * MAX_POOL_SHARE)
-        open_cost = sum(_f(p.get("cost_usd")) or 0.0 for p in self.state.positions())
+        if self.cfg.live:                        # real money: a hard cap on every single buy
+            ticket = min(ticket, self.cfg.real_max_ticket_usd)
+        mode = "live" if self.cfg.live else "paper"
+        open_cost = sum(_f(p.get("cost_usd")) or 0.0 for p in self.state.positions() if p.get("mode", mode) == mode)
         room = (bank + open_cost) * self.cfg.max_exposure_pct / 100 - open_cost
         if ticket > room:                        # all coins together stay under MAX_EXPOSURE_PCT of everything
             if room < self.cfg.min_ticket_usd:
@@ -678,7 +753,13 @@ class Seats:
 
     # ---------- FILLS ----------
     def buy(self, order, ticket_usd):
-        """Returns the position dict, or raises with the reason nothing was bought."""
+        """Returns the position dict, or raises with the reason nothing was bought. The money is read once: a real buy
+        holds the money lock from the wallet's balance to the fill."""
+        live = self.cfg.live
+        with (self.money_lock if live else contextlib.nullcontext()):
+            return self._buy(order, ticket_usd, live)
+
+    def _buy(self, order, ticket_usd, live):
         t, facts = order["token"], order.get("facts") or {}
         if t.get("chain") != "solana":
             raise RuntimeError(f"{t.get('chain')} can't be traded through Jupiter (Solana only)")
@@ -689,18 +770,18 @@ class Seats:
         if sol_usd is None:
             raise RuntimeError("SOL price unknown")
         lamports = int(ticket_usd / sol_usd * LAMPORTS)
-        if self.cfg.live:
+        if live:
             have = self.rpc.sol_lamports(self.kp.address)
             if have < lamports + int(self.cfg.fee_reserve_sol * LAMPORTS):
                 raise RuntimeError(f"wallet holds {have / LAMPORTS:.4f} SOL, needs {lamports / LAMPORTS:.4f} + fee reserve")
-        q = self.jup.order(WSOL, t["address"], lamports, taker=self.kp.address if self.cfg.live else None)
+        q = self.jup.order(WSOL, t["address"], lamports, taker=self.kp.address if live else None)
         expected = ticket_usd / price
         got = int(q["outAmount"]) / 10 ** decimals
         impact = (1 - got / expected) * 100 if expected > 0 else None
         if impact is None or impact >= self.cfg.max_impact_pct:
             raise RuntimeError(f"price impact {impact:.2f}% is at or over the {self.cfg.max_impact_pct:g}% limit"
                                if impact is not None else "price impact can't be computed")
-        position = {"order_id": order["order_id"], "mode": "live" if self.cfg.live else "paper",
+        position = {"order_id": order["order_id"], "mode": "live" if live else "paper",
                     "ticker": t.get("ticker"), "mint": t["address"], "chain": "solana", "decimals": decimals,
                     "opened_at": _now(), "opened_ts": time.time(), "ticket_usd": ticket_usd,
                     "sol_usd_at_entry": sol_usd, "impact_pct": round(impact, 3), "status": "open",
@@ -709,8 +790,8 @@ class Seats:
                     "score": order.get("score"), "setup": order.get("setup"), "signals": list(order.get("signals") or [])[:24],
                     "entry_ctx": order.get("entry_ctx") if isinstance(order.get("entry_ctx"), dict) else None,
                     "why_bought": [str(x)[:200] for x in order.get("why_bought") or []][:8],
-                    "early": bool(order.get("early"))}
-        if self.cfg.live:
+                    "early": bool(order.get("early")), "fast_why": order.get("fast_why")}
+        if live:
             with self.state.lock:                    # write-ahead: a crash after sending is never a lost position
                 self.state.put({**position, "status": "sending", "tokens_raw": None,
                                 "spent_lamports": lamports, "request_id": q.get("requestId")})
@@ -782,16 +863,22 @@ class Seats:
         return pos
 
     def test_swap(self, usd):
+        with self.money_lock:                        # real SOL moves one at a time
+            return self._test_swap(usd)
+
+    def _test_swap(self, usd):
         """Proves the wallet can trade before any memecoin does: SOL -> USDC -> SOL for about `usd`.
         Paper: two real Jupiter quotes, nothing signed. Live: two real swaps, signed with the bot key.
         Returns a result row; raises only before anything was sent."""
         sol_usd = self.sol_usd()
         if sol_usd is None:
             raise RuntimeError("SOL price unknown: can't size the test")
+        live = self.cfg.live
+        if live:
+            usd = min(usd, self.cfg.real_max_ticket_usd)
         lamports = int(usd / sol_usd * LAMPORTS)
         if lamports <= 0:
             raise RuntimeError("test amount rounds to zero")
-        live = self.cfg.live
         out = {"time": _now(), "mode": "live" if live else "paper", "usd": usd, "sol_in": lamports / LAMPORTS,
                "usdc": None, "sol_back": None, "sigs": [], "ok": False, "note": ""}
         if live:
@@ -1000,6 +1087,7 @@ class Seats:
             self.state.agent("risk", f"sale of {label} waits: SOL price unknown", None, "closing")   # don't book 0
             return None
         try:
+          with (self.money_lock if pos["mode"] == "live" else contextlib.nullcontext()):
             if pos["mode"] == "live":
                 balance, _ = self.rpc.token_balance(self.kp.address, pos["mint"])
                 amount = balance if full else min(balance, int(balance * fraction))
@@ -1066,8 +1154,8 @@ class Seats:
                     p["last_value_usd"] = round(p["last_value_usd"] * (1 - share), 2)
                 if p.get("cost_usd") is not None and _f(p.get("last_value_usd")) is not None:
                     p["last_pnl_usd"] = round(p["last_value_usd"] - p["cost_usd"], 2)
-            if pnl is not None and d.get("day") == datetime.now(timezone.utc).date().isoformat():
-                d["realized_today"] = (d.get("realized_today") or 0.0) + pnl
+            if pnl is not None:
+                self.book_daily(pos["mode"], pnl)        # on its own money's day, whichever money is on now
             self.state.save()
         wins, losses = record(self.state.data["trades"])
         part = "" if full else f" on {round(100 * share)}% of the bag"
@@ -1194,6 +1282,9 @@ class Seats:
         elif c.max_hold_hours > 0 and age_h >= c.max_hold_hours and not (rolling and age_h < c.max_hold_hours * c.ride_x):
             act = (1.0, f"held {age_h:.1f}h, the {c.max_hold_hours:g}h limit" + (" (and the momentum stopped)" if c.ride_x > 1 else "")
                    + f", at {gain:+.1f}%", None)
+        elif c.box_minutes > 0 and age_h * 60 >= c.box_minutes and not runner and gain < c.box_gain_pct:
+            act = (1.0, f"time's up: {age_h * 60:.0f} min in at {gain:+.1f}% (best {peak_gain:+.1f}%): past {c.box_minutes:g} min it "
+                        f"only holds a coin up +{c.box_gain_pct:g}% or more, on its way to a 2x", None)
         elif c.stall_minutes > 0 and age_h * 60 >= c.stall_minutes and peak_gain < c.stall_gain_pct:
             act = (1.0, f"no momentum: {age_h * 60:.0f} min in, best {peak_gain:+.1f}% (needed +{c.stall_gain_pct:g}% by "
                         f"{c.stall_minutes:g} min): in and out at {gain:+.1f}%", None)

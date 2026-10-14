@@ -226,6 +226,15 @@ a.coin{color:var(--amber);text-decoration:none;border-bottom:1px dotted rgba(251
 a.tx{color:var(--blue);text-decoration:none;border-bottom:1px dotted rgba(96,165,250,.6);margin-right:8px}
 .btn{font:700 13px var(--mono);border-radius:6px;border:1px solid #3a4560;background:#141c31;color:var(--ink);padding:8px 12px;min-height:40px}
 .btn.warn{border-color:var(--amber);color:var(--amber)} .btn.go{border-color:var(--green);color:var(--green)}
+.moneyseg{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid #3a4560;border-radius:8px;overflow:hidden}
+.moneyseg button{font:800 14px var(--mono);letter-spacing:.08em;min-height:48px;border:0;background:#0f1424;color:var(--muted)}
+.moneyseg button.on.fake{background:#0b1222;color:#93c5fd;box-shadow:inset 0 -3px 0 #60a5fa}
+.moneyseg button.on.real{background:#3b0d12;color:#fecaca;box-shadow:inset 0 -3px 0 var(--red)}
+.mrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;font:12px var(--mono)}
+.mrow .lbl{color:var(--muted);letter-spacing:.1em;min-width:88px} .mrow code{word-break:break-all;color:#e6ebf4}
+.mrow input{font:13px var(--mono);background:#0f1424;border:1px solid #3a4560;color:var(--ink);border-radius:6px;padding:8px;width:96px;min-height:40px}
+.mprob{margin-top:8px;font:12px var(--mono);color:var(--amber)} .mline{margin-top:10px;font:13px var(--mono);color:#e6ebf4}
+.mline.real{color:#fecaca}
 .msg{font:12px var(--mono);color:var(--amber);min-height:16px;margin-top:6px}
 .err{color:#fca5a5}
 .addr{font:11px var(--mono);color:var(--muted);overflow-wrap:anywhere}
@@ -344,6 +353,30 @@ details.pc .inner{padding:4px 8px 8px}
   <div class="storebar" id="storeBar" hidden><b>NOT SAVED:</b> this service has no Railway volume, so every deploy starts the bank, the trades
     and what the bots learned over from zero. In Railway: open the project, add a <b>Volume</b>, connect it to this service with mount path
     <b>/data</b>, and redeploy.</div>
+
+  <section class="panel" id="moneyPanel" aria-label="Money">
+    <h2>MONEY <span id="moneyNote"></span></h2>
+    <div class="moneyseg" role="group" aria-label="fake or real money">
+      <button type="button" id="mFake" class="fake">FAKE MONEY</button>
+      <button type="button" id="mReal" class="real">REAL MONEY</button>
+    </div>
+    <div class="mline" id="moneyLine">…</div>
+    <div class="mprob" id="moneyProblems"></div>
+    <div class="mrow"><span class="lbl">BOT WALLET</span><code id="botAddr">none</code>
+      <button class="btn" type="button" id="copyBot">Copy</button><b id="botSol"></b></div>
+    <div class="mrow"><span class="lbl">YOUR WALLET</span><code id="ownerAddr">not connected</code>
+      <button class="btn go" type="button" id="connectBtn">Connect Phantom</button></div>
+    <div class="mrow"><span class="lbl">FUND THE BOT</span><input id="fundAmt" inputmode="decimal" placeholder="SOL" aria-label="SOL to send to the bot">
+      <button class="btn" type="button" id="fundBtn">Send from my wallet</button><a id="payLink" class="muted" href="#">or open in a wallet app</a></div>
+    <div class="mrow"><span class="lbl">WITHDRAW</span><input id="wdAmt" placeholder="SOL or all" aria-label="SOL to withdraw">
+      <button class="btn warn" type="button" id="wdBtn">Withdraw to my wallet</button></div>
+    <div class="msg" id="moneyMsg" role="status"></div>
+    <p class="muted" style="font-size:12px">FAKE MONEY trades a paper bank on real prices. REAL MONEY trades the <b>bot wallet</b>: a separate
+      wallet made only for the bot, whose private key goes in Railway's variables as <b>BOT_WALLET_KEY</b>, never on this page and never in a chat.
+      Your own wallet only connects: it funds the bot (you approve that in Phantom's own screen) and it's the only place withdrawals can go.
+      On an iPhone, Connect opens this page inside Phantom's browser. Real coins bought before you switch back to fake are still sold for real.
+      The buttons need your ADMIN_TOKEN.</p>
+  </section>
 
   <section class="cards" id="cards" aria-label="Seats"></section>
 
@@ -950,7 +983,9 @@ function planBlock(p, W, i, n, bare){
       + ` if it's still falling ${W.fail_m5_pct}%+ in 5 min, in its first ${W.fail_minutes} min`]] : []),
     ...(W.stall_minutes ? [["no momentum", `out if it hasn't made +${W.stall_gain_pct}% within ${W.stall_minutes} min`]] : []),
     ...((p.why_bought || []).length ? [["why it bought", p.why_bought.join(" · ")]] : []),
-    ...(p.early ? [["early bet", `bought under ${mcap(num(W.under_mcap_usd))}: a smaller ticket, out at -${W.stop_loss_pct}%, profits taken fast, the last ${W.keep_pct}% rides`]] : []),
+    ...(p.early ? [["fast plan", (p.fast_why && p.fast_why.startsWith("hot") ? `a ${p.fast_why}` : `an early bet, bought under ${mcap(num(W.under_mcap_usd))}`)
+      + `: half the ticket, out at -${W.stop_loss_pct}%, profits taken fast, ` + (num(W.keep_pct) ? `the last ${W.keep_pct}% rides` : "nothing left riding")]] : []),
+    ...(W.box_minutes ? [["time box", `past ${W.box_minutes} min it holds only a coin up +${W.box_gain_pct}% or more (on its way to a 2x): otherwise out`]] : []),
     ["bought by", p.plan === "snipe" ? "the sniper" + (p.source ? ` (${p.source})` : "") + (num(p.score) !== null ? `, score ${p.score}/100` : "") : "the desk (Jev's pick)"],
     ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells all under 0.20)"]];
   for (const [k, v] of rows){ const tr = el("tr"), td = el("td", k === "open P&L" ? (num(p.last_pnl_usd) >= 0 ? "pos" : "neg") : "");
@@ -1436,7 +1471,7 @@ function liveDraw(now){
   ctx.strokeStyle = "#1b2233"; ctx.beginPath(); ctx.moveTo(plotR + .5, 0); ctx.lineTo(plotR + .5, plotB); ctx.moveTo(0, plotB + .5); ctx.lineTo(W, plotB + .5); ctx.stroke();
   if (!L){ say("no coin under the lens yet"); liveUi(null); return; }
   const k = liveSupply(L), useMc = view.liveScale === "mc" && !!k, val = p => useMc ? p * k : p, fmt = v => useMc ? "$" + compact(v) : fmtP(v);
-  const bars = liveBars(L, view.liveIv), cur = livePrice(L), q = liveHeld(L.mint), W0 = (lastStatus && lastStatus.watch) || {}, Wt = q && q.plan === "snipe" ? Object.assign({}, W0, W0.snipe || {}, q.early ? W0.early || {} : {}) : W0;
+  const bars = liveBars(L, view.liveIv), cur = livePrice(L), q = liveHeld(L.mint), W0 = (lastStatus && lastStatus.watch) || {}, Wt = q && q.plan === "snipe" ? Object.assign({}, W0, W0.snipe || {}, q.early ? W0.early || {} : {}, q.early && String(q.fast_why || "").startsWith("hot") ? W0.hot || {} : {}) : W0;
   const entryP = q && num(q.entry_price_usd) ? q.entry_price_usd : q && num(q.entry_mcap) && k ? q.entry_mcap / k : null;
   const entryMc = q ? (num(q.entry_mcap) ?? (entryP !== null && k ? entryP * k : null)) : null;
   if (now - liveUiAt > 250){ liveUiAt = now; liveUi(L, k, cur, entryMc, q, bars); }
@@ -1743,7 +1778,8 @@ function render(d){
   if (d.title) $("title").textContent = d.title;
   if (typeof d.tagline === "string") $("tagline").textContent = d.tagline;
   const mode = $("mode"); mode.className = "mode " + (d.mode === "stopped" ? "stopped" : d.paused ? "paused" : d.mode);
-  mode.textContent = d.mode === "stopped" ? "STOPPED" : d.paused ? "PAUSED" : d.mode === "live" ? "LIVE · REAL MONEY" : d.practice ? "PAPER · PRACTICE" : "PAPER";
+  mode.textContent = d.mode === "stopped" ? "STOPPED" : d.paused ? "PAUSED" : d.mode === "live" ? "REAL MONEY" : d.practice ? "FAKE · PRACTICE" : "FAKE MONEY";
+  moneyRender(d);
   $("pauseBar").hidden = !d.paused;
   $("pauseText").textContent = d.mode === "stopped" ? "STOPPED · " + (d.pause_reason || "") : "PAUSED · " + (d.pause_reason || "") + " · no scans or buys until you resume";
   $("pauseResume").hidden = d.mode === "stopped";
@@ -1806,7 +1842,8 @@ function render(d){
     sm.append(tt, el("span", "m", `MC ${mcap(n.entry)} → ${mcap(n.now)}`),
       el("b", n.g === null ? "" : n.g >= 0 ? "pos" : "neg", pcTxt(n.g)), el("b", n.pnl === null ? "" : n.pnl >= 0 ? "pos" : "neg", n.pnl === null ? "P&L —" : signed(n.pnl)));
     det.appendChild(sm);
-    const Wq = q.plan === "snipe" ? Object.assign({}, W, W.snipe || {}, q.early ? W.early || {} : {}) : W;   // a sniper buy runs the sniper's exits (an early bet its own)
+    const Wq = q.plan === "snipe" ? Object.assign({}, W, W.snipe || {}, q.early ? W.early || {} : {},
+      q.early && String(q.fast_why || "").startsWith("hot") ? W.hot || {} : {}) : W;   // a sniper buy runs the sniper's exits (fast plans their own)
     const inner = el("div", "inner");
     const sb = el("button", "btn sellbtn", "Sell all now"); sb.type = "button";
     sb.addEventListener("click", () => { const live = lastStatus && lastStatus.mode === "live";
@@ -1986,6 +2023,7 @@ function sniperRender(d){
   $("deskNote").textContent = SL.desk !== undefined ? `${SL.desk_held}/${SL.desk} DESK SLOTS` : "";
   const deskBits = [];
   if (d.paused) deskBits.push("paused: tap Resume");
+  else if (d.desk_resting) deskBits.push(`RESTING after ${d.desk_resting.why}: no desk picks until ${d.desk_resting.at}`);
   else if (SL.desk_free === false && (d.desk_waiting || []).length) deskBits.push("its pick is waiting for a good entry: no new scan until it buys or drops it");
   else if (SL.desk_free === false) deskBits.push(SL.desk_held >= SL.desk
     ? `its ${SL.desk} slot${SL.desk === 1 ? " is" : "s are"} full: the next scan starts when one of its coins sells`
@@ -2090,10 +2128,10 @@ async function refresh(){
   const fast = (lastStatus && lastStatus.working) || Date.now() < fastUntil;
   pollTimer = setTimeout(refresh, fast ? 2500 : 8000);
 }
-async function admin(path, payload){
+async function admin(path, payload, msgId){
   let token = store.get("adminToken");
   if (!token){ token = prompt("ADMIN_TOKEN: the password you set in Railway's Variables"); if (!token) return {ok: false, text: ""}; }
-  const msg = $("adminMsg"); msg.textContent = "…";
+  const msg = $(msgId || "adminMsg"); msg.textContent = "…";
   const headers = {"X-Admin-Token": token}; if (payload) headers["Content-Type"] = "application/json";
   let r;
   try { r = await fetch(path, {method: "POST", headers, body: payload ? JSON.stringify(payload) : undefined}); }
@@ -2103,8 +2141,135 @@ async function admin(path, payload){
   let body = {}; try { body = await r.json(); } catch (e) {}
   msg.textContent = body.detail || (body.paused === true ? "paused" : body.paused === false ? "running: scans resume on schedule" : r.ok ? "done" : "HTTP " + r.status);
   fastUntil = Date.now() + 30000; refresh();
-  return {ok: r.ok, text: msg.textContent};
+  return {ok: r.ok, text: msg.textContent, body};
 }
+// ---------- MONEY: fake or real, your wallet, funding, withdrawals ----------
+let myWallet = null;                     // the wallet connected on this page (Phantom), not saved anywhere but the server's owner field
+const shortAddr = a => a ? a.slice(0, 4) + "…" + a.slice(-4) : "";
+const solAmount = v => { v = String(v || "").trim(); return /^\d+(\.\d+)?$/.test(v) && Number(v) > 0 ? Number(v) : null; };
+const B58A = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function b58decode(s){
+  let n = 0n; for (const ch of s){ const i = B58A.indexOf(ch); if (i < 0) throw new Error("not base58"); n = n * 58n + BigInt(i); }
+  const out = []; while (n > 0n){ out.unshift(Number(n % 256n)); n /= 256n; }
+  for (const ch of s){ if (ch === "1") out.unshift(0); else break; }
+  return new Uint8Array(out);
+}
+const b58encode = bytes => { let n = 0n; for (const b of bytes) n = n * 256n + BigInt(b); let s = "";
+  while (n > 0n){ s = B58A[Number(n % 58n)] + s; n /= 58n; } for (const b of bytes){ if (b === 0) s = "1" + s; else break; } return s; };
+function readTransfer(b58msg){
+  // the funding transfer the server built, read back before Phantom sees it: who pays, who gets it, how much
+  const m = b58decode(b58msg);
+  if (m[0] !== 1 || m[1] !== 0 || m[2] !== 1 || m[3] !== 3) throw new Error("not a plain transfer");
+  const key = i => b58encode(m.slice(4 + 32 * i, 36 + 32 * i));
+  const ix = 4 + 96 + 32;                                   // after the three keys and the blockhash
+  if (m[ix] !== 1 || m[ix + 1] !== 2 || m[ix + 2] !== 2 || m[ix + 3] !== 0 || m[ix + 4] !== 1 || m[ix + 5] !== 12) throw new Error("not a plain transfer");
+  const d = m.slice(ix + 6, ix + 18);
+  if (d[0] !== 2 || d[1] || d[2] || d[3]) throw new Error("not a transfer instruction");
+  let lamports = 0n; for (let i = 11; i >= 4; i--) lamports = lamports * 256n + BigInt(d[i]);
+  if (key(2) !== "11111111111111111111111111111111") throw new Error("not the System Program");
+  return {from: key(0), to: key(1), lamports: Number(lamports)};
+}
+function phantomProvider(){
+  const p = (window.phantom && window.phantom.solana) || window.solana;
+  return p && (p.isPhantom || typeof p.signMessage === "function") ? p : null;
+}
+function moneyRender(d){
+  const M = d.money || {}, real = M.mode === "real";
+  $("mFake").classList.toggle("on", !real); $("mReal").classList.toggle("on", real);
+  $("mFake").setAttribute("aria-pressed", String(!real)); $("mReal").setAttribute("aria-pressed", String(real));
+  $("moneyNote").textContent = d.mode === "stopped" ? "" : M.switching_to ? "SWITCHING TO " + M.switching_to.toUpperCase() + "…"
+    : real ? "REAL MONEY ON" : "FAKE MONEY";
+  const line = $("moneyLine"); line.className = "mline" + (real ? " real" : "");
+  line.textContent = d.mode === "stopped" ? "the desk is stopped: see the error below"
+    : real ? `Trading REAL money from the bot wallet: at most $${M.real_max_ticket_usd} a buy, it stops for the day at -${M.max_daily_loss_pct}%, `
+      + `and keeps ${M.fee_reserve_sol} SOL for fees. Fast lane: ${String(M.fast_lane || "").toUpperCase()}.`
+    : `Trading FAKE money: a paper bank of ${usd(num(d.bank_usd))} on real prices. Nothing real is bought.`
+      + (M.real_coins_held ? ` ${M.real_coins_held} real coin(s) bought before are still managed and sold for real.` : "");
+  $("moneyProblems").textContent = !real && (M.problems || []).length ? "Before REAL can go on: " + M.problems.join("; ") : "";
+  $("botAddr").textContent = M.bot_wallet || "none yet";
+  $("botSol").textContent = num(M.bot_sol) !== null ? `${M.bot_sol.toFixed(4)} SOL` : M.bot_wallet ? (M.bot_sol_error ? "balance unreadable" : "balance …") : "";
+  $("copyBot").hidden = !M.bot_wallet;
+  $("ownerAddr").textContent = M.owner_wallet ? M.owner_wallet + (M.owner_locked ? " (set in Railway)" : "")
+    : myWallet ? myWallet + " (connected, not saved as your wallet yet)" : "not connected";
+  $("connectBtn").textContent = myWallet ? "Connected " + shortAddr(myWallet) : "Connect Phantom";
+  const amt = solAmount($("fundAmt").value);
+  $("payLink").href = M.bot_wallet ? `solana:${M.bot_wallet}?label=desk-runner%20bot` + (amt ? `&amount=${amt}` : "") : "#";
+}
+$("mFake").addEventListener("click", async () => {
+  const M = (lastStatus && lastStatus.money) || {};
+  if (M.mode !== "real") return;
+  if (!confirm("Switch to FAKE money? New buys will be paper. Real coins already held are still managed and sold for real.")) return;
+  const res = await admin("/api/money", {mode: "fake"}, "moneyMsg"); if (res && !res.ok && res.text) alert(res.text);
+});
+$("mReal").addEventListener("click", async () => {
+  const M = (lastStatus && lastStatus.money) || {};
+  if (M.mode === "real") return;
+  if ((M.problems || []).length){ alert("REAL money can't go on yet:\n\n• " + M.problems.join("\n• ")); return; }
+  if (!confirm(`REAL MONEY: the bots will buy coins with the bot wallet's SOL (${num(M.bot_sol) !== null ? M.bot_sol.toFixed(4) : "?"} SOL). `
+    + `Memecoins can go to zero: only use money you can lose. At most $${M.real_max_ticket_usd} a buy, and it stops for the day at `
+    + `-${M.max_daily_loss_pct}%. The fast lane is ${String(M.fast_lane || "").toUpperCase()}. Continue?`)) return;
+  const typed = prompt("Type REAL to turn real money on");
+  if (typed === null) return;
+  const res = await admin("/api/money", {mode: "real", confirm: typed.trim()}, "moneyMsg"); if (res && !res.ok && res.text) alert(res.text);
+});
+$("connectBtn").addEventListener("click", async () => {
+  const p = phantomProvider(), out = $("moneyMsg");
+  if (!p){
+    if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)){      // Safari has no wallet: open this page inside Phantom
+      location.href = "https://phantom.com/ul/browse/" + encodeURIComponent(location.href) + "?ref=" + encodeURIComponent(location.origin);
+    } else alert("No Phantom here: install the Phantom browser extension, or open this page in the Phantom app's browser.");
+    return;
+  }
+  try { const r = await p.connect(); myWallet = r.publicKey.toString(); }
+  catch (e) { out.textContent = "not connected: " + (e && e.message || e); return; }
+  out.textContent = "connected " + shortAddr(myWallet);
+  const M = (lastStatus && lastStatus.money) || {};
+  if (lastStatus) moneyRender(lastStatus);
+  if (M.owner_wallet || !M.owner_message) return;
+  if (!confirm(`Make ${shortAddr(myWallet)} the only wallet withdrawals can go to? Phantom asks you to sign a message: `
+    + "a signature, not a transaction. It costs nothing and moves nothing.")) return;
+  const text = M.owner_message.replace("{address}", myWallet);
+  let sig;
+  try { const s = await p.signMessage(new TextEncoder().encode(text), "utf8"); sig = s && s.signature ? s.signature : s; }
+  catch (e) { out.textContent = "not signed: " + (e && e.message || e); return; }
+  const b64 = typeof sig === "string" ? sig : btoa(String.fromCharCode.apply(null, Array.from(sig)));
+  const res = await admin("/api/owner", {address: myWallet, signature: b64, message: text}, "moneyMsg");
+  if (res && !res.ok && res.text) alert(res.text);
+});
+$("fundAmt").addEventListener("input", () => { if (lastStatus) moneyRender(lastStatus); });
+$("fundBtn").addEventListener("click", async () => {
+  const p = phantomProvider(), out = $("moneyMsg");
+  if (!p || !myWallet){ alert("Tap Connect Phantom first (on an iPhone it opens this page inside Phantom), or use the bot wallet's address to send from your wallet app."); return; }
+  const sol = solAmount($("fundAmt").value);
+  if (!sol){ alert("How much SOL should go to the bot wallet? A plain number, like 0.5"); return; }
+  const bot = (lastStatus && lastStatus.money && lastStatus.money.bot_wallet) || "";
+  if (!confirm(`Send ${sol} SOL from ${shortAddr(myWallet)} to the bot wallet ${shortAddr(bot)}? Phantom shows the transfer for you to approve.`)) return;
+  const res = await admin("/api/fund", {from: myWallet, sol}, "moneyMsg");
+  if (!res || !res.ok || !res.body || !res.body.message){ if (res && res.text) alert(res.text); return; }
+  let tr;
+  try { tr = readTransfer(res.body.message); } catch (e) { alert("That transfer doesn't look right (" + e.message + "): nothing was sent."); return; }
+  if (tr.from !== myWallet || tr.to !== bot || tr.to !== res.body.to || Math.abs(tr.lamports - Math.round(sol * 1e9)) > 1){
+    alert("That transfer doesn't match what you asked for: nothing was sent."); return;
+  }
+  try {
+    const sent = await p.request({method: "signAndSendTransaction", params: {message: res.body.message}});
+    out.textContent = `submitted ${sol} SOL (tx ${String(sent && sent.signature || "").slice(0, 8)}…): the bot wallet's balance shows it within a minute or two`;
+  } catch (e) { out.textContent = "not sent: " + (e && e.message || e); }
+});
+$("wdBtn").addEventListener("click", async () => {
+  const M = (lastStatus && lastStatus.money) || {}, v = $("wdAmt").value.trim().toLowerCase();
+  if (!M.owner_wallet){ alert("Connect your wallet first: withdrawals only ever go to the wallet you connected."); return; }
+  const n = v === "all" ? "all" : solAmount(v);
+  if (!n){ alert("How much SOL? A plain number like 0.25, or all."); return; }
+  if (!confirm(`Withdraw ${n === "all" ? "everything it can" : n + " SOL"} from the bot wallet to ${shortAddr(M.owner_wallet)}? This moves real SOL.`)) return;
+  const res = await admin("/api/withdraw", {sol: n}, "moneyMsg");
+  if (res && !res.ok && res.text) alert(res.text);
+});
+$("copyBot").addEventListener("click", async () => {
+  const a = lastStatus && lastStatus.money && lastStatus.money.bot_wallet; if (!a) return;
+  try { await navigator.clipboard.writeText(a); $("moneyMsg").textContent = "bot wallet address copied"; }
+  catch (e) { prompt("The bot wallet's address (copy it):", a); }
+});
 $("goalBtn").addEventListener("click", async () => {
   const cur = lastStatus && num(lastStatus.goal_usd);
   const raw = prompt("Your goal in dollars, like 10000 or 10k (leave empty to clear it)", cur ? String(Math.round(cur)) : "");

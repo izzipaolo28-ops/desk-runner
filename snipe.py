@@ -1193,11 +1193,18 @@ def score_coin(r, cfg):
         run = (h1c, "this hour")
     if age is not None and age >= 360 and h6c is not None and (run is None or h6c > run[0]):
         run = (h6c, "over 6 hours")
-    if run and cfg.snipe_max_run_pct > 0 and run[0] >= cfg.snipe_max_run_pct:
-        wait.append(f"it just ran {run[0]:+.0f}% {run[1]}: nobody chases a {cfg.snipe_max_run_pct:g}%+ run (CATBOT: +508% in 80 min, "
+    line = (cfg.snipe_max_run_h1_pct if run and run[1] == "this hour" else cfg.snipe_max_run_pct) if run else 0
+    if run and line > 0 and run[0] >= line:
+        wait.append(f"it just ran {run[0]:+.0f}% {run[1]}: nobody chases a {line:g}%+ run (CATBOT: +508% in 80 min, "
                     "then rugged), it waits for it to settle")
     if m5c is not None and cfg.snipe_max_m5_pct > 0 and m5c >= cfg.snipe_max_m5_pct and not desk:
         wait.append(f"spiking {m5c:+.0f}% in 5 min: it waits for the candle to cool, never buys the top of one")
+    b5m, s5m = buys.get("m5"), sells.get("m5")
+    if (not desk and cfg.snipe_min_buyers_x > 0 and b5m is not None and s5m is not None and s5m > 0
+            and b5m < s5m * cfg.snipe_min_buyers_x):
+        wait.append(f"buyers aren't clearly ahead: {b5m} buys vs {s5m} sells in 5 min (it wants {cfg.snipe_min_buyers_x:g}x)")
+    if (not desk and cfg.snipe_min_h1_pct and age is not None and age >= 60 and h1c is not None and h1c < cfg.snipe_min_h1_pct):
+        wait.append(f"not moving: {h1c:+.0f}% this hour (it buys coins already moving, +{cfg.snipe_min_h1_pct:g}% or more this hour)")
     # A big run alone isn't a reason: on a coin under a day old the 24h change is "since launch", and every coin that
     # made it is up 1000%+. One red 5-minute candle isn't cooling either. It's a SKIP only when the hour itself is falling.
     h24c = chg.get("h24")
@@ -1327,7 +1334,7 @@ def score_coin(r, cfg):
            "source": r.get("source")}
     tags = entry_tags(ctx)
     for tag, lesson in (r.get("learned") or {}).items():
-        if tag in tags and not desk:
+        if tag in tags:                            # both bots: what one learned, the other doesn't repeat
             wait.append(f"learned from its own trades: {lesson}")
     if early and not veto and total >= cfg.snipe_buy_score:
         if total < cfg.snipe_early_buy_score:
@@ -1405,14 +1412,14 @@ class Sniper:
     LESSON_COINS, LESSON_LOSSES, LESSON_HOURS = 15, 2, 48
 
     def lessons(self):
-        """What its own trades taught it. Among the sniper's coins closed in the last 48 hours (15 at most), each one
+        """What its own trades taught it. Among both bots' coins closed in the last 48 hours (15 at most), each one
         tagged with what was true at the buy (fresh, thin, odd pair, many brand-new holders, a map cluster, insiders,
         thin buyers, a score near the bar, the list it came from...). A tag is avoided from then on when it lost at least
         twice and lost more than twice as often as it won. A fast dump (down 20%+ within 10 minutes of the buy) counts as
         two losses for the warning signs, the things it should have stopped at. {tag: why, with the coins}."""
         coins, order, now = {}, [], time.time()
         for i, t in enumerate(self.state.data.get("trades") or []):          # newest first
-            if t.get("plan") != "snipe":
+            if t.get("plan") not in ("snipe", "desk", None):
                 continue
             k = t.get("order_id") or f"row{i}"
             if k not in coins:
@@ -1510,16 +1517,18 @@ class Sniper:
                 return
 
     # ---------- the losing streak: the fast lane rests ----------
-    def cooling(self, now_ts=None):
+    def cooling(self, now_ts=None, plan="snipe", streak=None, minutes=None):
         """After SNIPE_LOSS_STREAK sniper coins in a row closed at a loss, the fast lane doesn't buy for
         SNIPE_COOLDOWN_MINUTES from the last one (a cold market sinks every new coin). Your own checks still buy.
+        plan="desk" asks the same of the desk's own coins (DESK_LOSS_STREAK / DESK_COOLDOWN_MINUTES).
         Returns {"until", "at", "why"} or None."""
-        n = self.cfg.snipe_loss_streak
-        if n <= 0 or self.cfg.snipe_cooldown_minutes <= 0:
+        n = self.cfg.snipe_loss_streak if streak is None else streak
+        mins = self.cfg.snipe_cooldown_minutes if minutes is None else minutes
+        if n <= 0 or mins <= 0:
             return None
         coins, order = {}, []
         for i, t in enumerate(self.state.data.get("trades") or []):           # newest first
-            if t.get("plan") != "snipe":
+            if (t.get("plan") or "desk") != plan:
                 continue
             k = t.get("order_id") or f"row{i}"
             if k not in coins:
@@ -1534,11 +1543,11 @@ class Sniper:
             last = datetime.fromisoformat(str(done[0]["closed"]).replace("Z", "+00:00")).timestamp()
         except ValueError:
             return None
-        until = last + self.cfg.snipe_cooldown_minutes * 60
+        until = last + mins * 60
         if (now_ts or time.time()) >= until:
             return None
         return {"until": until, "at": datetime.fromtimestamp(until, timezone.utc).strftime("%H:%M UTC"),
-                "why": f"{n} sniper losses in a row"}
+                "why": f"{n} {'sniper' if plan == 'snipe' else 'desk'} losses in a row"}
 
     # ---------- a second look before the money goes in ----------
     def hold_for_confirm(self, rep, now, sources=()):
@@ -1754,7 +1763,7 @@ class Sniper:
             for h in wallet_hits:
                 smart.setdefault(h["wallet"], {"wallet": h["wallet"], "label": followed.get(h["wallet"], h.get("label"))})["sol"] = h.get("sol")
             rep.update(rug=rug, flow=flw, smart=list(smart.values()), followed_n=len(followed),
-                       learned=self.lessons() if purpose != "desk" else {})
+                       learned=self.lessons())   # both bots learn from both bots
             if not self.cfg.snipe_map:
                 rep["map"] = {"status": "off (SNIPE_MAP=off)"}
             elif purpose == "desk" or manual or self._close_to_buy(rep, F):
@@ -1941,18 +1950,24 @@ class Sniper:
             return False, "the daily loss limit paused the desk"
         factor = 0.5 if forced else (1.0 if rep["score"] >= 85 else 0.7) * (0.8 if rep.get("setup") == "fresh launch" else 1.0)
         early = bool((F.get("mcap") or 0) and F["mcap"] < self.cfg.snipe_early_mcap_usd)
-        if early and not forced:
-            factor *= self.cfg.snipe_early_size              # an early bet: a smaller ticket for the riskiest, biggest-upside coins
+        h1b, ageb = (F.get("chg") or {}).get("h1"), F.get("age_min")
+        hot = (not early and _f(h1b) is not None and _f(ageb) is not None and ageb >= 60 and self.cfg.snipe_hot_h1_pct > 0
+               and h1b >= self.cfg.snipe_hot_h1_pct)
+        if (early or hot) and not forced:
+            factor *= self.cfg.snipe_early_size              # an early bet or a hot entry: half the ticket, profits taken fast
+        fast_why = "early bet" if early else f"hot entry (+{h1b:.0f}% this hour)" if hot else None
         signals = [("+ " if p["pts"] > 0 else "− ") + p["key"] for p in rep.get("points") or []]
         order = {"order_id": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "-snipe", "model": "sniper",
                  "token": {"ticker": rep.get("ticker"), "address": mint, "network_id": SOL_NET, "chain": "solana"},
                  "size_factor": round(factor, 3), "size_cuts": ["bought by hand" if forced else f"sniper score {rep['score']}"]
-                 + ([f"early bet under {money(self.cfg.snipe_early_mcap_usd)}: {self.cfg.snipe_early_size:g}x"] if early and not forced else []),
+                 + ([f"early bet under {money(self.cfg.snipe_early_mcap_usd)}: {self.cfg.snipe_early_size:g}x"] if early and not forced else [])
+                 + ([f"a hot entry, already +{h1b:.0f}% this hour: {self.cfg.snipe_early_size:g}x"] if hot and not forced else []),
                  "confidence": None, "worth_trading_at_all": None, "runner_up": [],
                  "facts": {"liquidity_usd": F.get("liq"), "price_usd": F.get("price"), "mcap_usd": F.get("mcap"),
                            "decimals": (rep.get("facts") or {}).get("decimals"), "age_minutes": F.get("age_min")},
                  "why": {}, "judge_calls": [], "plan": "snipe", "score": rep["score"], "setup": rep.get("setup"),
-                 "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else []), "early": early,
+                 "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else []), "early": early or hot,
+                 "fast_why": fast_why,
                  "why_bought": [rep.get("headline") or ""] + [p["label"] for p in sorted(rep.get("points") or [], key=lambda p: -p["pts"])
                                                                if p["pts"] > 0 and p["label"] not in (rep.get("headline") or "")][:4]
                  + ([rep["action"]] if rep.get("action") else []),
