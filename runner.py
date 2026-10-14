@@ -45,6 +45,7 @@ def _storage():
 
 
 STORAGE = _storage()
+VERSION = "2026-10-14 desk fixes"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -1172,6 +1173,45 @@ class Runner:
             self.state.data["equity"] = (self.state.data["equity"] + [[_now(), round(cash + value, 2)]])[-2000:]
             self.state.save()
 
+    def summary(self):
+        """A small read-only view of how it's doing (GET /api/summary): the last 40 sales with what was true at each buy,
+        the coins held, today's numbers, what it learned. Small enough to be read in one go; never a key or a token."""
+        with self.state.lock:
+            d = self.state.data
+            trades = list(d.get("trades") or [])[:40]
+            positions = [dict(p) for p in self.state.positions()]
+            errors = [e.get("text", "")[:160] for e in (d.get("errors") or [])[:5]]
+            daily = dict(d.get("daily") or {})
+        ctx_keys = ("mcap", "age_min", "h1", "m5", "liq", "score", "buyers_x", "source", "fresh_share")
+        def short(t):
+            c = t.get("entry_ctx") or {}
+            return {"closed_at": t.get("closed_at"), "ticker": t.get("ticker"), "plan": t.get("plan"), "mode": t.get("mode"),
+                    "final": t.get("final"), "sold_pct": t.get("sold_pct"), "cost": t.get("cost_usd"), "pnl": t.get("pnl_usd"),
+                    "why": (t.get("reason") or "")[:100], "tags": t.get("entry_tags"), "review": (t.get("review") or [])[:4],
+                    "at_buy": {k: c.get(k) for k in ctx_keys if c.get(k) is not None}}
+        coins, wins, losses = {}, 0, 0
+        for t in trades:
+            k = (t.get("order_id"), t.get("mint"))
+            coins.setdefault(k, {"pnl": 0.0, "final": False})
+            coins[k]["pnl"] += t.get("pnl_usd") or 0.0
+            coins[k]["final"] = coins[k]["final"] or t.get("final") is not False
+        for c in coins.values():
+            if c["final"]:
+                wins, losses = wins + (c["pnl"] > 0), losses + (c["pnl"] <= 0)
+        return {"now": _now(), "version": VERSION, "money": self.money_mode(), "paused": bool(self.state.data.get("paused")),
+                "pause_reason": self.state.data.get("pause_reason"), "bank_usd": self.last_bank,
+                "today": daily, "last40": {"coins_closed": wins + losses, "won": wins, "lost": losses,
+                                           "pnl": round(sum(c["pnl"] for c in coins.values()), 2)},
+                "dial": self.dial(), "lessons": self.sniper.lessons(), "sniper_mode": self.sniper.mode(),
+                "sniper_resting": self.sniper.cooling(),
+                "desk_resting": self.sniper.cooling(plan="desk", streak=DESK_LOSS_STREAK, minutes=DESK_COOLDOWN_MINUTES),
+                "desk_waiting": [{"ticker": p.get("ticker"), "last": p.get("last")} for p in self.pending_desk.values()],
+                "positions": [{"ticker": p.get("ticker"), "plan": p.get("plan"), "mode": p.get("mode"), "cost": p.get("cost_usd"),
+                               "gain_pct": p.get("gain_pct"), "best_pct": p.get("peak_gain_pct"), "opened_at": p.get("opened_at"),
+                               "fast": p.get("fast_why"), "runner": bool(p.get("runner")),
+                               "why_bought": (p.get("why_bought") or [])[:3]} for p in positions],
+                "trades": [short(t) for t in trades], "errors": errors}
+
     def status(self):
         with self.state.lock:
             d = json.loads(json.dumps(self.state.data, default=str))
@@ -1302,6 +1342,11 @@ def make_handler(runner, admin_token):
                 return self._send(200, page, "text/html; charset=utf-8")
             if self.path == "/api/status":
                 return self._send(200, runner.status())
+            if self.path == "/api/summary":
+                try:
+                    return self._send(200, runner.summary())
+                except AttributeError:
+                    return self._send(200, runner.status())
             if self.path == "/health":
                 return self._send(200, {"ok": True})
             return self._send(404, {"detail": "not found"})
