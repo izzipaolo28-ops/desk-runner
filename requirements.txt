@@ -1,3 +1,9 @@
-requests>=2.31.0
-python-dotenv>=1.0.0
-solders>=0.21.0
+# the loop, the seats, the wallet
+requests>=2.31
+urllib3>=2
+cryptography>=42
+# the desk (judge.py) that asks Jev
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2
+typesafe-sdk
