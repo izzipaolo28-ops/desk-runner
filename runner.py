@@ -20,7 +20,8 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path 
+from narrative_scanner import scan_narratives
 
 HERE = Path(__file__).resolve().parent
 # where the desk keeps what must survive a redeploy: DATA_DIR if set, else the Railway volume, else ./data
