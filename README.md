@@ -3,8 +3,8 @@
 The desk, the bot and the DESK FLOOR dashboard in one Railway service. It scans Solana tokens, asks Jev through your
 question sets, buys the pick through Jupiter, then RISK sells it when the volume dies. Up to 5 coins at once (`MAX_POSITIONS`).
 
-It starts in **paper mode**: real Jupiter quotes, nothing sent, no wallet needed. Real money only after you set
-`LIVE_MODE=true` and give it a bot wallet.
+It starts on **FAKE money**: real Jupiter quotes, nothing sent, no wallet needed. The **MONEY** box on the page
+switches it to **REAL money** once it has a bot wallet (section 4), and back.
 
 Everything below works from an iPhone in Safari.
 
@@ -57,25 +57,57 @@ Let it run a day or two. Watch the **trades** panel and the balance chart. Paper
 both ways, so price impact and Jupiter's route fees are counted. Network fees, and any slippage between the quote
 and a real fill, aren't. Real results will be a little worse.
 
-## 4. Go live (real money)
+## 4. Real money: the FAKE / REAL switch
 
+The **MONEY** box at the top of the page has two buttons: **FAKE MONEY** (a paper bank on real prices, nothing real
+is bought) and **REAL MONEY** (the bots trade the SOL in the **bot wallet**). You switch between them any time; your
+choice survives a redeploy. They need your `ADMIN_TOKEN`.
+
+**How the money moves.** The bots never touch your own wallet. They trade a separate **bot wallet** whose key sits in
+Railway. Your wallet (Phantom) only connects to the page:
+- **Connect Phantom** makes your wallet the only place withdrawals can ever go. Phantom asks you to sign a message (a
+  signature, not a transaction: it costs nothing and moves nothing). On an iPhone, the button opens this page inside
+  Phantom's own browser, where your wallet can connect. Once set, it can't be changed from the page: to change it, put
+  the new address in Railway's variables as `OWNER_WALLET`.
+- **Send from my wallet** funds the bot wallet: type an amount of SOL, and Phantom shows the transfer on its own screen
+  for you to approve. Before it does, the page reads the transfer back and checks it goes from your wallet to the bot
+  wallet, for the amount you typed. You can also copy the bot wallet's address and send from any wallet app.
+- **Withdraw to my wallet** sends SOL from the bot wallet back to your wallet (a number, or `all`). While REAL is on or
+  real coins are held, it keeps 0.02 SOL there to pay the fees of the next sales. The smallest transfer is 0.001 SOL.
+  A withdrawal waits for any real buy or sale in progress, and a second one waits until the first has landed.
+- **The strongest lock:** put your own wallet's address in Railway's variables as `OWNER_WALLET`. Then withdrawals can
+  only go there, even for someone who learned your `ADMIN_TOKEN` (anyone with the token could otherwise connect their
+  wallet first, before you do).
+
+**Setting up the bot wallet (once):**
 1. In **Phantom**, add a **new** account: tap your account icon at the top left, then **Add Account**, then
-   **Create New Account**. Use it only for the bot, and send it only SOL you can afford to lose.
-
-   **How much it needs before it trades at all:** a ticket is 6% of the wallet × size_factor. With no X read, the
-   factor is 0.60, so 3.6%. With a dark data source as well, it is 0.24, so 1.44%. Tickets under `MIN_TICKET_USD`
-   ($5) are skipped. So with the defaults the wallet needs about **$140** of SOL to buy anything, and about $350
-   to also take the dark-data picks. To start smaller, set `MIN_TICKET_USD` lower, e.g. `1`. Fees are small on
-   Solana, but priority fees, Jupiter's swap fee and price impact take a bigger share of a tiny ticket.
+   **Create New Account**. It's only for the bot.
 2. Export that account's private key: Phantom **Settings**, then **Manage Accounts**, then the bot account, then
-   **Show Private Key**. Phantom's menus move between versions, so look for "Show Private Key" if these names
-   differ.
+   **Show Private Key**. (Phantom's menus move between versions: look for "Show Private Key".)
 3. In Railway Variables, add `BOT_WALLET_KEY` and paste the key there. Paste it **only** into Railway: never into a
-   chat, a note or a screenshot. Not even to me.
-4. Change `LIVE_MODE` to `true` and tap **Deploy**. The badge turns red: **LIVE · REAL MONEY**.
+   chat, a note, a screenshot or this page. Not even to me. Tap **Deploy**.
+4. The page now shows the bot wallet's address. Fund it from your wallet (above), then tap **REAL MONEY**, read what it
+   says, and type `REAL`.
 
-The bot keeps 0.02 SOL in the wallet for fees (`FEE_RESERVE_SOL`). The bot's buys and sells show up in that Phantom
-account like any other swap, so you can see them there, or sell by hand.
+**What REAL needs, and its limits.** The switch refuses until: there's a bot wallet, the service has its Railway
+volume, `PRACTICE_MODE` is off, and the bot wallet holds SOL. Then:
+- no single buy over **$25** (`REAL_MAX_TICKET_USD`), however much is in the wallet;
+- it stops buying for the day at **-20%** (`MAX_DAILY_LOSS_PCT`); real and fake money each keep their own day, so
+  switching back and forth never wipes the day's real losses;
+- a ticket is 6% of the bot wallet x its size factor, and tickets under `MIN_TICKET_USD` ($5) are skipped: with the
+  defaults it needs about $150 of SOL to buy anything, more to take the half-size early bets. To start smaller, set
+  `MIN_TICKET_USD` lower, e.g. `2` (fees take a bigger share of a tiny ticket).
+- **Test swap** (bottom of the page) swaps about $1 of the bot wallet's SOL to USDC and back: do it once after the
+  first funding, to prove the wallet can trade.
+
+The switch happens in the bot's own loop, between two steps (within seconds, or once a scan running at that moment
+ends): a buy sized on one money is never filled with the other. Switching back to FAKE: new buys are paper, and any
+real coins still held are managed and sold for real. Switching to REAL: paper coins still held finish on paper. A desk
+pick waiting for its entry, a "buy it" you tapped, and a test swap you asked for are all dropped when the money
+switches: ask again on the new money.
+`LIVE_MODE=true` in Railway still starts it on real money, until you pick on the page.
+
+Memecoins can go to zero. Only fund the bot wallet with money you can lose. No setting makes a 2x certain.
 
 ## The buttons (bottom of the page, need `ADMIN_TOKEN`)
 
@@ -129,7 +161,7 @@ and tap **Check**. Within a minute you get a report and a score out of 100:
 | group | what it checks |
 |---|---|
 | rug safety | mint and freeze authority revoked (from the chain itself), Token-2022 traps, the biggest wallet and the top 10 (pools excluded), RugCheck's report (rugged, its danger list), liquidity locked or burned (or still on the bonding curve), people can actually sell |
-| who's behind it | **the bubble map**: who funded each of the biggest holders (read from each wallet's first transaction on the chain): the top 50 when `SOLANA_RPC_URL` is a Helius key (Helius lists every holder), else the 20 the plain RPC lists. With `BUBBLEMAPS_API_KEY` it uses Bubblemaps' own map instead: its clusters and the share it counts in bundles (4%+ = SKIP). A map that can't be read means no buy, for the sniper and the desk alike: it looks again later. Several top holders funded by one wallet are one person: 3+ of them holding 4%+, all clusters together 10%+, or 5+ top holders in clusters is a SKIP (DOGGO's ring, OnlyDoge's two hubs); a single small pair costs points. Holders paid out by an exchange (a funder with 1000+ transactions) aren't a cluster. Also: top holders RugCheck ties to the insiders (10%+ = SKIP), how much the dev / creator still holds, the dev wallet's history, a bundled launch (many wallets buying in the very first block), **copycats** (an older coin with the same ticker and 3x the liquidity), holders |
+| who's behind it | **the bubble map**: who funded each of the biggest holders (read from each wallet's first transaction on the chain): the top 50 when `SOLANA_RPC_URL` is a Helius key (Helius lists every holder), else the 20 the plain RPC lists. With `BUBBLEMAPS_API_KEY` it uses Bubblemaps' own map instead: its clusters and the share it counts in bundles (4%+ = SKIP). A map that can't be read means no buy, for the sniper and the desk alike: it looks again later. Several top holders funded by one wallet are one person: 3+ of them holding 4%+, all clusters together 10%+, or 5+ top holders in clusters is a SKIP (DOGGO's ring, OnlyDoge's two hubs); a single small pair costs points. A crowd of brand-new wallets among the top holders (40%+ of the ones traced) is a SKIP too (DOPEUS: no clusters, the coin split across new wallets). Holders paid out by an exchange (a funder with 1000+ transactions) aren't a cluster. Also: top holders RugCheck ties to the insiders (10%+ = SKIP), how much the dev / creator still holds, the dev wallet's history, a bundled launch (many wallets buying in the very first block), **copycats** (an older coin with the same ticker and 3x the liquidity), holders |
 | where it is | age, market cap, liquidity, fresh launch / early runner / second leg, graduated from the curve |
 | momentum now | every trade on the pool: different wallets buying in the last 5 min, buy dollars vs sell dollars, the biggest buy, volume speeding up, the price in the last 5 min |
 | smart money | the wallets you follow: did they buy it, do they hold it |
@@ -181,7 +213,9 @@ buys at half size (never a SKIP).
 narratives trending now, new pools, GeckoTerminal's 5-minute trending,
 DexScreener's newest profiles, boosts and community takeovers, and every buy by a wallet you follow. A cheap first
 look decides which two get the full check. **OFF** = only your own checks, **WATCH** = finds and checks, never buys,
-**AUTO** = buys the BUYs that pass a second look. Paper starts on AUTO, live starts on WATCH (`SNIPE_MODE` sets it).
+**AUTO** = buys the BUYs that pass a second look. It starts on AUTO, or on WATCH when the service starts with
+`LIVE_MODE=true` (`SNIPE_MODE` sets it). Switching to REAL from the page keeps the fast lane on whatever it's on, and
+the REAL confirmation says which: set it to WATCH first if only the desk should buy with real money.
 
 **A second look before the money goes in.** A fast-lane BUY isn't bought on the spot: it looks again a minute later
 (`SNIPE_CONFIRM_SECONDS`) and buys only if the price held (not down 4%+, `SNIPE_CONFIRM_DROP_PCT`), didn't rocket 30%+
@@ -210,14 +244,83 @@ no stay). A loss rule only sells once Jupiter's real quote agrees: a wick on the
 At 12 hours it sells, unless buyers are still ahead and it's still rising: then it rides up to 3x longer. Every
 number is a variable (`SNIPE_*` below).
 
-**Why it lost, and what it avoids now.** Every coin that closes at a loss gets a review in TRADES and the live feed,
-from what was true when it was bought: already falling that hour, under $100K, paired with another memecoin instead
-of SOL, under an hour old, thin liquidity, bought right after a big 5-minute jump, already up 150%+ that hour, and how
-fast it fell. Among the sniper's last 15 coins, any of those that lost twice and never won is **avoided from then on**
-("AVOIDS NOW" on the page); one win with it lifts that. Two rules are fixed: the sniper doesn't buy a coin down 20%+
-in the last hour ($.fun: bought at $81.5K on a bounce, an hour after it topped near $200K), and the desk doesn't buy
-one down 25%+. A pool paired with another memecoin costs 8 points. The sniper's market cap floor is $100K
-(`SNIPE_MIN_MCAP_USD`): the micro caps lost the most.
+**Why it lost, and what it learns from it.** Every sniper buy keeps a fingerprint of what was true at the buy: the
+coin's numbers (market cap, age, the hour's and the last 5 minutes' move, liquidity, the pool's pair) and what the checks
+saw and let through: how many top holders were brand-new wallets, a cluster on the bubble map, insiders, the buyers
+against the sellers, the top 10's share, its score, and the list it was found on. A coin that closes at a loss gets a
+review in TRADES and the live feed that names those warning signs (DOPEUS: "5 of the 16 top holders it traced were
+brand-new wallets; the buyers were only 1.3x the sellers; its score was 74; it fell 27% within 4 min of the buy: a fast
+dump"). Then it learns. Among the sniper's coins closed in the last 48 hours (15 at most), a sign that lost at least
+twice, and more than twice as often as it won, is **avoided from then on** ("AVOIDS NOW" on the page, and a "learned:"
+line in the live feed the moment it learns it). A **fast dump** (down 20%+ within 10 minutes of the buy) counts as two
+losses for the warning signs, so one is enough to stop buying coins with that sign; plain tags like "under an hour old"
+need two real losses. After 48 hours a lesson fades and the sign gets another look. Two rules are fixed: the sniper
+doesn't buy a coin down 20%+ in the last hour ($.fun: bought at $81.5K on a bounce, an hour after it topped near
+$200K), and the desk doesn't buy one down 25%+. A pool paired with another memecoin costs 8 points.
+
+**Nobody buying (PQC).** PQC was a desk pick bought with nobody buying it, then held through a slow slide all the way
+to the -25% stop (-$9.73). Now the desk doesn't buy a coin with fewer than 5 buys in the last 5 minutes
+(`DESK_MIN_BUYS_5M`), and a retrace bounce needs those buyers too. Once in, any coin of either bot that's down 3% or
+more (`DEAD_LOSS_PCT`) with nobody buying (2 buys or fewer in 5 minutes, `DEAD_MAX_BUYS`, or the sellers 3x the
+buyers) and not rising, for a minute (`DEAD_SECONDS`), is sold: out at about -$1 to -$3 instead of riding to the
+stop. Buyers coming back resets the minute. The desk's coins also get a never-green rule: 45 minutes in, never green,
+at -8%, out (`DESK_RED_MINUTES` / `DESK_RED_PCT`). Desk buys now keep their fingerprint too, so a desk loss gets a review
+("only 0 buys in the 5 minutes before it bought: nobody was buying it").
+
+**No chasing a run (CATBOT).** CATBOT ran +508% in 80 minutes, then its creator pulled the money. A coin up 300%+
+over the last hour (an hour old or more, `SNIPE_MAX_RUN_H1_PCT`), or 500%+ over the last 6 hours (6 hours old or more,
+`SNIPE_MAX_RUN_PCT`), isn't bought by either bot: it waits for the run to settle and looks again. A coin up 150-300%
+this hour is a **hot entry**: bought at half the ticket on the fast plan, with nothing left riding (half out at +25%,
+the rest at +50%, out at -15%). A coin under an hour old isn't held back by any of this: its "hour" is since launch.
+
+**Already moving, buyers ahead.** The sniper buys a coin an hour old or more only when it's up 15%+ this hour
+(`SNIPE_MIN_H1_PCT`), and any coin only when the last 5 minutes' buys are at least 1.5x the sells
+(`SNIPE_MIN_BUYERS_X`). In the simulation, every buy under 1.5x was a coin going sideways (26 of them, -$15 between
+them) while the movers were bought at 2-3x; the flat ones were in-and-out for a dollar or two, taking the slots the
+movers needed.
+
+**The time box: big wins in a short time, long holds only on the way to a 2x.** Past 45 minutes, a sniper coin that
+isn't up +25% or more is sold, whatever it's doing (`SNIPE_BOX_MINUTES` / `SNIPE_BOX_GAIN_PCT`). The fast plan's box is
+30 minutes and +15%; the desk's, older coins that move slower, 2 hours and +20%. A coin that keeps its gain past the
+box rides on with the ladder, the trail and the momentum exits; the last 25% riding after 75% was banked is never
+boxed. The trade plan shows a "time box" row.
+
+**How these were tested: three hours, many times over.** `sim/` holds a simulated market: coins born every few minutes,
+each of a kind taken from real trades (CRAWLER the runner, PUTBACK the early pop, CATBOT the pump and rug, DOPEUS the
+fresh-wallet dump, DOGGO the bundle, PQC the slow bleed, dead coins, chop, slow grinders, clean 2x's), answering every
+service the bot reads in their real shapes. The bot runs on its own code against it on a simulated clock
+(`python3 sim/run.py --hours 3 --seed 1`; the simulator stays with the tests, it isn't one of the files Railway needs).
+It's a model, not the market: it shows how the rules react to each shape, not what the real market will pay.
+
+**The dial: how hard to push today.** A number from 0.4 to 1, read every minute, shown in THE DESK box and the fast
+lane's line. It starts at 1 and goes down for:
+- the bots' own last 24 hours on the money that's on (4 coins closed at least): under half of them won x0.8, under a quarter x0.6;
+- today: down half the daily loss limit, x0.75;
+- the market: the median hour of the hot coins the fast lane read in the last 30 minutes, 0 to -10% x0.85, under -10% x0.7.
+Every automatic ticket, the desk's and the sniper's, is multiplied by it (your own buys from CHECK A COIN aren't), and
+under 0.75 (`DIAL_EARLY_MIN`) there are no early bets that day: "today's dial is 0.60: too weak for early bets".
+`DIAL=off` keeps full tickets.
+
+**Brand-new wallets on the bubble map (DOPEUS).** DOPEUS's map had no clusters at all: every holder sat in a pair with
+one other wallet, the coin split across wallets made to hold it. The map check now also reads, for each top holder,
+whether it's a brand-new wallet (under 100 transactions with the first one in the last 3 days, or one whose very first
+transaction gave it the coin). 40%+ of the traced top holders brand-new (5 at least) is a SKIP (`SNIPE_MAP_FRESH_PCT`);
+20%+ costs 8 points and takes away the "map clean" points. With `BUBBLEMAPS_API_KEY` set, the chain is still read for
+this, next to Bubblemaps' clusters.
+
+**Early bets: $20K to $100K.** The coins that can 10x and the ones that lost the most (PUTBACK: sniped at $43.5K, sold
+60% at +48-50% within minutes). The floor is $20K (`SNIPE_MIN_MCAP_USD`); under $100K (`SNIPE_EARLY_MCAP_USD`) it's an
+early bet. Extra careful in, against rugs and tops: rising this hour, paired with SOL or USDC, a clean bubble map that
+was actually read (no top holders funded by one wallet, no crowd of brand-new wallets), 15+ minutes old
+(`SNIPE_EARLY_MIN_AGE_MINUTES`), no 20%+ 5-minute candle (`SNIPE_EARLY_MAX_M5_PCT`), buyers 1.2x the sellers
+(`SNIPE_EARLY_BUYERS_X`), insiders under 5% (`SNIPE_EARLY_INSIDER_PCT`), half the ticket (`SNIPE_EARLY_SIZE=0.5`).
+Its score bar is the sniper's own 70; `SNIPE_EARLY_BUY_SCORE` raises it. And **profits taken fast**: out at -15%
+(`SNIPE_EARLY_STOP_LOSS_PCT`), or -8% while still falling 6%+ in 5 minutes; 40% sold at +25% and 35% more at +50%
+(`SNIPE_EARLY_SCALE_OUT=25:40,50:35`); once up 15%, if it turns (15% off its best, back under +5%, or the momentum dies)
+it sells down to its last 25% at once. Its spike and turning-down sales never take it under that 25%
+(`SNIPE_EARLY_KEEP_PCT`), which rides as the runner: out 30% off its best, or back at break-even, never a loss. The
+trade plan shows an "early bet" row. If early bets keep losing, "under $100K market cap" shows up under AVOIDS NOW like
+any other lesson.
 
 **What it learned.** Every closed sniper trade keeps the signals it was bought on. The page shows, for each signal,
 how many coins, how many won, the average result and the P&L, so you can see which signals actually pay and raise or
@@ -281,7 +384,9 @@ no action on a number it can't read):
 
 | rule | default | what it does |
 |---|---|---|
-| stop-loss | `STOP_LOSS_PCT=30` | down 30% from the buy → sell everything |
+| stop-loss | `STOP_LOSS_PCT=25` | down 25% from the buy → sell everything (the sniper's coins: `SNIPE_STOP_LOSS_PCT=25`) |
+| move failed | `DESK_FAIL_PCT=15`, `DESK_FAIL_M5_PCT=10`, `DESK_FAIL_MINUTES=60` | in its first hour, down 15% and still falling 10%+ in 5 minutes → out before the stop (the sniper's line: −12% in 30 minutes) |
+| never went green | `SNIPE_RED_MINUTES=10`, `SNIPE_RED_PCT=5` | the sniper's coins: 10 minutes in, never above +2% and now down 5% → out early |
 | take-profit (all) | `TAKE_PROFIT_PCT=0` (off) | up X% → sell everything |
 | max hold | `MAX_HOLD_HOURS=24` | held this long → sell everything |
 | **momentum died** | `MOMENTUM_SELL_PCT=75`, `FADE_OFF_PEAK_PCT=4`, `FADE_VOLUME_PACE=0.6` | once it has been up 20% (the sniper's coins: 30%): it slips 4%+ off its best, sellers are ahead in the last 5 minutes and the volume is drying up (the last 5 minutes at 0.6x the hour's pace or less) → **75% out, the last 25% rides** |
@@ -302,13 +407,38 @@ what the market prices the coins at, while the pool still has money in it, is a 
 pool, a route that isn't ready): it doesn't sell, and tries again on the next check. A real rug (the pool emptied)
 still sells for whatever there is, and after 20 minutes of bad quotes it sells anyway.
 
-**Every desk pick gets the sniper's checks.** Before the desk buys its own pick, the sniper runs its full check:
-RugCheck, locked liquidity, the dev wallet, bundles, copycats, whether people can sell, buyers against sellers right
-now. A SKIP, a coin dumping right now (down 8% or more in 5 minutes, or sellers well ahead of buyers over the last
-15 minutes), or a score under 25 (`DESK_GATE_SCORE`) means no buy. A coin with a few more sellers than buyers is
-still bought: Jev already liked it. Jev isn't asked twice about the desk's own pick. When the checks stop a pick, that
-coin sits out an hour and the desk scans again a minute later (not five), so the other coins that passed get their turn.
-`DESK_GATE=off` turns it off.
+**Every desk pick gets the sniper's checks, and its standard.** Before the desk buys its own pick, the sniper runs its
+full check: RugCheck, locked liquidity, the dev wallet, bundles, copycats, whether people can sell, buyers against
+sellers right now. The night of Oct 13-14 the desk's picks were most of the losses (Catnip, Altai, Buddy, DOPE,
+ARCADES, ROSE): scores of 42-61 against a bar of 25, buyers only 1.0-1.2x the sellers, micro caps on $26-28K pools,
+bought right after a +17-28% candle. So now a desk pick isn't bought when:
+- the check is a SKIP, the bubble map couldn't be read, or the coin just ran (300%+ in an hour);
+- one of the lessons below says so (both bots learn from both bots' trades);
+- nobody's buying (under 3 buys in 5 minutes), or the buyers aren't at least 1.25x the sellers (`DESK_MIN_BUYERS_X`);
+- it's a micro cap under $100K (`DESK_MIN_MCAP_USD`): those are the sniper's early bets, with their stricter checks;
+- it's spiking 20%+ in 5 minutes (`DESK_MAX_M5_PCT`), falling 25%+ this hour, or dumping right now;
+- its score is under 60 (`DESK_GATE_SCORE`, the sniper's own bar is 70).
+The retrace entry asks the same of the bounce: buyers at least 1.25x the sellers, and a calm green candle, not a 15%+ one. After
+2 desk losses in a row the desk rests for an hour (`DESK_LOSS_STREAK` / `DESK_COOLDOWN_MINUTES`), shown in THE DESK
+box. When the checks stop a pick, that coin sits out an hour and the desk scans again a minute later (not five).
+`DESK_GATE=off` turns the checks off.
+
+**The desk waits for its entry.** A pick that passes isn't bought on the spot (PQC: bought at $258K while it slid from
+$300K, and sat −22%). It waits up to 60 minutes (`DESK_RETRACE_MINUTES`) and holds its slot meanwhile, then buys one of two ways:
+- **the retrace:** 5%+ under its high since the pick (`DESK_RETRACE_PCT`), then bouncing (green over 5 minutes, buyers
+  at least even with sellers) and still up over 6 hours. A bounce in a coin down over 6 hours is not an entry;
+- **the breakout:** no pullback, but momentum shifts up hard: up 10%+ since the pick (`DESK_BREAKOUT_PCT`) and at its
+  high, +3% to +30% over 5 minutes (a 30%+ candle is the top, not an entry), buyers 1.5x the sellers (15 buys at least),
+  5-minute volume 1.5x the hour's pace, and still up this hour, on two checks in a row (20 seconds apart), so one wick
+  doesn't buy.
+Down 18% since the pick (`DESK_RETRACE_MAX_DROP`), it's dropped: it kept falling. After 60 minutes with neither, it's
+dropped too: it doesn't chase a slow drift up. A dropped pick sits out an hour and the desk scans again a minute later.
+`DESK_RETRACE_PCT=0` buys at once, as before; `DESK_BREAKOUT_PCT=0` turns the breakout off.
+
+**Why it bought.** Every position keeps the bot's reasons: Jev's pick (how worth trading, how sure), the safety-check
+score and its best points, the 5-minute, 1-hour and 6-hour moves at the pick, and how it got in (the retrace or the
+breakout, with the numbers). The sniper's buys keep their score and best signals. They're in the trade plan under
+"why it bought".
 
 **GeckoTerminal busy.** GeckoTerminal answers "too many requests" (429) now and then, and Railway's shared addresses
 make it more likely. After one, it gets a minute of rest. Meanwhile a Solana coin's dossier reads the chain itself
@@ -367,8 +497,10 @@ stays paused until you tap **Resume**.
 |---|---|---|
 | `TYPESAFE_API_KEY` | none | needed: the desk can't ask Jev without it |
 | `ADMIN_TOKEN` | none | 16+ characters; without it, the Pause button is off |
-| `LIVE_MODE` | `false` | exactly `true` or `false` |
-| `BOT_WALLET_KEY` | none | live only. The bot account's private key, in Phantom's export format. |
+| `LIVE_MODE` | `false` | exactly `true` or `false`: the money it starts on, until you pick FAKE or REAL on the page |
+| `BOT_WALLET_KEY` | none | real money only. The bot account's private key, in Phantom's export format. Railway only, never the page |
+| `OWNER_WALLET` | none | your own wallet's address: the only place withdrawals go. Set from the page by connecting Phantom; this variable overrides it |
+| `REAL_MAX_TICKET_USD` | `25` | on real money, no single buy over this |
 | `JUPITER_API_KEY` | none | recommended |
 | `SOLANA_RPC_URL` | public endpoints | strongly recommended: `https://mainnet.helius-rpc.com/?api-key=YOUR_KEY` (free key at helius.dev; the `beta.helius-rpc.com` gateway is a public beta and refuses heavy holder lookups more often). Public endpoints often refuse the holder lookup; then the top holders come from RugCheck's list instead, and if that fails too the coin is cut as `top_wallet_unknown`. |
 | `RPC_MAX_PER_SEC` | `8` | Solana RPC calls a second at most, all together (the bubble map reads many wallets; free plans limit calls a second) |
@@ -378,7 +510,7 @@ stays paused until you tap **Resume**.
 | `MIN_TICKET_USD` | `5` | no buy smaller than this |
 | `MAX_IMPACT_PCT` | `3` | refuse fills with more price impact |
 | `MAX_DAILY_LOSS_PCT` | `20` | pause the desk after losing this % of the day's opening bank |
-| `STOP_LOSS_PCT` | `30` | sell everything if the position is down this much (`0` = off) |
+| `STOP_LOSS_PCT` | `25` | sell everything if the position is down this much (`0` = off) |
 | `FEE_RESERVE_SOL` | `0.02` | SOL the bot never spends |
 | `RISK_POLL_SECONDS` | `300` | how often RISK checks an open position (at least 30) |
 | `CYCLE_SECONDS` | `300` | time between scans (5 minutes) |
@@ -397,9 +529,13 @@ stays paused until you tap **Resume**.
 | `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
 | `WATCH_SECONDS` | `10` | how often WATCH reads the price of each coin held (5 at least) |
 | `TRAIL_LOCK_PCT` / `SNIPE_TRAIL_LOCK_PCT` | `8` / `10` | once the trail is armed, sell rather than fall back under this gain |
-| `DESK_GATE` / `DESK_GATE_SCORE` | `on` / `25` | every desk pick must pass the sniper's safety checks, not be dumping, and score at least this |
+| `DESK_GATE` / `DESK_GATE_SCORE` | `on` / `60` | every desk pick must pass the sniper's safety checks, not be dumping, and score at least this |
+| `DESK_MIN_BUYERS_X` / `DESK_MIN_MCAP_USD` / `DESK_MAX_M5_PCT` | `1.25` / `100000` / `20` | a desk pick needs buyers this many times the sellers, this market cap, and no 5-min candle this big |
+| `DESK_LOSS_STREAK` / `DESK_COOLDOWN_MINUTES` | `2` / `60` | after this many desk losses in a row, the desk rests this long |
+| `DESK_RETRACE_PCT` / `DESK_RETRACE_MINUTES` / `DESK_RETRACE_MAX_DROP` | `5` / `60` / `18` | a desk pick waits for a pullback this deep and a bounce, this long at most, and is dropped if it falls this far (`0` = buy at once) |
+| `DESK_BREAKOUT_PCT` | `10` | or buys a breakout: up this much since the pick with the buyers and volume heavily ahead (`0` = off) |
 | `DESK_SLOTS` / `SNIPE_SLOTS` | 60% / 40% of `MAX_POSITIONS` (3 / 2) | the slots each bot may fill |
-| `SNIPE_MODE` | `auto` paper, `watch` live | the fast lane: `off`, `watch` (never buys) or `auto` |
+| `SNIPE_MODE` | `auto`, `watch` with `LIVE_MODE=true` | the fast lane: `off`, `watch` (never buys) or `auto`; the page's buttons change it |
 | `SNIPE_BUY_SCORE` | `70` | the score a BUY needs |
 | `SNIPE_SCAN_SECONDS` | `60` | how often the fast lane looks |
 | `SNIPE_MIN_AGE_MINUTES` / `SNIPE_MAX_AGE_HOURS` | `10` / `72` | how young and how old a coin it looks at |
@@ -408,7 +544,12 @@ stays paused until you tap **Resume**.
 | `SNIPE_LOSS_STREAK` / `SNIPE_COOLDOWN_MINUTES` | `2` / `30` | after this many sniper losses in a row, no fast-lane buys for this long |
 | `SNIPE_FAIL_PCT` / `SNIPE_FAIL_M5_PCT` / `SNIPE_FAIL_MINUTES` | `12` / `10` / `30` | the move failed: out at −12% while still falling 10% in 5 min, in the first 30 min |
 | `SNIPE_MIN_LIQUIDITY_USD` | `8000` | thinner than this is too hard to get out of |
-| `SNIPE_MIN_MCAP_USD` / `SNIPE_MAX_MCAP_USD` | `100000` / `30000000` | the market cap window |
+| `SNIPE_MIN_MCAP_USD` / `SNIPE_MAX_MCAP_USD` | `20000` / `30000000` | the market cap window (`100000` turns early bets off) |
+| `SNIPE_EARLY_MCAP_USD` / `SNIPE_EARLY_SIZE` | `100000` / `0.5` | under this market cap is an early bet, at this share of the ticket |
+| `SNIPE_EARLY_MIN_AGE_MINUTES` / `SNIPE_EARLY_MAX_M5_PCT` / `SNIPE_EARLY_BUYERS_X` / `SNIPE_EARLY_INSIDER_PCT` / `SNIPE_EARLY_BUY_SCORE` | `15` / `20` / `1.2` / `5` / `70` | an early bet's extra checks: this old, no 5-min candle this big, buyers this many times the sellers, insiders under this, this score |
+| `SNIPE_EARLY_SCALE_OUT` / `SNIPE_EARLY_KEEP_PCT` | `25:40,50:35` / `25` | an early bet's profit steps (gain%:sell% of the bag) and the share that always rides |
+| `SNIPE_EARLY_STOP_LOSS_PCT` / `SNIPE_EARLY_FAIL_PCT` / `SNIPE_EARLY_FAIL_M5_PCT` / `SNIPE_EARLY_RED_PCT` | `15` / `8` / `6` / `4` | an early bet's loss lines: the stop, the failed move (while still falling this much in 5 min), never green |
+| `SNIPE_EARLY_TRAIL_ARM_PCT` / `SNIPE_EARLY_TRAIL_PCT` / `SNIPE_EARLY_LOCK_PCT` | `15` / `15` / `5` | once up this much, it sells down to its last 25% when it falls this far off its best or back under this gain |
 | `SNIPE_MAX_TOP_WALLET_PCT` / `SNIPE_MAX_TOP10_PCT` / `SNIPE_MAX_DEV_PCT` | `8` / `45` / `10` | rug lines |
 | `SNIPE_BUNDLE_WALLETS` | `8` | this many wallets in the launch block = a bundled launch |
 | `SNIPE_STOP_LOSS_PCT`, `SNIPE_SCALE_OUT`, `SNIPE_TRAIL_ARM_PCT`, `SNIPE_TRAIL_PCT` | `25`, `50:30,100:30,200:20`, `30`, `20` | the sniper's exits (sells at +50%, 2x and 3x) |
@@ -419,6 +560,18 @@ stays paused until you tap **Resume**.
 | `BUBBLEMAPS_API_KEY` | none | Bubblemaps' own map (key from pro.bubblemaps.io, a paid plan; 25 of its credits a coin, read at most every 10 minutes) |
 | `SNIPE_MAP` | `on` | the bubble map check (who funded the top holders); read for desk picks, your own checks and coins close to a BUY |
 | `SNIPE_MAP_CLUSTER_PCT` / `SNIPE_MAP_TOTAL_PCT` / `SNIPE_MAP_MAX_WALLETS` | `4` / `10` / `5` | SKIP when 3+ holders of one funder hold this %, all clusters hold this %, or this many top holders are in clusters |
+| `DESK_MIN_BUYS_5M` | `3` | a desk pick with fewer buys than this in the last 5 minutes isn't bought |
+| `DEAD_LOSS_PCT` / `DEAD_MAX_BUYS` / `DEAD_SECONDS` | `3` / `2` / `60` | down this much with this few buys in 5 min (or the sellers 3x the buyers), not rising, this long: out (`0` = off) |
+| `DESK_RED_MINUTES` / `DESK_RED_PCT` | `45` / `8` | a desk coin that never went green this long and is down this much: out |
+| `SNIPE_MAX_RUN_H1_PCT` / `SNIPE_HOT_H1_PCT` | `300` / `150` | up this much in the last hour: wait; up between the two: a hot entry, half the ticket on the fast plan with nothing left riding (`SNIPE_HOT_SCALE_OUT=25:50,50:50`) |
+| `SNIPE_MIN_H1_PCT` | `15` | a coin an hour old or more is bought by the sniper only if it's up this much this hour (`0` = off) |
+| `SNIPE_MIN_BUYERS_X` | `1.5` | the sniper buys only when the last 5 minutes' buys are at least this many times the sells (`0` = off) |
+| `SNIPE_BOX_MINUTES` / `SNIPE_BOX_GAIN_PCT` | `45` / `25` | the time box: past this, a sniper coin that isn't up this much is sold |
+| `DESK_BOX_MINUTES` / `DESK_BOX_GAIN_PCT` | `120` / `20` | the desk's time box |
+| `FAST_BOX_MINUTES` / `FAST_BOX_GAIN_PCT` | `30` / `15` | the fast plan's (early bets, hot entries) time box |
+| `SNIPE_MAX_RUN_PCT` | `500` | up this much over the last hour (or 6 hours) = a run nobody chases: both bots wait (`0` = off) |
+| `DIAL` / `DIAL_MIN` / `DIAL_EARLY_MIN` | `on` / `0.4` / `0.75` | today's dial: every automatic ticket times it, never under this, and no early bets under this |
+| `SNIPE_MAP_FRESH_PCT` / `SNIPE_MAP_FRESH_DAYS` | `40` / `3` | SKIP when this share of the traced top holders are brand-new wallets (first transaction within this many days); `0` = off |
 | `SNIPE_INSIDER_PCT` | `10` | SKIP when top holders RugCheck ties to the insiders hold this % |
 | `SMART_WALLETS` | none | wallets to follow: `address:name,address:name` (or add them on the page) |
 | `ANTHROPIC_API_KEY` | none | turns on the web search for buzz (X, Reddit, TikTok, news), from console.anthropic.com |
