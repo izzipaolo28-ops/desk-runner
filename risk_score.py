@@ -74,8 +74,8 @@ def score_token(*, top10_pct, dev_pct, block0_buyers,
     return ScoreResult(score,verdict,tuple(red),tuple(green),tuple(unknown))
 
 def trade_window_status(now=None):
-    def trade_window_status(now=None):
     return True, "No time restriction"
+    
 def format_token_report(result):
     red=list(result.red_flags)+[f"UNVERIFIED: {x}" for x in result.unknowns]
     lines=[f"SCORE: {result.score}/10","RED FLAGS:"]
