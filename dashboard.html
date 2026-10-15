@@ -378,6 +378,15 @@ details.pc .inner{padding:4px 8px 8px}
       The buttons need your ADMIN_TOKEN.</p>
   </section>
 
+
+  <section class="panel" id="narrativePanel" aria-label="Narrative scanner">
+    <h2>12H NARRATIVE RADAR <span class="muted" id="narrativeMeta">X + NEWS</span></h2>
+    <p class="muted" style="font-size:12px">Research leads only. Suggested tickers are naming ideas, not verified listings. This panel never buys tokens.</p>
+    <button class="btn go" type="button" id="narrativeScanBtn">Scan X + news · last 12 hours</button>
+    <div class="msg" id="narrativeMsg" role="status"></div>
+    <div id="narrativeResults" style="display:grid;gap:10px;margin-top:10px"></div>
+  </section>
+
   <section class="cards" id="cards" aria-label="Seats"></section>
 
   <section class="floorwrap" aria-label="The floor">
@@ -2289,6 +2298,32 @@ $("testBtn").addEventListener("click", () => {
   if (live && !confirm(`REAL MONEY: swap about $${amt.toFixed(2)} of the bot wallet's SOL to USDC and straight back. Fees are a few cents. Go?`)) return;
   admin("/api/test-swap");
 });
+
+async function renderNarratives(){
+  const btn = $("narrativeScanBtn"), msg = $("narrativeMsg"), out = $("narrativeResults"), meta = $("narrativeMeta");
+  btn.disabled = true; msg.textContent = "Scanning X and recent news…"; out.replaceChildren();
+  try {
+    const r = await admin("/api/narratives", null, "narrativeMsg");
+    if (!r || !r.ok) { msg.textContent = (r && r.text) || "Scan failed. Check Railway logs and X_BEARER_TOKEN."; return; }
+    const data = r.body || {};
+    meta.textContent = data.x_configured ? "X + NEWS · 12H" : "NEWS ONLY · ADD X_BEARER_TOKEN";
+    msg.textContent = `${data.narratives.length} narratives · ${data.sources_seen} unique items · generated ${new Date(data.generated_at).toLocaleTimeString()}`;
+    if (!data.narratives.length) { out.appendChild(el("p", "muted", "No usable narrative signals found in the last 12 hours. Try again later or configure X access.")); return; }
+    data.narratives.forEach((n, i) => {
+      const card = el("div", "panel"); card.style.padding = "12px";
+      const head = el("h3", "", `${i+1}. ${n.category.toUpperCase()} · EARLY ${n.early_score}/10 · STRONG ${n.strength_score}/10`); card.appendChild(head);
+      card.appendChild(el("p", "", n.core_meme));
+      card.appendChild(el("p", "muted", `Ticker ideas: ${n.ticker_ideas.map(t=>"$"+t).join(" · ")} (unverified suggestions)`));
+      card.appendChild(el("p", "muted", `Evidence: ${n.evidence_count} items · ${n.x_posts} X · ${n.news_items} news · rank ${n.rank_score}`));
+      card.appendChild(el("p", "", `What would kill it: ${n.kill_conditions}`));
+      (n.evidence || []).slice(0,3).forEach(e => { const a = el("a", "muted", `${e.source.toUpperCase()}: ${e.text}`); a.href=e.url; a.target="_blank"; a.rel="noopener noreferrer"; a.style.display="block"; a.style.marginTop="6px"; card.appendChild(a); });
+      out.appendChild(card);
+    });
+  } catch(e) { msg.textContent = "Narrative scan failed. Check X_BEARER_TOKEN and Railway service logs."; }
+  finally { btn.disabled = false; }
+}
+$("narrativeScanBtn").addEventListener("click", renderNarratives);
+
 setInterval(() => {
   const n = new Date(); $("clock").textContent = n.toISOString().slice(11, 16) + " UTC";
   if (F.clock){ F.clock.textContent = n.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});
