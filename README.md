@@ -237,7 +237,7 @@ no narrative, hype too slow, no 2x room, rug risk, copycat, slots full... so a q
 **Sell now.** Each coin in POSITIONS has a **Sell all now** button (it still won't sell into a quote far under the
 market). Use it to free a slot.
 
-**In and out.** The sniper's coins get their own plan: stop at −25%, sell 30% at +50%, 30% at 2x and 20% at 3x, a 20%
+**In and out.** The sniper's coins get their own plan: stop at −25%, sell 50% at 2x, 25% at 3x, 12.5% at 4x and 6.25% at 5x (the last 6.25% rides), a 20%
 trailing stop once it's been up 30%, **out at −12% if it's still falling 10%+ in 5 minutes in its first 30 minutes**
 (the move failed: no riding it down to the stop), and **out if it hasn't made +10% within 20 minutes** (no momentum,
 no stay). A loss rule only sells once Jupiter's real quote agrees: a wick on the price feed doesn't sell.
@@ -331,6 +331,54 @@ buy, the less there is to check. The sniper can't see private Telegram groups or
 everyone else. It only reads X, TikTok and Reddit through the web search, which needs `ANTHROPIC_API_KEY` and costs
 about $0.01 per search plus tokens (at most 3 searches a check, `BUZZ_PER_HOUR` checks an hour). Run it on paper first.
 
+## What's new (Oct 15): the 2x-5x ladder, speed profiles, viral-hype hold, the certified desk
+
+**1. The 2x / 3x / 4x / 5x sell ladder.** Both bots now sell **50% of the bag at 2x, 25% at 3x, 12.5% at 4x and 6.25% at
+5x** (`SCALE_OUT` and `SNIPE_SCALE_OUT`, default `100:50,200:25,300:12.5,400:6.25`: gain% : % of the original bag). That is
+93.75% sold; the last **6.25% becomes the runner** once the 5x step is done: it rides until it is 30% off its best, or back
+at break-even, and never turns into a loss. Early bets and hot entries keep their own fast plans (profits taken at +25% /
++50%), because that is what they are for.
+*This ladder doesn't switch the protective exits off.* The stop-loss, the "move failed" and "nobody's buying" exits, the
+trailing stop, the profit lock and the time box still run before a coin reaches 2x, so many coins will be sold by one of
+those first. That is on purpose. To stretch it, raise `TRAIL_ARM_PCT` / `TRAIL_PCT`, or (the strongest change) the time-box
+numbers. Very small tickets: a sale that would leave under about $2.50 of coin sells everything instead, so on a $5 ticket
+the 12.5% and 6.25% steps fold into one final sale.
+
+**2. Speed profiles (`SPEED_PROFILE`).** A faster sniper without touching a single safety rule:
+
+| profile | fast-lane look | second look | full checks per round | price reads while holding |
+|---|---|---|---|---|
+| `normal` | 60 s | 60 s | 2 | 10 s |
+| `fast` (default) | 30 s | 30 s | 3 | 5 s |
+| `turbo` | 20 s | 15 s | 4 | 5 s |
+
+A profile only fills in variables you haven't set: `SNIPE_SCAN_SECONDS=45` in Railway beats it. Faster means more calls to
+GeckoTerminal, DexScreener, RugCheck and your RPC. If the live feed starts showing "too many requests" (429), or your Helius
+plan runs out early, go down a step. The code is in `profiles.py`.
+
+**3. Viral-hype hold mode.** A sniper coin bought while its hype is **75/100 or more** (`SNIPE_VIRAL_HYPE`) with a narrative
+behind it is held longer: the time box moves from 45 to 120 minutes (`SNIPE_VIRAL_BOX_MINUTES`), the "no momentum" exit from
+20 to 45 minutes (`SNIPE_VIRAL_STALL_MINUTES`), the max hold from 12 to 24 hours (`SNIPE_VIRAL_MAX_HOLD_HOURS`) and the
+trailing stop from 20% to 25% off the best (`SNIPE_VIRAL_TRAIL_PCT`). **The stop-loss is not loosened**, and the dead-coin /
+move-failed exits still run. The hype number is read once, at the buy: the bot doesn't re-measure it while it holds, so a
+coin whose hype dies is only caught by the price rules. Early bets and hot entries don't get this mode. `SNIPE_VIRAL_HYPE=0`
+turns it off.
+
+**4. The certified desk.** Before the desk buys its pick, the pick must be **certified** (`certify.py`): every check below
+read and passed. An unknown is a fail, never a pass.
+- mint and freeze authority confirmed revoked, no Token-2022 trap, RugCheck's full report read and not rugged
+- sniper score 75+ (`DESK_CERT_SCORE`), pool liquidity $50K+, 6+ hours old, 500+ holders
+- biggest wallet 5% or less, top 10 35% or less, dev 3% or less, insiders 3% or less
+- liquidity 50%+ locked or burned (a pool $250K deep and a day old may pass with no lock: many older pools have none)
+- bubble map read: funded clusters 2% or less, brand-new wallets 20% or less of the traced top holders
+
+It's stricter than `DESK_GATE_SCORE=65`; expect the desk to buy **less often**. A certified coin gets the desk's longer-hold
+plan: time box 4 hours (was 2), never-green exit at 90 minutes (was 45), max hold 48 hours (was 24), trailing stop 20% off the
+best (was 15%): `DESK_CERT_BOX_MINUTES`, `DESK_CERT_RED_MINUTES`, `DESK_CERT_HOLD_HOURS`, `DESK_CERT_TRAIL_PCT`. The stop-loss
+stays the same. Every number in the list has a `DESK_CERT_*` variable (see `certify.py`); `DESK_CERTIFIED=off` goes back to
+the old gate. **"Certified" means "passed these checks", not "safe".** Rug checks lower the odds of buying a rug; they can't
+see a dev who sells from a fresh wallet an hour later, a coin that just goes down, or anything the data sources get wrong.
+
 ## Two bots, their own slots
 
 The desk runs **two bots side by side**:
@@ -393,7 +441,7 @@ no action on a number it can't read):
 | profit lock | `TRAIL_LOCK_PCT=8` | once it has been up 20%, it never lets it fall back under +8%: 75% out there, the rest rides |
 | trailing stop | `TRAIL_ARM_PCT=20`, `TRAIL_PCT=15` | once it has been up 20%, a 15% drop from its best price: 75% out, the rest rides |
 | the runner | `RUNNER_TRAIL_PCT=30`, `RUNNER_FLOOR_PCT=0` | the last 25% rides with no ladder and no trims: out when it's 30% off its best, or back at break-even (it never turns into a loss). `MOMENTUM_SELL_PCT=100` sells everything at once instead |
-| profit ladder | `SCALE_OUT=30:25,60:25,100:25` | at +30% sell 25% of the original bag, at +60% another 25%, at +100% another 25%; the last 25% rides on the trailing stop |
+| profit ladder | `SCALE_OUT=100:50,200:25,300:12.5,400:6.25` | at 2x sell 50% of the original bag, at 3x 25%, at 4x 12.5%, at 5x 6.25%; the last 6.25% is the runner (below) |
 | breaking down | `WATCH_DROP_M5_PCT=8` | in a loss and down 16%+ in 5 minutes with sellers 1.5× buyers → sell everything |
 | turning down | `WATCH_DROP_M5_PCT=8`, `WATCH_DERISK_PCT=50` | in profit, down 8%+ in 5 minutes with sellers 1.3× buyers → once it has been up 20%: 75% out, the rest rides; before that, half of what's left (at most every 10 minutes) |
 | spike | `WATCH_PUMP_M5_PCT=20`, `WATCH_PUMP_SELL_PCT=30` | up 20%+ in 5 minutes while 20%+ in profit → take 30% off (at most every 15 minutes) |
@@ -529,6 +577,17 @@ stays paused until you tap **Resume**.
 | `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
 | `WATCH_SECONDS` | `10` | how often WATCH reads the price of each coin held (5 at least) |
 | `TRAIL_LOCK_PCT` / `SNIPE_TRAIL_LOCK_PCT` | `8` / `10` | once the trail is armed, sell rather than fall back under this gain |
+| `SPEED_PROFILE` | `fast` | `normal`, `fast` or `turbo`: how often the sniper looks and WATCH reads prices (see "What's new") |
+| `SCALE_OUT` | `100:50,200:25,300:12.5,400:6.25` | the desk's profit ladder: gain% : % of the original bag (`off` = none) |
+| `SNIPE_SCALE_OUT` | `100:50,200:25,300:12.5,400:6.25` | the sniper's profit ladder |
+| `SNIPE_VIRAL_HYPE` | `75` | hype (0-100) at the buy that puts a sniper coin in hold mode (`0` = off) |
+| `SNIPE_VIRAL_BOX_MINUTES` / `SNIPE_VIRAL_STALL_MINUTES` / `SNIPE_VIRAL_MAX_HOLD_HOURS` / `SNIPE_VIRAL_TRAIL_PCT` | `120` / `45` / `24` / `25` | the viral coin's time box, no-momentum exit, max hold and trailing stop |
+| `DESK_CERTIFIED` | `on` | the desk only buys a certified pick, and holds it longer (`off` = the old gate) |
+| `DESK_CERT_BOX_MINUTES` / `DESK_CERT_RED_MINUTES` / `DESK_CERT_HOLD_HOURS` / `DESK_CERT_TRAIL_PCT` | `240` / `90` / `48` / `20` | a certified coin's time box, never-green exit, max hold and trailing stop |
+| `DESK_CERT_SCORE` | `75` | the sniper score a certified pick needs |
+| `DESK_CERT_MIN_LIQ_USD` / `DESK_CERT_MIN_AGE_HOURS` / `DESK_CERT_MIN_HOLDERS` | `50000` / `6` / `500` | pool liquidity, age and holder count a certified pick needs |
+| `DESK_CERT_MAX_TOP_WALLET_PCT` / `DESK_CERT_MAX_TOP10_PCT` / `DESK_CERT_MAX_DEV_PCT` / `DESK_CERT_MAX_INSIDER_PCT` | `5` / `35` / `3` / `3` | holder-concentration limits |
+| `DESK_CERT_MAX_CLUSTER_PCT` / `DESK_CERT_MAX_FRESH_PCT` / `DESK_CERT_MIN_LP_PCT` | `2` / `20` / `50` | bubble-map and liquidity-lock limits |
 | `DESK_GATE` / `DESK_GATE_SCORE` | `on` / `65` | every desk pick must pass the sniper's safety checks, not be dumping, and score at least this |
 | `DESK_MIN_BUYERS_X` / `DESK_MIN_MCAP_USD` / `DESK_MAX_M5_PCT` | `1.5` / `150000` / `15` | a desk pick needs buyers this many times the sellers, this market cap, and no 5-min candle this big |
 | `DESK_LOSS_STREAK` / `DESK_COOLDOWN_MINUTES` | `2` / `60` | after this many desk losses in a row, the desk rests this long |
@@ -552,7 +611,7 @@ stays paused until you tap **Resume**.
 | `SNIPE_EARLY_TRAIL_ARM_PCT` / `SNIPE_EARLY_TRAIL_PCT` / `SNIPE_EARLY_LOCK_PCT` | `15` / `15` / `5` | once up this much, it sells down to its last 25% when it falls this far off its best or back under this gain |
 | `SNIPE_MAX_TOP_WALLET_PCT` / `SNIPE_MAX_TOP10_PCT` / `SNIPE_MAX_DEV_PCT` | `8` / `45` / `10` | rug lines |
 | `SNIPE_BUNDLE_WALLETS` | `8` | this many wallets in the launch block = a bundled launch |
-| `SNIPE_STOP_LOSS_PCT`, `SNIPE_SCALE_OUT`, `SNIPE_TRAIL_ARM_PCT`, `SNIPE_TRAIL_PCT` | `25`, `50:30,100:30,200:20`, `30`, `20` | the sniper's exits (sells at +50%, 2x and 3x) |
+| `SNIPE_STOP_LOSS_PCT`, `SNIPE_SCALE_OUT`, `SNIPE_TRAIL_ARM_PCT`, `SNIPE_TRAIL_PCT` | `25`, `100:50,200:25,300:12.5,400:6.25`, `30`, `20` | the sniper's exits (sells at 2x, 3x, 4x and 5x) |
 | `SNIPE_STALL_MINUTES` / `SNIPE_STALL_GAIN_PCT` | `20` / `10` | out if it hasn't made +10% within 20 min |
 | `SNIPE_MAX_HOLD_HOURS` / `SNIPE_RIDE_X` | `12` / `3` | max hold, and how much longer it rides while buyers lead |
 | `SNIPE_NEED_NARRATIVE` / `SNIPE_MIN_HYPE` | `on` / `50` | buy only coins with a narrative, and hype at least this |
@@ -615,6 +674,9 @@ Your first deploy is the first real run of those, which is one more reason to st
 ## Running the tests (on a computer)
 
 ```
-pip install -r requirements-dev.txt && playwright install chromium
-cd tests && python -m pytest -q
+pip install -r requirements-dev.txt
+python -m unittest discover -s tests -v
 ```
+The tests in `tests/test_new_features.py` need no network: they replay a coin from 1x to 5x through the real exit code and check
+the sales are exactly 50% / 25% / 12.5% / 6.25%, and cover the speed profiles, the viral-hold plan and the certified check.
+They are not needed on Railway; skip the `tests` folder when uploading.

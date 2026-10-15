@@ -46,7 +46,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-14 desk fixes"          # which build is running: the summary page says it
+VERSION = "2026-10-15 2x-5x ladder, speed profiles, viral hold, certified desk"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -108,6 +108,8 @@ try:
 except ValueError:
     TEST_SWAP_USD = 1.0
 DESK_GATE = "off" if os.environ.get("DESK_GATE", "on").strip().lower() == "off" else "on"
+import certify  # noqa: E402  (the desk's "certified" safety gate)
+CERT_LIMITS = certify.limits_from_env()
 try:
     DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "65"))))
 except ValueError:
@@ -473,6 +475,14 @@ class Runner:
             ok, why = False, f"sniper score {rep.get('score')} is under {DESK_GATE_SCORE:g}"
         else:
             ok, why = True, f"sniper score {rep.get('score')}"
+        rep["certified"] = False
+        if ok and self.cfg.desk_certified:
+            cert_ok, cert_no = certify.certify(rep, CERT_LIMITS)       # every check read and passed, or no buy
+            rep["certified"], rep["cert_no"] = cert_ok, cert_no
+            if not cert_ok:
+                ok, why = False, "not certified: " + "; ".join(cert_no[:4])[:200]
+            else:
+                why += ", certified"
         self._gate_rep = rep
         rep["action"] = ("desk pick: passed the sniper's checks" + (", waiting for a retrace" if DESK_RETRACE_PCT > 0 else ", buying")
                          if ok else f"desk pick not bought: {why}")
@@ -1046,6 +1056,7 @@ class Runner:
             order["why_bought"] = self._why_bought(order)
             if self._gate_rep:                           # what it bought into, so a loss gets its review too
                 order["entry_ctx"] = snipe.Sniper._fingerprint(self._gate_rep, self._gate_rep.get("facts") or {})
+            order["certified"] = bool((self._gate_rep or {}).get("certified"))     # certified coins get the longer-hold plan
             if DESK_RETRACE_PCT > 0 and self.wait_entry(order, self._gate_rep, now):
                 self.snapshot()
                 return "cycle: waiting for a retrace"

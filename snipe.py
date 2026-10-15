@@ -1956,6 +1956,9 @@ class Sniper:
         if (early or hot) and not forced:
             factor *= self.cfg.snipe_early_size              # an early bet or a hot entry: half the ticket, profits taken fast
         fast_why = "early bet" if early else f"hot entry (+{h1b:.0f}% this hour)" if hot else None
+        hy_now = _f((rep.get("hype") or {}).get("score"))
+        viral = bool(self.cfg.snipe_viral_hype > 0 and hy_now is not None and hy_now >= self.cfg.snipe_viral_hype
+                     and (rep.get("narrative") or {}).get("ok") and not early and not hot)   # viral-hype hold mode
         signals = [("+ " if p["pts"] > 0 else "− ") + p["key"] for p in rep.get("points") or []]
         order = {"order_id": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "-snipe", "model": "sniper",
                  "token": {"ticker": rep.get("ticker"), "address": mint, "network_id": SOL_NET, "chain": "solana"},
@@ -1967,7 +1970,7 @@ class Sniper:
                            "decimals": (rep.get("facts") or {}).get("decimals"), "age_minutes": F.get("age_min")},
                  "why": {}, "judge_calls": [], "plan": "snipe", "score": rep["score"], "setup": rep.get("setup"),
                  "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else []), "early": early or hot,
-                 "fast_why": fast_why,
+                 "fast_why": fast_why, "viral": viral,
                  "why_bought": [rep.get("headline") or ""] + [p["label"] for p in sorted(rep.get("points") or [], key=lambda p: -p["pts"])
                                                                if p["pts"] > 0 and p["label"] not in (rep.get("headline") or "")][:4]
                  + ([rep["action"]] if rep.get("action") else []),

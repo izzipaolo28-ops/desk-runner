@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 import book
 import collect
+import profiles
 import thresholds
 from jupiter import USDC, WSOL, JupiterError
 from main import TICKET_SHARE
@@ -68,8 +69,15 @@ def supply_from(mcap, price):
     return mcap / price if mcap and price and mcap > 0 and price > 0 else None
 
 
+# YOUR LADDER: sell at 2x, 3x, 4x and 5x (gains of +100%, +200%, +300%, +400%): half the bag at 2x, then half of what
+# is left each time: 50%, 25%, 12.5% and 6.25% of the original bag. The last 6.25% rides as the runner.
+LADDER_2_TO_5X = "100:50,200:25,300:12.5,400:6.25"
+
+
 class Config:
     def __init__(self, env=os.environ):
+        env = profiles.with_profile(env)         # SPEED_PROFILE fills in the speed variables you didn't set yourself
+        self.speed_profile = profiles.profile_name(env)
         live = str(env.get("LIVE_MODE", "false")).strip().lower()
         if live not in ("true", "false"):
             raise ValueError("LIVE_MODE must be exactly true or false")
@@ -91,7 +99,7 @@ class Config:
         self.watch = watch == "on"
         self.watch_seconds = _env_num(env, "WATCH_SECONDS", 10, low=5)    # every 10s: memecoins drop 40% in a minute
         self.take_profit_pct = _env_num(env, "TAKE_PROFIT_PCT", 0)           # sell everything at +X%
-        self.scale_out = parse_ladder(env.get("SCALE_OUT", "30:25,60:25,100:25"))
+        self.scale_out = parse_ladder(env.get("SCALE_OUT", LADDER_2_TO_5X))
         self.trail_arm_pct = _env_num(env, "TRAIL_ARM_PCT", 20)              # trailing stop arms once up this much
         self.trail_pct = _env_num(env, "TRAIL_PCT", 15, high=100)            # ...then sells all this far off the peak
         self.lock_pct = _env_num(env, "TRAIL_LOCK_PCT", 8, high=100)         # once armed, never let it fall back under +8%
@@ -155,7 +163,7 @@ class Config:
         self.snipe_max_dev_pct = _env_num(env, "SNIPE_MAX_DEV_PCT", 10, high=100)
         self.snipe_bundle_wallets = int(_env_num(env, "SNIPE_BUNDLE_WALLETS", 8, low=2))
         self.snipe_stop_loss_pct = _env_num(env, "SNIPE_STOP_LOSS_PCT", 25, high=100)
-        self.snipe_scale_out = parse_ladder(env.get("SNIPE_SCALE_OUT", "50:30,100:30,200:20"), "SNIPE_SCALE_OUT")   # +50%, 2x, 3x
+        self.snipe_scale_out = parse_ladder(env.get("SNIPE_SCALE_OUT", LADDER_2_TO_5X), "SNIPE_SCALE_OUT")   # 2x, 3x, 4x, 5x
         self.snipe_trail_arm_pct = _env_num(env, "SNIPE_TRAIL_ARM_PCT", 30)
         self.snipe_trail_pct = _env_num(env, "SNIPE_TRAIL_PCT", 20, high=100)
         self.snipe_max_hold_hours = _env_num(env, "SNIPE_MAX_HOLD_HOURS", 12)
@@ -237,6 +245,25 @@ class Config:
         self.snipe_need_narrative = need == "on"
         self.snipe_min_hype = _env_num(env, "SNIPE_MIN_HYPE", 50, high=100)
         self.snipe_min_upside_x = _env_num(env, "SNIPE_MIN_UPSIDE_X", 2, high=100)   # room for at least a 2x
+        # VIRAL-HYPE HOLD MODE: a sniper coin bought while its hype is this high (0-100) and a narrative backs it is held
+        # longer: a later time box, no early stall exit, a longer max hold and a wider trailing stop, so a coin that
+        # is still being piled into isn't shaken out by a 20-minute pause. Early bets and hot entries keep their fast
+        # plans. 0 = off.
+        self.snipe_viral_hype = _env_num(env, "SNIPE_VIRAL_HYPE", 75, high=100)
+        self.snipe_viral_box_minutes = _env_num(env, "SNIPE_VIRAL_BOX_MINUTES", 120)
+        self.snipe_viral_stall_minutes = _env_num(env, "SNIPE_VIRAL_STALL_MINUTES", 45)
+        self.snipe_viral_max_hold_hours = _env_num(env, "SNIPE_VIRAL_MAX_HOLD_HOURS", 24)
+        self.snipe_viral_trail_pct = _env_num(env, "SNIPE_VIRAL_TRAIL_PCT", 25, high=100)
+        # THE CERTIFIED DESK: the desk only buys a coin that passes certify.py (every check read and passed), and a
+        # certified coin is held longer: a later time box and never-green line, a longer max hold, a wider trail.
+        cert = str(env.get("DESK_CERTIFIED", "on")).strip().lower()
+        if cert not in ("on", "off"):
+            raise ValueError("DESK_CERTIFIED must be on or off")
+        self.desk_certified = cert == "on"
+        self.desk_cert_hold_hours = _env_num(env, "DESK_CERT_HOLD_HOURS", 48)
+        self.desk_cert_box_minutes = _env_num(env, "DESK_CERT_BOX_MINUTES", 240)
+        self.desk_cert_red_minutes = _env_num(env, "DESK_CERT_RED_MINUTES", 90)
+        self.desk_cert_trail_pct = _env_num(env, "DESK_CERT_TRAIL_PCT", 20, high=100)
 
     @property
     def desk_slots(self):
@@ -268,6 +295,9 @@ class Config:
                 "momentum_sell_pct": self.momentum_sell_pct, "runner_trail_pct": self.runner_trail_pct,
                 "runner_floor_pct": self.runner_floor_pct, "fade_volume_pace": self.fade_volume_pace,
                 "fade_off_peak_pct": self.fade_off_peak_pct, "keep_pct": 0.0}
+        if (pos or {}).get("plan") != "snipe" and (pos or {}).get("certified"):
+            base.update(max_hold_hours=self.desk_cert_hold_hours, box_minutes=self.desk_cert_box_minutes,
+                        red_minutes=self.desk_cert_red_minutes, trail_pct=self.desk_cert_trail_pct)
         if (pos or {}).get("plan") == "snipe":
             base.update(stop_loss_pct=self.snipe_stop_loss_pct, max_hold_hours=self.snipe_max_hold_hours,
                         trail_arm_pct=self.snipe_trail_arm_pct, trail_pct=self.snipe_trail_pct, scale_out=self.snipe_scale_out,
@@ -275,6 +305,9 @@ class Config:
                         lock_pct=self.snipe_lock_pct, fail_pct=self.snipe_fail_pct, fail_m5_pct=self.snipe_fail_m5_pct,
                         fail_minutes=self.snipe_fail_minutes, red_minutes=self.snipe_red_minutes, red_pct=self.snipe_red_pct,
                         box_minutes=self.snipe_box_minutes, box_gain_pct=self.snipe_box_gain_pct)
+            if pos.get("viral") and not pos.get("early"):    # viral-hype hold mode: held longer, shaken out less
+                base.update(box_minutes=self.snipe_viral_box_minutes, stall_minutes=self.snipe_viral_stall_minutes,
+                            max_hold_hours=self.snipe_viral_max_hold_hours, trail_pct=self.snipe_viral_trail_pct)
             if pos.get("early"):                     # an early bet: tighter loss rules, profits taken fast, the last 25% rides
                 base.update(self.early_plan())
                 if str(pos.get("fast_why") or "").startswith("hot"):   # a hot entry: the same, with nothing left riding
@@ -302,6 +335,13 @@ class Config:
                 "red_minutes": self.desk_red_minutes, "red_pct": self.desk_red_pct, "dead_loss_pct": self.dead_loss_pct,
                 "box_minutes": self.desk_box_minutes, "box_gain_pct": self.desk_box_gain_pct,
                 "dead_max_buys": self.dead_max_buys, "dead_seconds": self.dead_seconds,
+                "speed_profile": self.speed_profile,
+                "certified": {"on": self.desk_certified, "max_hold_hours": self.desk_cert_hold_hours,
+                              "box_minutes": self.desk_cert_box_minutes, "red_minutes": self.desk_cert_red_minutes,
+                              "trail_pct": self.desk_cert_trail_pct},
+                "viral": {"hype": self.snipe_viral_hype, "box_minutes": self.snipe_viral_box_minutes,
+                          "stall_minutes": self.snipe_viral_stall_minutes, "max_hold_hours": self.snipe_viral_max_hold_hours,
+                          "trail_pct": self.snipe_viral_trail_pct},
                 "snipe": {"stop_loss_pct": self.snipe_stop_loss_pct, "ladder": [list(r) for r in self.snipe_scale_out],
                           "trail_arm_pct": self.snipe_trail_arm_pct, "trail_pct": self.snipe_trail_pct,
                           "max_hold_hours": self.snipe_max_hold_hours, "stall_minutes": self.snipe_stall_minutes,
@@ -790,7 +830,8 @@ class Seats:
                     "score": order.get("score"), "setup": order.get("setup"), "signals": list(order.get("signals") or [])[:24],
                     "entry_ctx": order.get("entry_ctx") if isinstance(order.get("entry_ctx"), dict) else None,
                     "why_bought": [str(x)[:200] for x in order.get("why_bought") or []][:8],
-                    "early": bool(order.get("early")), "fast_why": order.get("fast_why")}
+                    "early": bool(order.get("early")), "fast_why": order.get("fast_why"),
+                    "viral": bool(order.get("viral")), "certified": bool(order.get("certified"))}
         if live:
             with self.state.lock:                    # write-ahead: a crash after sending is never a lost position
                 self.state.put({**position, "status": "sending", "tokens_raw": None,
@@ -1344,6 +1385,8 @@ class Seats:
                 mark = None
         if trade is not None and mark is not None and not trade.get("final"):
             self._mark(pos, mark, now)
+            if mark[0] == "rung" and c.scale_out and {g for g, _ in c.scale_out} <= done | {mark[1]}:
+                self._mark(pos, None, now, runner=True)      # the last rung is sold: what's left (6.25% on the 2x-5x ladder) is the runner
         return trade
 
     def _mark(self, pos, mark, now, runner=False):
