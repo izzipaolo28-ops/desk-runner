@@ -110,61 +110,6 @@ def sign_transaction(tx_b64: str, keypair: Keypair) -> str:
     return base64.b64encode(signed).decode()
 
 
-# ---- SOL transfers: funding the bot from your wallet, withdrawing back to it -----------------------------
-SYSTEM_PROGRAM = "11111111111111111111111111111111"
-LAMPORTS_PER_SOL = 1_000_000_000
-
-
-def compact_u16(n: int) -> bytes:
-    out = bytearray()
-    while True:
-        b = n & 0x7F
-        n >>= 7
-        out.append(b | (0x80 if n else 0))
-        if not n:
-            return bytes(out)
-
-
-def _key32(address: str, what: str) -> bytes:
-    raw = b58decode(address)
-    if len(raw) != 32:
-        raise ValueError(f"{what} is not a Solana address")
-    return raw
-
-
-def transfer_message(from_addr: str, to_addr: str, lamports: int, blockhash: str) -> bytes:
-    """A legacy Solana message with one System Program transfer: `from` pays the fee and signs, `to` receives.
-    Layout: header (1 signature, 0 read-only signed, 1 read-only unsigned: the program), the three account keys,
-    the recent blockhash, then one instruction (program 2, accounts [0, 1], data = u32 2 "Transfer" + u64 lamports)."""
-    if not isinstance(lamports, int) or isinstance(lamports, bool) or not 0 < lamports < 2 ** 64:
-        raise ValueError("the amount must be a positive whole number of lamports")
-    frm, to = _key32(from_addr, "the sending wallet"), _key32(to_addr, "the receiving wallet")
-    if frm == to:
-        raise ValueError("a wallet can't send to itself")
-    data = (2).to_bytes(4, "little") + lamports.to_bytes(8, "little")
-    return (bytes([1, 0, 1]) + compact_u16(3) + frm + to + _key32(SYSTEM_PROGRAM, "the system program")
-            + _key32(blockhash, "the blockhash") + compact_u16(1)
-            + bytes([2]) + compact_u16(2) + bytes([0, 1]) + compact_u16(len(data)) + data)
-
-
-def signed_transfer(keypair: Keypair, to_addr: str, lamports: int, blockhash: str) -> tuple[str, str]:
-    """(base64 transaction, its signature in base58) for the bot wallet sending `lamports` to `to_addr`."""
-    msg = transfer_message(keypair.address, to_addr, lamports, blockhash)
-    sig = keypair.sign(msg)
-    return base64.b64encode(compact_u16(1) + sig + msg).decode(), b58encode(sig)
-
-
-def verify_signed_message(address: str, message: bytes, signature: bytes) -> bool:
-    """Did the wallet `address` sign `message` (Phantom's signMessage: an Ed25519 signature over the bytes)?"""
-    from cryptography.exceptions import InvalidSignature
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    try:
-        Ed25519PublicKey.from_public_bytes(_key32(address, "the wallet")).verify(signature, message)
-        return True
-    except (InvalidSignature, ValueError):
-        return False
-
-
 # ---- balances, from any Solana RPC (server side) ----------------------------------------------------
 RPC_FALLBACKS = ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com",
                  "https://solana.drpc.org"]
@@ -186,9 +131,7 @@ class RPC:
                 continue
             if isinstance(body, dict) and "result" in body:
                 return body["result"]
-            err = body.get("error") if isinstance(body, dict) else None
-            why = str(err.get("message") if isinstance(err, dict) else err or "")[:120]   # the network's reason, never the URL's key
-            last = f"error from {url.split('/')[2].split('?')[0]}" + (f": {why}" if why else "")
+            last = f"error from {url.split('/')[2]}"
         raise RuntimeError(f"Solana RPC {method}: {last}")
 
     def sol_lamports(self, owner: str) -> int:
@@ -196,28 +139,6 @@ class RPC:
         if not isinstance(v, int):
             raise RuntimeError("getBalance gave no value")
         return v
-
-    def latest_blockhash(self) -> str:
-        v = (self.call("getLatestBlockhash", [{"commitment": "confirmed"}]) or {}).get("value") or {}
-        bh = v.get("blockhash")
-        if not isinstance(bh, str) or len(b58decode(bh)) != 32:
-            raise RuntimeError("getLatestBlockhash gave no blockhash")
-        return bh
-
-    def send_transaction(self, tx_b64: str) -> str:
-        sig = self.call("sendTransaction", [tx_b64, {"encoding": "base64", "preflightCommitment": "confirmed"}])
-        if not isinstance(sig, str):
-            raise RuntimeError("sendTransaction gave no signature")
-        return sig
-
-    def signature_status(self, sig: str):
-        """"confirmed" / "finalized" / "failed: ..." / None (not seen yet)."""
-        st = ((self.call("getSignatureStatuses", [[sig], {"searchTransactionHistory": False}]) or {}).get("value") or [None])[0]
-        if not isinstance(st, dict):
-            return None
-        if st.get("err"):
-            return f"failed: {str(st['err'])[:80]}"
-        return st.get("confirmationStatus") or "processed"
 
     def token_balance(self, owner: str, mint: str) -> tuple[int, int | None]:
         """(raw amount, decimals) summed over the owner's token accounts for this mint. (0, None) if none."""
