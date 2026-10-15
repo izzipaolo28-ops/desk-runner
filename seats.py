@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 import book
 import collect
+import learn_exit
 import profiles
 import thresholds
 from jupiter import USDC, WSOL, JupiterError
@@ -115,10 +116,10 @@ class Config:
         self.fade_volume_pace = _env_num(env, "FADE_VOLUME_PACE", 0.6, high=10)    # last 5 min's volume vs the hour's pace
         self.fade_off_peak_pct = _env_num(env, "FADE_OFF_PEAK_PCT", 4, high=100)   # it has slipped this far off its best
         self.max_hold_hours = _env_num(env, "MAX_HOLD_HOURS", 24)
-        self.max_positions = int(_env_num(env, "MAX_POSITIONS", 5, low=1, high=10))
-        self.max_exposure_pct = _env_num(env, "MAX_EXPOSURE_PCT", 25, low=1, high=100)   # all coins together
+        self.max_positions = int(_env_num(env, "MAX_POSITIONS", 8, low=1, high=10))
+        self.max_exposure_pct = _env_num(env, "MAX_EXPOSURE_PCT", 40, low=1, high=100)   # all coins together
         # the two bots share the slots: the desk (normal coins, Jev's picks) and the sniper (early coins) each get their own.
-        # Unless set, they follow MAX_POSITIONS: 60% the desk's, the rest the sniper's (5 -> 3 and 2).
+        # Unless set, they follow MAX_POSITIONS: 40% the desk's, the rest the sniper's (8 -> 3 and 5).
         self._desk_slots = int(_env_num(env, "DESK_SLOTS", 0, low=0, high=10)) if str(env.get("DESK_SLOTS", "")).strip() else None
         self._snipe_slots = int(_env_num(env, "SNIPE_SLOTS", 0, low=0, high=10)) if str(env.get("SNIPE_SLOTS", "")).strip() else None
         self.stall_minutes = _env_num(env, "STALL_MINUTES", 0)              # off for the desk's own picks
@@ -129,7 +130,7 @@ class Config:
             raise ValueError("SNIPE_MODE must be off, watch or auto")
         self.snipe_mode = mode
         self.snipe_scan_seconds = _env_num(env, "SNIPE_SCAN_SECONDS", 60, low=20)
-        self.snipe_buy_score = _env_num(env, "SNIPE_BUY_SCORE", 70, high=100)
+        self.snipe_buy_score = _env_num(env, "SNIPE_BUY_SCORE", 65, high=100)
         self.snipe_deep_per_round = int(_env_num(env, "SNIPE_CHECKS_PER_ROUND", 2, low=1, high=5))
         self.snipe_min_age_minutes = _env_num(env, "SNIPE_MIN_AGE_MINUTES", 10)   # the first minutes are the dev's and the bots' dump
         self.snipe_max_age_hours = _env_num(env, "SNIPE_MAX_AGE_HOURS", 72, low=1)
@@ -207,7 +208,7 @@ class Config:
         self.snipe_min_h1_pct = _env_num(env, "SNIPE_MIN_H1_PCT", 15, low=-100, high=1000)
         # buyers ahead: the last 5 minutes' buys at least this many times the sells. In the simulation every buy under 1.5x
         # was a coin going sideways (26 of them, -$15 between them); the movers were at 2-3x. 0 = off
-        self.snipe_min_buyers_x = _env_num(env, "SNIPE_MIN_BUYERS_X", 1.5, high=100)
+        self.snipe_min_buyers_x = _env_num(env, "SNIPE_MIN_BUYERS_X", 1.3, high=100)
         # a hot entry (already +150% this hour) rides nothing: half out at +25%, the rest at +50%. In the simulation the
         # 25% left riding on those was lost to the rug every time; on early bets it rides (you asked for that)
         self.snipe_hot_scale_out = parse_ladder(env.get("SNIPE_HOT_SCALE_OUT", "25:50,50:50"), "SNIPE_HOT_SCALE_OUT")
@@ -221,8 +222,8 @@ class Config:
         self.fast_box_minutes = _env_num(env, "FAST_BOX_MINUTES", 30)
         self.fast_box_gain_pct = _env_num(env, "FAST_BOX_GAIN_PCT", 15, low=-100, high=1000)
         # after this many sniper losses in a row, the fast lane stops buying for a while (your own checks still can)
-        self.snipe_loss_streak = int(_env_num(env, "SNIPE_LOSS_STREAK", 2, high=20))
-        self.snipe_cooldown_minutes = _env_num(env, "SNIPE_COOLDOWN_MINUTES", 30, high=1440)
+        self.snipe_loss_streak = int(_env_num(env, "SNIPE_LOSS_STREAK", 3, high=20))
+        self.snipe_cooldown_minutes = _env_num(env, "SNIPE_COOLDOWN_MINUTES", 15, high=1440)
         self.buzz_per_hour = int(_env_num(env, "BUZZ_PER_HOUR", 6, high=120))
         # the bubble map: several top holders funded by one wallet are one person holding a block of the supply
         bm = str(env.get("SNIPE_MAP", "on")).strip().lower()
@@ -245,18 +246,41 @@ class Config:
         self.snipe_need_narrative = need == "on"
         self.snipe_min_hype = _env_num(env, "SNIPE_MIN_HYPE", 50, high=100)
         self.snipe_min_upside_x = _env_num(env, "SNIPE_MIN_UPSIDE_X", 2, high=100)   # room for at least a 2x
-        # VIRAL-HYPE HOLD MODE: a sniper coin bought while its hype is this high (0-100) and a narrative backs it is held
-        # longer: a later time box, no early stall exit, a longer max hold and a wider trailing stop, so a coin that
-        # is still being piled into isn't shaken out by a 20-minute pause. Early bets and hot entries keep their fast
-        # plans. 0 = off.
-        self.snipe_viral_hype = _env_num(env, "SNIPE_VIRAL_HYPE", 75, high=100)
-        self.snipe_viral_box_minutes = _env_num(env, "SNIPE_VIRAL_BOX_MINUTES", 120)
-        self.snipe_viral_stall_minutes = _env_num(env, "SNIPE_VIRAL_STALL_MINUTES", 45)
+        # VIRAL-HYPE HOLD MODE: every other sniper coin is in and out fast (the fast plan below). The exception is a coin
+        # bought at hype 100/100 (SNIPE_VIRAL_HYPE) with a narrative behind it: it might be the one that goes viral, so it
+        # is held on the 2x/3x/4x/5x ladder with a late time box, no early stall exit, a long max hold and a wide trail.
+        # Its stop-loss is the sniper's normal one (a viral coin swings too much for the fast plan's tight stop).
+        # Hype 100 is rare. 0 = off; 90 would let more coins in.
+        self.snipe_viral_hype = _env_num(env, "SNIPE_VIRAL_HYPE", 100, high=100)
+        self.snipe_viral_box_minutes = _env_num(env, "SNIPE_VIRAL_BOX_MINUTES", 180)
+        self.snipe_viral_stall_minutes = _env_num(env, "SNIPE_VIRAL_STALL_MINUTES", 60)
         self.snipe_viral_max_hold_hours = _env_num(env, "SNIPE_VIRAL_MAX_HOLD_HOURS", 24)
-        self.snipe_viral_trail_pct = _env_num(env, "SNIPE_VIRAL_TRAIL_PCT", 25, high=100)
-        # THE CERTIFIED DESK: the desk only buys a coin that passes certify.py (every check read and passed), and a
-        # certified coin is held longer: a later time box and never-green line, a longer max hold, a wider trail.
-        cert = str(env.get("DESK_CERTIFIED", "on")).strip().lower()
+        self.snipe_viral_trail_pct = _env_num(env, "SNIPE_VIRAL_TRAIL_PCT", 30, high=100)
+        # THE FAST PLAN: every sniper coin that isn't viral is in and out: more trades, held less, profit taken in more
+        # steps (25% of the bag at +15%, 25% at +30%, 25% at +50%), the last 25% rides as the runner. The loss rules are the
+        # early bet's (stop -15%, out at -8% while still falling, out if never green). A coin that stalls is out in 10 minutes.
+        fast = str(env.get("SNIPE_FAST", "on")).strip().lower()
+        if fast not in ("on", "off"):
+            raise ValueError("SNIPE_FAST must be on or off")
+        self.snipe_fast = fast == "on"
+        self.snipe_fast_scale_out = parse_ladder(env.get("SNIPE_FAST_SCALE_OUT", "15:25,30:25,50:25"), "SNIPE_FAST_SCALE_OUT")
+        self.snipe_fast_keep_pct = _env_num(env, "SNIPE_FAST_KEEP_PCT", 25, high=90)
+        self.snipe_fast_box_minutes = _env_num(env, "SNIPE_FAST_BOX_MINUTES", 20)
+        self.snipe_fast_box_gain_pct = _env_num(env, "SNIPE_FAST_BOX_GAIN_PCT", 12, low=-100, high=1000)
+        self.snipe_fast_stall_minutes = _env_num(env, "SNIPE_FAST_STALL_MINUTES", 10)
+        self.snipe_fast_stall_gain_pct = _env_num(env, "SNIPE_FAST_STALL_GAIN_PCT", 6)
+        self.snipe_fast_max_hold_hours = _env_num(env, "SNIPE_FAST_MAX_HOLD_HOURS", 3)
+        # THE CASH-OUT LINE: a gain at which the whole remaining bag of a fast-plan coin is sold. It starts here and is
+        # re-learned from the bot's own closed trades (learn_exit.py). 0 = no line. SNIPE_LEARN=off keeps it fixed.
+        self.snipe_cashout_pct = _env_num(env, "SNIPE_CASHOUT_PCT", 100, high=10_000)
+        learn = str(env.get("SNIPE_LEARN", "on")).strip().lower()
+        if learn not in ("on", "off"):
+            raise ValueError("SNIPE_LEARN must be on or off")
+        self.snipe_learn = learn == "on"
+        self.snipe_learn_min_trades = int(_env_num(env, "SNIPE_LEARN_MIN_TRADES", 10, low=3, high=200))
+        # THE CERTIFIED DESK (OFF by default: it is strict and an unreadable number counts as a fail, so it can stop the desk
+        # buying anything): when on, the desk only buys a coin that passes certify.py, and a certified coin is held longer: a later time box and never-green line, a longer max hold, a wider trail.
+        cert = str(env.get("DESK_CERTIFIED", "off")).strip().lower()
         if cert not in ("on", "off"):
             raise ValueError("DESK_CERTIFIED must be on or off")
         self.desk_certified = cert == "on"
@@ -267,7 +291,7 @@ class Config:
 
     @property
     def desk_slots(self):
-        return self._desk_slots if self._desk_slots is not None else max(1, round(self.max_positions * 0.6))
+        return self._desk_slots if self._desk_slots is not None else max(1, round(self.max_positions * 0.4))
 
     @desk_slots.setter
     def desk_slots(self, n):
@@ -275,7 +299,7 @@ class Config:
 
     @property
     def snipe_slots(self):
-        return self._snipe_slots if self._snipe_slots is not None else max(1, self.max_positions - max(1, round(self.max_positions * 0.6)))
+        return self._snipe_slots if self._snipe_slots is not None else max(1, self.max_positions - max(1, round(self.max_positions * 0.4)))
 
     @snipe_slots.setter
     def snipe_slots(self, n):
@@ -305,15 +329,37 @@ class Config:
                         lock_pct=self.snipe_lock_pct, fail_pct=self.snipe_fail_pct, fail_m5_pct=self.snipe_fail_m5_pct,
                         fail_minutes=self.snipe_fail_minutes, red_minutes=self.snipe_red_minutes, red_pct=self.snipe_red_pct,
                         box_minutes=self.snipe_box_minutes, box_gain_pct=self.snipe_box_gain_pct)
-            if pos.get("viral") and not pos.get("early"):    # viral-hype hold mode: held longer, shaken out less
-                base.update(box_minutes=self.snipe_viral_box_minutes, stall_minutes=self.snipe_viral_stall_minutes,
-                            max_hold_hours=self.snipe_viral_max_hold_hours, trail_pct=self.snipe_viral_trail_pct)
+            if self.snipe_fast:                      # in and out: the default for every sniper coin
+                base.update(self.fast_plan())
             if pos.get("early"):                     # an early bet: tighter loss rules, profits taken fast, the last 25% rides
                 base.update(self.early_plan())
                 if str(pos.get("fast_why") or "").startswith("hot"):   # a hot entry: the same, with nothing left riding
                     base.update(scale_out=self.snipe_hot_scale_out, keep_pct=self.snipe_hot_keep_pct,
                                 momentum_sell_pct=100 - self.snipe_hot_keep_pct if self.snipe_hot_keep_pct > 0 else 100)
+            if pos.get("viral"):                     # 100/100 hype: held for the 2x-5x ladder, whatever it was bought as
+                base.update(self.viral_plan())
         return type("Plan", (), base)
+
+    def fast_plan(self):
+        """In and out: the early bet's loss rules, profit in more steps, a short leash on a coin that isn't moving."""
+        d = self.early_plan()
+        d.update(scale_out=self.snipe_fast_scale_out, keep_pct=self.snipe_fast_keep_pct,
+                 momentum_sell_pct=100 - self.snipe_fast_keep_pct if self.snipe_fast_keep_pct > 0 else self.momentum_sell_pct,
+                 box_minutes=self.snipe_fast_box_minutes, box_gain_pct=self.snipe_fast_box_gain_pct,
+                 stall_minutes=self.snipe_fast_stall_minutes, stall_gain_pct=self.snipe_fast_stall_gain_pct,
+                 max_hold_hours=self.snipe_fast_max_hold_hours, ride_x=1.0)
+        return d
+
+    def viral_plan(self):
+        """A coin bought at hype 100/100: the 2x/3x/4x/5x ladder, a long leash, the sniper's normal (wider) loss rules."""
+        return {"scale_out": self.snipe_scale_out, "keep_pct": 0.0, "momentum_sell_pct": self.momentum_sell_pct,
+                "box_minutes": self.snipe_viral_box_minutes, "box_gain_pct": self.snipe_box_gain_pct,
+                "stall_minutes": self.snipe_viral_stall_minutes, "stall_gain_pct": self.snipe_stall_gain_pct,
+                "max_hold_hours": self.snipe_viral_max_hold_hours, "ride_x": self.snipe_ride_x,
+                "trail_arm_pct": self.snipe_trail_arm_pct, "trail_pct": self.snipe_viral_trail_pct, "lock_pct": self.snipe_lock_pct,
+                "stop_loss_pct": self.snipe_stop_loss_pct, "fail_pct": self.snipe_fail_pct, "fail_m5_pct": self.snipe_fail_m5_pct,
+                "fail_minutes": self.snipe_fail_minutes, "red_minutes": self.snipe_red_minutes, "red_pct": self.snipe_red_pct,
+                "take_profit_pct": 0.0}
 
     def early_plan(self):
         return {"stop_loss_pct": self.snipe_early_stop_loss_pct, "scale_out": self.snipe_early_scale_out,
@@ -336,6 +382,10 @@ class Config:
                 "box_minutes": self.desk_box_minutes, "box_gain_pct": self.desk_box_gain_pct,
                 "dead_max_buys": self.dead_max_buys, "dead_seconds": self.dead_seconds,
                 "speed_profile": self.speed_profile,
+                "fast": {"on": self.snipe_fast, "ladder": [list(r) for r in self.snipe_fast_scale_out], "keep_pct": self.snipe_fast_keep_pct,
+                         "box_minutes": self.snipe_fast_box_minutes, "box_gain_pct": self.snipe_fast_box_gain_pct,
+                         "stall_minutes": self.snipe_fast_stall_minutes, "max_hold_hours": self.snipe_fast_max_hold_hours,
+                         "cashout_pct": self.snipe_cashout_pct, "learn": self.snipe_learn},
                 "certified": {"on": self.desk_certified, "max_hold_hours": self.desk_cert_hold_hours,
                               "box_minutes": self.desk_cert_box_minutes, "red_minutes": self.desk_cert_red_minutes,
                               "trail_pct": self.desk_cert_trail_pct},
@@ -1211,13 +1261,18 @@ class Seats:
             ctx = pos.get("entry_ctx")
             with self.state.lock:                          # what it bought into, and why it lost (the sniper learns from it)
                 trade["entry_tags"] = entry_tags(ctx)
+                cur = self.state.find(pos) or pos
+                trade.update(viral=bool(pos.get("viral")), closed_ts=time.time(), peak_gain_pct=_f(cur.get("peak_gain_pct")))
                 spent = sum(_f(t.get("cost_usd")) or 0.0 for t in self.state.data["trades"]
                             if pos.get("order_id") and t.get("order_id") == pos.get("order_id")) or _f(basis) or 0.0
                 total_pct = 100 * total / spent if spent else 0.0
+                trade["total_pct"] = round(total_pct, 2) if spent else None
                 held_min = (time.time() - (_f(pos.get("opened_ts")) or time.time())) / 60
                 if total < 0:
                     trade["review"] = review(ctx, total_pct, held_min, why)
                 self.state.save()
+            if pos.get("plan") == "snipe" and not pos.get("viral"):
+                self._relearn()
             if total < 0 and trade.get("review"):
                 self.state.feed("risk", "info", f"why ${pos.get('ticker') or pos['mint'][:6]} lost: " + "; ".join(trade["review"])[:220],
                                 pos.get("ticker"), pos.get("mint"))
@@ -1226,6 +1281,32 @@ class Seats:
             if flat:
                 book.release()                       # the last coin sold frees the book
         return trade
+
+    def cashout_line(self, pos):
+        """The gain (%) at which a fast-plan sniper coin is sold in full, or None (the desk's coins, viral coins, no line)."""
+        cfg = self.cfg
+        if (pos or {}).get("plan") != "snipe" or pos.get("viral") or not cfg.snipe_fast or cfg.snipe_cashout_pct <= 0:
+            return None
+        if cfg.snipe_learn:
+            learned = _f((self.state.data.get("learned_cashout") or {}).get("line"))
+            if learned and learned > 0:
+                return learned
+        return cfg.snipe_cashout_pct
+
+    def _relearn(self):
+        """After a fast-plan sniper coin closes: re-read the cash-out line from the recent closed trades (learn_exit.py)."""
+        if not self.cfg.snipe_learn or not self.cfg.snipe_fast:
+            return
+        with self.state.lock:
+            trades = list(self.state.data.get("trades") or [])
+            cur = _f((self.state.data.get("learned_cashout") or {}).get("line")) or self.cfg.snipe_cashout_pct
+        res = learn_exit.learn(trades, cur, min_trades=self.cfg.snipe_learn_min_trades)
+        with self.state.lock:
+            self.state.data["learned_cashout"] = {"line": res["line"], "n": res["n"], "table": res["table"],
+                                                  "note": res["note"], "at": _now()}
+            self.state.save()
+        if res["changed"]:
+            self.state.feed("risk", "info", "learned: " + res["note"])
 
     # ---------- WATCH: the price manager, every WATCH_SECONDS while a position is open ----------
     def watch_poll(self, clock=time.time):
@@ -1255,6 +1336,9 @@ class Seats:
             self.state.agent("risk", f"watch {label}: price unknown, no action", None, "watching")
             return None
         c = self.cfg.plan(pos)                    # the desk's plan, or the sniper's in-and-out plan for its buys
+        cash_line = self.cashout_line(pos)        # a fast-plan coin: the gain at which the WHOLE bag goes (learned)
+        if cash_line:
+            c.take_profit_pct = cash_line
         now = clock()
         peak = max(_f(pos.get("peak_price")) or price, price)
         gain, peak_gain = (price / entry - 1) * 100, (peak / entry - 1) * 100
@@ -1319,7 +1403,8 @@ class Seats:
         elif c.red_pct > 0 and age_h * 60 >= c.red_minutes and peak_gain < 2 and gain <= -c.red_pct:
             act, floor = (1.0, f"never went green: {age_h * 60:.0f} min in, best {peak_gain:+.1f}%, now {gain:+.1f}%: out early", None), c.red_pct
         elif c.take_profit_pct > 0 and gain >= c.take_profit_pct:
-            act = (1.0, f"take-profit at {gain:+.1f}% (target +{c.take_profit_pct:g}%)", None)
+            act = (1.0, (f"cash-out line: {gain:+.1f}% is past +{c.take_profit_pct:g}%, the gain the bot cashes the whole bag at"
+                         if cash_line else f"take-profit at {gain:+.1f}% (target +{c.take_profit_pct:g}%)"), None)
         elif c.max_hold_hours > 0 and age_h >= c.max_hold_hours and not (rolling and age_h < c.max_hold_hours * c.ride_x):
             act = (1.0, f"held {age_h:.1f}h, the {c.max_hold_hours:g}h limit" + (" (and the momentum stopped)" if c.ride_x > 1 else "")
                    + f", at {gain:+.1f}%", None)

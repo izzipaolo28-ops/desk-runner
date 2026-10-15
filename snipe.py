@@ -35,6 +35,7 @@ import requests
 
 import book
 import collect
+import whynot
 from collect import FetchFailed, _num
 from seats import ENTRY_TAGS, NOT_A_SOURCE, QUOTES_OK, WARNING_TAGS, entry_tags, tag_words
 
@@ -1919,6 +1920,7 @@ class Sniper:
         if slim["flow"] and slim["flow"].get("ratio15") == math.inf:
             slim["flow"]["ratio15"] = "all buys"
         with self.state.lock:
+            whynot.record(self.state.data, rep, time.time())
             self.state.data["checks"] = ([slim] + [c for c in self.state.data.get("checks") or [] if c.get("id") != rep["id"]])[:CHECKS_KEPT]
             self.state.save()
 
@@ -1958,7 +1960,7 @@ class Sniper:
         fast_why = "early bet" if early else f"hot entry (+{h1b:.0f}% this hour)" if hot else None
         hy_now = _f((rep.get("hype") or {}).get("score"))
         viral = bool(self.cfg.snipe_viral_hype > 0 and hy_now is not None and hy_now >= self.cfg.snipe_viral_hype
-                     and (rep.get("narrative") or {}).get("ok") and not early and not hot)   # viral-hype hold mode
+                     and (rep.get("narrative") or {}).get("ok"))   # viral-hype hold mode: 100/100 hype, a story behind it
         signals = [("+ " if p["pts"] > 0 else "− ") + p["key"] for p in rep.get("points") or []]
         order = {"order_id": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "-snipe", "model": "sniper",
                  "token": {"ticker": rep.get("ticker"), "address": mint, "network_id": SOL_NET, "chain": "solana"},

@@ -46,7 +46,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-15 2x-5x ladder, speed profiles, viral hold, certified desk"          # which build is running: the summary page says it
+VERSION = "2026-10-15b: why-not-trading tally, certified gate off, balanced speed"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -108,6 +108,7 @@ try:
 except ValueError:
     TEST_SWAP_USD = 1.0
 DESK_GATE = "off" if os.environ.get("DESK_GATE", "on").strip().lower() == "off" else "on"
+import whynot  # noqa: E402
 import certify  # noqa: E402  (the desk's "certified" safety gate)
 CERT_LIMITS = certify.limits_from_env()
 try:
@@ -1237,6 +1238,7 @@ class Runner:
         holding = bool(d.get("positions"))
         full = len(d.get("positions") or []) >= self.cfg.max_positions
         total, desk_n, snipe_n = self.held_counts()
+        d["why_not_trading"] = whynot.tally_log(self.state.data, time.time())     # what the last 12 hours of checks said no to
         d.update(slots={"desk": self.cfg.desk_slots, "sniper": self.cfg.snipe_slots, "desk_held": desk_n, "sniper_held": snipe_n,
                         "desk_free": self.desk_slots_free(), "sniper_free": self.snipe_slots_free()},
                  desk_gate={"on": DESK_GATE == "on", "score": DESK_GATE_SCORE})

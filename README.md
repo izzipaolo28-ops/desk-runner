@@ -1,7 +1,7 @@
 # Desk Runner
 
 The desk, the bot and the DESK FLOOR dashboard in one Railway service. It scans Solana tokens, asks Jev through your
-question sets, buys the pick through Jupiter, then RISK sells it when the volume dies. Up to 5 coins at once (`MAX_POSITIONS`).
+question sets, buys the pick through Jupiter, then RISK sells it when the volume dies. Up to 8 coins at once (`MAX_POSITIONS`).
 
 It starts on **FAKE money**: real Jupiter quotes, nothing sent, no wallet needed. The **MONEY** box on the page
 switches it to **REAL money** once it has a bot wallet (section 4), and back.
@@ -331,40 +331,52 @@ buy, the less there is to check. The sniper can't see private Telegram groups or
 everyone else. It only reads X, TikTok and Reddit through the web search, which needs `ANTHROPIC_API_KEY` and costs
 about $0.01 per search plus tokens (at most 3 searches a check, `BUZZ_PER_HOUR` checks an hour). Run it on paper first.
 
-## What's new (Oct 15): the 2x-5x ladder, speed profiles, viral-hype hold, the certified desk
+## What's new (Oct 15): fast in-and-out sniper, learned cash-out, viral hold, speed profiles, certified desk
 
-**1. The 2x / 3x / 4x / 5x sell ladder.** Both bots now sell **50% of the bag at 2x, 25% at 3x, 12.5% at 4x and 6.25% at
-5x** (`SCALE_OUT` and `SNIPE_SCALE_OUT`, default `100:50,200:25,300:12.5,400:6.25`: gain% : % of the original bag). That is
-93.75% sold; the last **6.25% becomes the runner** once the 5x step is done: it rides until it is 30% off its best, or back
-at break-even, and never turns into a loss. Early bets and hot entries keep their own fast plans (profits taken at +25% /
-+50%), because that is what they are for.
-*This ladder doesn't switch the protective exits off.* The stop-loss, the "move failed" and "nobody's buying" exits, the
-trailing stop, the profit lock and the time box still run before a coin reaches 2x, so many coins will be sold by one of
-those first. That is on purpose. To stretch it, raise `TRAIL_ARM_PCT` / `TRAIL_PCT`, or (the strongest change) the time-box
-numbers. Very small tickets: a sale that would leave under about $2.50 of coin sells everything instead, so on a $5 ticket
-the 12.5% and 6.25% steps fold into one final sale.
+**1. The sell ladders.** Two plans, one for each kind of sniper coin, and the desk:
+- **Fast plan (every sniper coin, the default).** In and out. 25% of the bag is sold at +15%, 25% at +30%, 25% at +50%,
+  and the last 25% rides as the runner. Stop-loss −15%, out at −8% if it is still falling, out in 10 minutes if it isn't
+  moving (+6% needed), a 20-minute box (+12% needed), 3 hours at most. (`SNIPE_FAST_*`; `SNIPE_FAST=off` returns to the old plan.)
+- **Viral plan (hype 100/100 only), and the desk.** 50% of the bag at 2x, 25% at 3x, 12.5% at 4x, 6.25% at 5x
+  (`SCALE_OUT` / `SNIPE_SCALE_OUT`, `100:50,200:25,300:12.5,400:6.25`); the last 6.25% is the runner (30% off its best, or
+  back at break-even, never a loss).
+The protective exits (stop-loss, trailing stop, "move failed", time box) run in both plans. On a $5 ticket a sale that
+would leave under about $2.50 sells everything, so the small steps fold into one final sale.
+
+**1b. The learned cash-out line.** A fast-plan coin also has one line at which the **whole remaining bag** is sold. It
+starts at +100% (`SNIPE_CASHOUT_PCT`) and the bot re-learns it after each closed fast-plan trade (`learn_exit.py`): over
+the last 48 hours of its own trades it asks "had I sold everything the moment the coin touched +40 / 60 / 80 / 100 / 150%,
+would I have done better?", and moves the line to the best one, only after 10+ trades and only on a clear win. It never
+leaves +40% to +150%. The reason is in the live feed ("learned: ..."). This is a rough guide on a small sample, not a promise:
+`SNIPE_LEARN=off` keeps the line fixed. It never touches the stop-loss or the viral coins.
 
 **2. Speed profiles (`SPEED_PROFILE`).** A faster sniper without touching a single safety rule:
 
 | profile | fast-lane look | second look | full checks per round | price reads while holding |
 |---|---|---|---|---|
 | `normal` | 60 s | 60 s | 2 | 10 s |
-| `fast` (default) | 30 s | 30 s | 3 | 5 s |
+| `balanced` (default) | 45 s | 30 s | 2 | 5 s |
+| `fast` | 30 s | 30 s | 3 | 5 s |
 | `turbo` | 20 s | 15 s | 4 | 5 s |
 
 A profile only fills in variables you haven't set: `SNIPE_SCAN_SECONDS=45` in Railway beats it. Faster means more calls to
 GeckoTerminal, DexScreener, RugCheck and your RPC. If the live feed starts showing "too many requests" (429), or your Helius
 plan runs out early, go down a step. The code is in `profiles.py`.
 
-**3. Viral-hype hold mode.** A sniper coin bought while its hype is **75/100 or more** (`SNIPE_VIRAL_HYPE`) with a narrative
-behind it is held longer: the time box moves from 45 to 120 minutes (`SNIPE_VIRAL_BOX_MINUTES`), the "no momentum" exit from
-20 to 45 minutes (`SNIPE_VIRAL_STALL_MINUTES`), the max hold from 12 to 24 hours (`SNIPE_VIRAL_MAX_HOLD_HOURS`) and the
-trailing stop from 20% to 25% off the best (`SNIPE_VIRAL_TRAIL_PCT`). **The stop-loss is not loosened**, and the dead-coin /
-move-failed exits still run. The hype number is read once, at the buy: the bot doesn't re-measure it while it holds, so a
-coin whose hype dies is only caught by the price rules. Early bets and hot entries don't get this mode. `SNIPE_VIRAL_HYPE=0`
-turns it off.
+**3. Viral-hype hold mode.** Everything else is in and out. The one exception is a sniper coin bought at **hype 100/100**
+(`SNIPE_VIRAL_HYPE`) with a narrative behind it, the kind that might go viral: it is held on the 2x-5x ladder with a 3-hour
+time box (`SNIPE_VIRAL_BOX_MINUTES`), no stall exit for 60 minutes, up to 24 hours, and a 30% trailing stop. Its stop-loss is
+the sniper's normal −25% (a viral coin swings too much for the fast plan's −15%). **Hype 100 is rare**: it takes 40+ wallets
+buying in 5 minutes, 600+ new holders an hour, volume at 2x its pace, a big hour and a trending list all at once. Set
+`SNIPE_VIRAL_HYPE=90` to let more coins in, `0` to turn the mode off. Hype is read once, at the buy; a coin whose hype dies
+is only caught by the price rules.
 
-**4. The certified desk.** Before the desk buys its pick, the pick must be **certified** (`certify.py`): every check below
+**3b. More trades.** `MAX_POSITIONS` 5 to 8 (3 desk, 5 sniper), `MAX_EXPOSURE_PCT` 25 to 40, `SNIPE_BUY_SCORE` 70 to 65,
+`SNIPE_MIN_BUYERS_X` 1.5 to 1.3, rest after 3 losses in a row (was 2) for 15 minutes (was 30). **Not changed:** the rug
+checks and vetoes, the −15% / −25% stops, the 20% daily loss limit, and the 6% ticket size (`TICKET_SHARE` in `main.py`).
+More trades means more fees and more small losses; whether it makes more money is something paper mode has to show first.
+
+**4. The certified desk (off by default).** Before the desk buys its pick, the pick must be **certified** (`certify.py`): every check below
 read and passed. An unknown is a fail, never a pass.
 - mint and freeze authority confirmed revoked, no Token-2022 trap, RugCheck's full report read and not rugged
 - sniper score 75+ (`DESK_CERT_SCORE`), pool liquidity $50K+, 6+ hours old, 500+ holders
@@ -372,12 +384,27 @@ read and passed. An unknown is a fail, never a pass.
 - liquidity 50%+ locked or burned (a pool $250K deep and a day old may pass with no lock: many older pools have none)
 - bubble map read: funded clusters 2% or less, brand-new wallets 20% or less of the traced top holders
 
-It's stricter than `DESK_GATE_SCORE=65`; expect the desk to buy **less often**. A certified coin gets the desk's longer-hold
+It's much stricter than `DESK_GATE_SCORE=65`, and when a data source is rate-limited the numbers come back unread and
+every coin fails. In practice it can stop the desk buying at all, so it ships **off** (`DESK_CERTIFIED=on` to use it). A certified coin gets the desk's longer-hold
 plan: time box 4 hours (was 2), never-green exit at 90 minutes (was 45), max hold 48 hours (was 24), trailing stop 20% off the
 best (was 15%): `DESK_CERT_BOX_MINUTES`, `DESK_CERT_RED_MINUTES`, `DESK_CERT_HOLD_HOURS`, `DESK_CERT_TRAIL_PCT`. The stop-loss
 stays the same. Every number in the list has a `DESK_CERT_*` variable (see `certify.py`); `DESK_CERTIFIED=off` goes back to
 the old gate. **"Certified" means "passed these checks", not "safe".** Rug checks lower the odds of buying a rug; they can't
 see a dev who sells from a fresh wallet an hour later, a coin that just goes down, or anything the data sources get wrong.
+
+## Why isn't it trading? (`/api/status`)
+
+Open `https://YOUR-APP.up.railway.app/api/status` and look at **`why_not_trading`**: over the last 12 hours, how many coins
+the sniper checked, how many passed, and the top reasons the rest were turned down (numbers blanked, so "top 10 wallets hold
+52%" and "...48%" count together). It tells you which rule is doing the blocking:
+- `geckoterminal is rate-limiting` / `bubble map couldn't be read` / `unknown`: the data feeds are the problem, not your rules.
+  Set `SPEED_PROFILE=normal`.
+- `mint authority`, `freeze`, `top # wallets`, `lp`, `cluster`: the rug checks. Those are doing their job; they are the last
+  thing to loosen.
+- `buyers aren't ahead`, `just ran`, `spiking`, `score ... is under`: the entry timing rules. These are the ones to ease
+  (`SNIPE_MIN_BUYERS_X`, `SNIPE_MAX_M5_PCT`, `SNIPE_BUY_SCORE`).
+- `not certified`: that gate is on (`DESK_CERTIFIED=on`). Turn it off.
+The live feed also lists each stop in plain words ("desk pick stopped by the sniper's checks: ...").
 
 ## Two bots, their own slots
 
@@ -405,7 +432,7 @@ public feed either. What works instead: add the wallets of the callers you trust
 caller buys the coin they call, so the sniper checks it within a minute of their buy, with every rug check and the
 bubble map, before it buys anything.
 
-They split the slots so one can never crowd out the other: with `MAX_POSITIONS=5`, 3 are the desk's and 2 the
+They split the slots so one can never crowd out the other: with `MAX_POSITIONS=8`, 3 are the desk's and 5 the
 sniper's (`DESK_SLOTS`, `SNIPE_SLOTS`). A coin you paste and tell it to buy may take any free slot. The POSITIONS
 panel says which bot bought each coin, and the bottom section has a box for each bot saying what it's doing.
 
@@ -414,8 +441,8 @@ only); the safety checks now run on every pick either way.
 
 ## Several coins at once
 
-The desk holds up to `MAX_POSITIONS` coins (default **5**) and keeps scanning while it has a free slot. Each coin
-gets its own plan below. All coins together stay under `MAX_EXPOSURE_PCT` (default **25**%) of everything (cash +
+The desk holds up to `MAX_POSITIONS` coins (default **8**) and keeps scanning while it has a free slot. Each coin
+gets its own plan below. All coins together stay under `MAX_EXPOSURE_PCT` (default **40**%) of everything (cash +
 what's in coins): a ticket that would go over is cut to the room left, or skipped. A coin it already holds is
 skipped by the scan. A coin it sold at a profit is set aside for three hours and a coin it lost money on for a day,
 so it never chases a coin back up or buys a loser twice.
@@ -568,8 +595,8 @@ stays paused until you tap **Resume**.
 | `DESK_METAS` | `60` | coins from DexScreener's trending narratives the desk reads too (0 = none) |
 | `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
-| `MAX_POSITIONS` | `5` | coins held at once (1 to 10) |
-| `MAX_EXPOSURE_PCT` | `25` | all coins together, as % of cash + coins |
+| `MAX_POSITIONS` | `8` | coins held at once (1 to 10) |
+| `MAX_EXPOSURE_PCT` | `40` | all coins together, as % of cash + coins |
 | `TEST_SWAP_USD` | `1` | size of the Test swap round trip, $0.50 to $20 |
 | `DESK_TITLE` / `DESK_TAGLINE` | `GROKBOT + JEV` / `JEV PICKS, CODE TRADES` | the page's name and tagline |
 | `HARD_<NAME>` | thresholds.py | override one HARD number, e.g. `HARD_MAX_AGE_HOURS=168` |
@@ -577,12 +604,16 @@ stays paused until you tap **Resume**.
 | `SHAPE_MIN_CROWD`, `PICK_MIN_WORTH`, `PICK_MIN_CONF` | thresholds.py | override those three |
 | `WATCH_SECONDS` | `10` | how often WATCH reads the price of each coin held (5 at least) |
 | `TRAIL_LOCK_PCT` / `SNIPE_TRAIL_LOCK_PCT` | `8` / `10` | once the trail is armed, sell rather than fall back under this gain |
-| `SPEED_PROFILE` | `fast` | `normal`, `fast` or `turbo`: how often the sniper looks and WATCH reads prices (see "What's new") |
+| `SPEED_PROFILE` | `balanced` | `normal`, `balanced`, `fast` or `turbo`: how often the sniper looks and WATCH reads prices (see "What's new") |
 | `SCALE_OUT` | `100:50,200:25,300:12.5,400:6.25` | the desk's profit ladder: gain% : % of the original bag (`off` = none) |
 | `SNIPE_SCALE_OUT` | `100:50,200:25,300:12.5,400:6.25` | the sniper's profit ladder |
-| `SNIPE_VIRAL_HYPE` | `75` | hype (0-100) at the buy that puts a sniper coin in hold mode (`0` = off) |
-| `SNIPE_VIRAL_BOX_MINUTES` / `SNIPE_VIRAL_STALL_MINUTES` / `SNIPE_VIRAL_MAX_HOLD_HOURS` / `SNIPE_VIRAL_TRAIL_PCT` | `120` / `45` / `24` / `25` | the viral coin's time box, no-momentum exit, max hold and trailing stop |
-| `DESK_CERTIFIED` | `on` | the desk only buys a certified pick, and holds it longer (`off` = the old gate) |
+| `SNIPE_VIRAL_HYPE` | `100` | hype (0-100) at the buy that puts a sniper coin in hold mode (`0` = off) |
+| `SNIPE_FAST` | `on` | every non-viral sniper coin uses the fast in-and-out plan |
+| `SNIPE_FAST_SCALE_OUT` / `SNIPE_FAST_KEEP_PCT` | `15:25,30:25,50:25` / `25` | the fast plan's profit steps and the share kept as the runner |
+| `SNIPE_FAST_BOX_MINUTES` / `SNIPE_FAST_BOX_GAIN_PCT` / `SNIPE_FAST_STALL_MINUTES` / `SNIPE_FAST_STALL_GAIN_PCT` / `SNIPE_FAST_MAX_HOLD_HOURS` | `20` / `12` / `10` / `6` / `3` | the fast plan's time box, no-momentum exit and max hold |
+| `SNIPE_CASHOUT_PCT` / `SNIPE_LEARN` / `SNIPE_LEARN_MIN_TRADES` | `100` / `on` / `10` | the start of the whole-bag cash-out line, whether it is re-learned, and the trades needed before it learns |
+| `SNIPE_VIRAL_BOX_MINUTES` / `SNIPE_VIRAL_STALL_MINUTES` / `SNIPE_VIRAL_MAX_HOLD_HOURS` / `SNIPE_VIRAL_TRAIL_PCT` | `180` / `60` / `24` / `30` | the viral coin's time box, no-momentum exit, max hold and trailing stop |
+| `DESK_CERTIFIED` | `off` | `on` = the desk only buys a certified pick (strict: an unreadable number is a fail) and holds it longer |
 | `DESK_CERT_BOX_MINUTES` / `DESK_CERT_RED_MINUTES` / `DESK_CERT_HOLD_HOURS` / `DESK_CERT_TRAIL_PCT` | `240` / `90` / `48` / `20` | a certified coin's time box, never-green exit, max hold and trailing stop |
 | `DESK_CERT_SCORE` | `75` | the sniper score a certified pick needs |
 | `DESK_CERT_MIN_LIQ_USD` / `DESK_CERT_MIN_AGE_HOURS` / `DESK_CERT_MIN_HOLDERS` | `50000` / `6` / `500` | pool liquidity, age and holder count a certified pick needs |
@@ -593,14 +624,14 @@ stays paused until you tap **Resume**.
 | `DESK_LOSS_STREAK` / `DESK_COOLDOWN_MINUTES` | `2` / `60` | after this many desk losses in a row, the desk rests this long |
 | `DESK_RETRACE_PCT` / `DESK_RETRACE_MINUTES` / `DESK_RETRACE_MAX_DROP` | `8` / `45` / `20` | a desk pick waits for a pullback this deep and a bounce, this long at most, and is dropped if it falls this far (`0` = buy at once) |
 | `DESK_BREAKOUT_PCT` | `10` | or buys a breakout: up this much since the pick with the buyers and volume heavily ahead (`0` = off) |
-| `DESK_SLOTS` / `SNIPE_SLOTS` | 60% / 40% of `MAX_POSITIONS` (3 / 2) | the slots each bot may fill |
+| `DESK_SLOTS` / `SNIPE_SLOTS` | 40% / 60% of `MAX_POSITIONS` (3 / 5) | the slots each bot may fill |
 | `SNIPE_MODE` | `auto`, `watch` with `LIVE_MODE=true` | the fast lane: `off`, `watch` (never buys) or `auto`; the page's buttons change it |
-| `SNIPE_BUY_SCORE` | `70` | the score a BUY needs |
+| `SNIPE_BUY_SCORE` | `65` | the score a BUY needs |
 | `SNIPE_SCAN_SECONDS` | `60` | how often the fast lane looks |
 | `SNIPE_MIN_AGE_MINUTES` / `SNIPE_MAX_AGE_HOURS` | `10` / `72` | how young and how old a coin it looks at |
 | `SNIPE_CONFIRM_SECONDS` / `SNIPE_CONFIRM_DROP_PCT` | `60` / `4` | the second look before a fast-lane buy, and how far the price may slip in it (`0` = buy at once) |
 | `SNIPE_MAX_M5_PCT` | `30` | up this much in 5 minutes = the top of a candle: wait (desk picks too) |
-| `SNIPE_LOSS_STREAK` / `SNIPE_COOLDOWN_MINUTES` | `2` / `30` | after this many sniper losses in a row, no fast-lane buys for this long |
+| `SNIPE_LOSS_STREAK` / `SNIPE_COOLDOWN_MINUTES` | `3` / `15` | after this many sniper losses in a row, no fast-lane buys for this long |
 | `SNIPE_FAIL_PCT` / `SNIPE_FAIL_M5_PCT` / `SNIPE_FAIL_MINUTES` | `12` / `10` / `30` | the move failed: out at −12% while still falling 10% in 5 min, in the first 30 min |
 | `SNIPE_MIN_LIQUIDITY_USD` | `8000` | thinner than this is too hard to get out of |
 | `SNIPE_MIN_MCAP_USD` / `SNIPE_MAX_MCAP_USD` | `20000` / `30000000` | the market cap window (`100000` turns early bets off) |
@@ -624,7 +655,7 @@ stays paused until you tap **Resume**.
 | `DESK_RED_MINUTES` / `DESK_RED_PCT` | `45` / `8` | a desk coin that never went green this long and is down this much: out |
 | `SNIPE_MAX_RUN_H1_PCT` / `SNIPE_HOT_H1_PCT` | `300` / `150` | up this much in the last hour: wait; up between the two: a hot entry, half the ticket on the fast plan with nothing left riding (`SNIPE_HOT_SCALE_OUT=25:50,50:50`) |
 | `SNIPE_MIN_H1_PCT` | `15` | a coin an hour old or more is bought by the sniper only if it's up this much this hour (`0` = off) |
-| `SNIPE_MIN_BUYERS_X` | `1.5` | the sniper buys only when the last 5 minutes' buys are at least this many times the sells (`0` = off) |
+| `SNIPE_MIN_BUYERS_X` | `1.3` | the sniper buys only when the last 5 minutes' buys are at least this many times the sells (`0` = off) |
 | `SNIPE_BOX_MINUTES` / `SNIPE_BOX_GAIN_PCT` | `45` / `25` | the time box: past this, a sniper coin that isn't up this much is sold |
 | `DESK_BOX_MINUTES` / `DESK_BOX_GAIN_PCT` | `120` / `20` | the desk's time box |
 | `FAST_BOX_MINUTES` / `FAST_BOX_GAIN_PCT` | `30` / `15` | the fast plan's (early bets, hot entries) time box |
@@ -665,7 +696,7 @@ Your first deploy is the first real run of those, which is one more reason to st
 - Solana only, because that's what Jupiter swaps.
 - X lookups are off, so every ticket takes the ×0.60 no-X cut.
 - SIZE has no Kelly step: nothing measures an edge yet.
-- Up to 5 coins at once (`MAX_POSITIONS`).
+- Up to 8 coins at once (`MAX_POSITIONS`).
 - The dashboard link is public, but read-only. Anyone with it can see the bot wallet's address and trades. They
   can't pause it or move funds.
 - **FOMO:** it has no public trading API, and its terms forbid bots, so this desk trades through Jupiter instead.
