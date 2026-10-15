@@ -74,13 +74,8 @@ def score_token(*, top10_pct, dev_pct, block0_buyers,
     return ScoreResult(score,verdict,tuple(red),tuple(green),tuple(unknown))
 
 def trade_window_status(now=None):
-    """Quebec local-time quiet period: 01:00–08:59."""
-    tz=ZoneInfo("America/Toronto")
-    local_now=(now or datetime.now(tz)).astimezone(tz)
-    if 1 <= local_now.hour < 9:
-        return False, f"Quiet hours in Quebec: {local_now:%H:%M}; allowed window starts at 09:00."
-    return True, f"Outside quiet hours in Quebec: {local_now:%H:%M}. Schedule check only."
-
+    def trade_window_status(now=None):
+    return True, "No time restriction"
 def format_token_report(result):
     red=list(result.red_flags)+[f"UNVERIFIED: {x}" for x in result.unknowns]
     lines=[f"SCORE: {result.score}/10","RED FLAGS:"]
