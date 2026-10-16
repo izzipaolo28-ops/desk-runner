@@ -35,9 +35,8 @@ import requests
 
 import book
 import collect
-import whynot
 from collect import FetchFailed, _num
-from seats import ENTRY_TAGS, NOT_A_SOURCE, QUOTES_OK, WARNING_TAGS, entry_tags, tag_words
+from seats import ENTRY_TAGS, QUOTES_OK, entry_tags
 
 log = logging.getLogger("snipe")
 
@@ -62,14 +61,6 @@ def _f(v):
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def _ts(iso):
-    """An ISO time from the state file as epoch seconds, or None."""
-    try:
-        return datetime.fromisoformat(str(iso)).timestamp() if iso else None
-    except ValueError:
-        return None
 
 
 def clean(v, n):
@@ -388,36 +379,23 @@ def first_funder(tx, wallet):
     return payer if isinstance(payer, str) and payer != wallet and MINT_RE.match(payer) else None
 
 
-def _born_with(tx, wallet, mint):
-    """The wallet's very first transaction left it holding this coin: a wallet made to hold it (tokens sent in)."""
-    if not mint or not isinstance(tx, dict):
-        return False
-    for b in (tx.get("meta") or {}).get("postTokenBalances") or []:
-        if isinstance(b, dict) and b.get("owner") == wallet and b.get("mint") == mint and _f((b.get("uiTokenAmount") or {}).get("amount")):
-            return True
-    return False
-
-
-def _wallet_origin(wallet, mint=None, fresh_days=3.0):
-    """(funder or None, why, fresh). A wallet with 100+ transactions is an active trader: its funding is too far back to
-    read cheaply and it isn't the fresh kind a bundle is made of. Fresh: under 100 transactions and the first one in the
-    last few days, or born holding the coin (DOPEUS: every top holder a new wallet the coin was sent to). None: unknown."""
+def _wallet_origin(wallet):
+    """(funder or None, why). A wallet with 100+ transactions is an active trader: its funding is too far back to read
+    cheaply and it isn't the fresh kind a bundle is made of."""
     sigs = collect._rpc("getSignaturesForAddress", [wallet, {"limit": 100}])
     if not isinstance(sigs, list):
-        return None, "unreadable", None
+        return None, "unreadable"
     if len(sigs) >= 100:
-        return None, "active", False
-    first = next((s for s in reversed(sigs) if isinstance(s, dict) and s.get("signature")), None)
-    if not first:
-        return None, "unreadable", None
-    tx = collect._rpc("getTransaction", [first["signature"], {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
-    born = _f(first.get("blockTime")) or _f((tx or {}).get("blockTime") if isinstance(tx, dict) else None)
-    fresh = bool((born and time.time() - born <= fresh_days * 86400) or _born_with(tx, wallet, mint))
+        return None, "active"
+    oldest = next((s.get("signature") for s in reversed(sigs) if isinstance(s, dict) and s.get("signature")), None)
+    if not oldest:
+        return None, "unreadable"
+    tx = collect._rpc("getTransaction", [oldest, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
     f = first_funder(tx, wallet)
-    return (f, "ok", fresh) if f else (None, "unreadable", fresh)
+    return (f, "ok") if f else (None, "unreadable")
 
 
-def funding_map(wallets, workers=4, max_wallets=20, mint=None, fresh_days=3.0):
+def funding_map(wallets, workers=4, max_wallets=20):
     """What Bubblemaps draws, from the chain itself: for each of the biggest holders (pools excluded), the wallet that
     funded it. Several top holders funded by one wallet are one person (a bundle: DOGGO's ring of ~100, OnlyDoge's two
     hubs). A funder with 1000+ transactions is an exchange or a service paying out to strangers: not a cluster.
@@ -425,18 +403,13 @@ def funding_map(wallets, workers=4, max_wallets=20, mint=None, fresh_days=3.0):
     "clustered_pct", "clustered_n"}."""
     ws = [w for w in wallets or [] if isinstance(w, dict) and isinstance(w.get("owner"), str)][:max_wallets]
     out = {"status": "no holders to read", "read": 0, "of": len(ws), "active": 0, "exchange": 0, "clusters": [], "clustered_pct": 0.0,
-           "clustered_n": 0, "traced": 0, "fresh": 0, "fresh_pct": 0.0}
+           "clustered_n": 0}
     if not ws:
         return out
     with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        origins = list(ex.map(lambda w: _wallet_origin(w["owner"], mint, fresh_days), ws))
+        origins = list(ex.map(lambda w: _wallet_origin(w["owner"]), ws))
     groups = {}
-    for w, (funder, why, fresh) in zip(ws, origins):
-        if fresh is not None:                          # its history was read: fresh or not
-            out["traced"] += 1
-            if fresh:
-                out["fresh"] += 1
-                out["fresh_pct"] = round(out["fresh_pct"] + (_f(w.get("pct")) or 0.0), 3)
+    for w, (funder, why) in zip(ws, origins):
         if why == "active":
             out["active"] += 1
         if funder:
@@ -1020,17 +993,6 @@ def score_coin(r, cfg):
             add("insider holders", f"RugCheck ties top holders holding {ip:.1f}% to the insiders", -6)
     mp = r.get("map") or {}
     lbl = "bubble map (who funded the top holders)"
-    tr, fr = mp.get("traced"), mp.get("fresh")
-    fresh_share = round(100.0 * fr / tr, 1) if tr and tr >= 5 and fr is not None else None
-    if fresh_share is not None:              # DOPEUS: no clusters, every holder paired with one other wallet, all of them new
-        lim = cfg.snipe_map_fresh_pct
-        desc = f"{fr} of the {tr} top holders it traced are brand-new wallets, holding {mp.get('fresh_pct') or 0:.1f}%"
-        check("who", "brand-new wallets among the top holders", None if lim <= 0 else fresh_share < lim, desc,
-              f"max {lim:g}%" if lim > 0 else "check off")
-        if lim > 0 and fresh_share >= lim and fr >= 5:
-            veto.append(f"bubble map: {desc}: the supply was split across fresh wallets, a hidden bundle (DOPEUS)")
-        elif fresh_share >= 20 and fr >= 3:
-            add("fresh holders", f"{desc} ({fresh_share:.0f}%)", -8)
     cl = mp.get("clusters") or []
     bp = mp.get("bundles_pct")
     if bp is not None:
@@ -1049,9 +1011,6 @@ def score_coin(r, cfg):
             veto.append("bubble map: " + desc + ": one person holds a block of the supply and can dump it on you")
         else:
             add("map cluster", "bubble map: " + desc, -6 * min(2, len(cl)))
-    elif mp.get("status") == "ok" and mp.get("read", 0) >= 3 and fresh_share is not None and fresh_share >= 20:
-        check("who", lbl, None, f"{mp['read']} of {mp['of']} top holders traced: no one wallet funded several of them, "
-              "but many are brand-new wallets (below)")
     elif mp.get("status") == "ok" and mp.get("read", 0) >= 3:
         check("who", lbl, True, f"{mp['read']} of {mp['of']} top holders traced: no one wallet funded several of them"
               + (f" ({mp['exchange']} came from an exchange)" if mp.get("exchange") else "")
@@ -1162,50 +1121,14 @@ def score_coin(r, cfg):
     if h1c is not None and h1c <= -20 and not desk:                    # .fun: down from $200K to $81K, bought on a bounce
         wait.append(f"down {h1c:.0f}% this hour: a bounce in a falling coin is not a runner, it waits for the hour to turn up")
     q = F.get("quote")
-    early = mcap is not None and mcap < cfg.snipe_early_mcap_usd and not desk
-    if early:                                  # an early bet: under $100K, where the 10x and the rugs both live
-        check("market", "early bet", None, f"under {money(cfg.snipe_early_mcap_usd)}: extra careful in (rising, SOL/USDC, a clean bubble map, "
-              f"{cfg.snipe_early_min_age_minutes:g}+ min old, buyers ahead, insiders under {cfg.snipe_early_insider_pct:g}%), {cfg.snipe_early_size:g}x the ticket, profits taken fast")
-        if h1c is not None and h1c < 0:
-            wait.append(f"an early bet must be rising this hour, and it's {h1c:+.0f}%")
-        if age is not None and age < cfg.snipe_early_min_age_minutes:
-            wait.append(f"an early bet must be {cfg.snipe_early_min_age_minutes:g}+ min old (the first dumps), and it's {mins(age)}")
-        if m5c is not None and cfg.snipe_early_max_m5_pct > 0 and m5c >= cfg.snipe_early_max_m5_pct:
-            wait.append(f"an early bet doesn't buy a {m5c:+.0f}% 5-min candle (max +{cfg.snipe_early_max_m5_pct:g}%): it waits for it to cool")
-        b5e, s5e = buys.get("m5"), sells.get("m5")
-        if b5e is not None and s5e is not None and b5e < s5e * cfg.snipe_early_buyers_x:
-            wait.append(f"an early bet needs the buyers clearly ahead: {b5e} buys vs {s5e} sells in 5 min "
-                        f"(it wants {cfg.snipe_early_buyers_x:g}x)")
-        dial = r.get("dial") or {}
-        if _f(dial.get("value")) is not None and dial.get("early_min") and dial["value"] < dial["early_min"]:
-            wait.append(f"today's dial is {dial['value']:.2f}: too weak for early bets today (they need {dial['early_min']:g}+)")
-        ipe = rug.get("insider_pct")
-        if ipe is not None and ipe >= cfg.snipe_early_insider_pct:
-            wait.append(f"an early bet allows insiders under {cfg.snipe_early_insider_pct:g}%, and RugCheck ties {ipe:.1f}% to them")
-        if isinstance(q, str) and q.strip() and q.strip().upper() not in QUOTES_OK:
-            wait.append(f"an early bet must be paired with SOL or USDC, and this one trades against ${q}")
-        if (r.get("map") or {}).get("clusters"):
-            wait.append("an early bet needs a clean bubble map, and some top holders were funded by the same wallet")
     if isinstance(q, str) and q.strip() and q.strip().upper() not in QUOTES_OK:
         check("market", "pool paired with", False, f"${q}: every sale goes through another memecoin")
         add("odd pair", f"its pool is paired with ${q}, not SOL or USDC", -8)
-    run, h6c = None, chg.get("h6")
-    if age is not None and age >= 60 and h1c is not None:          # a real hour (younger: "since launch")
-        run = (h1c, "this hour")
-    if age is not None and age >= 360 and h6c is not None and (run is None or h6c > run[0]):
-        run = (h6c, "over 6 hours")
-    line = (cfg.snipe_max_run_h1_pct if run and run[1] == "this hour" else cfg.snipe_max_run_pct) if run else 0
-    if run and line > 0 and run[0] >= line:
-        wait.append(f"it just ran {run[0]:+.0f}% {run[1]}: nobody chases a {line:g}%+ run (CATBOT: +508% in 80 min, "
-                    "then rugged), it waits for it to settle")
+    for tag, lesson in (r.get("learned") or {}).items():
+        if tag in entry_tags({"h1": h1c, "m5": m5c, "mcap": mcap, "age_min": age, "liq": liq, "quote": q}) and not desk:
+            wait.append(f"learned from its own trades: {lesson}")
     if m5c is not None and cfg.snipe_max_m5_pct > 0 and m5c >= cfg.snipe_max_m5_pct and not desk:
         wait.append(f"spiking {m5c:+.0f}% in 5 min: it waits for the candle to cool, never buys the top of one")
-    b5m, s5m = buys.get("m5"), sells.get("m5")
-    if (not desk and cfg.snipe_min_buyers_x > 0 and b5m is not None and s5m is not None and s5m > 0
-            and b5m < s5m * cfg.snipe_min_buyers_x):
-        wait.append(f"buyers aren't clearly ahead: {b5m} buys vs {s5m} sells in 5 min (it wants {cfg.snipe_min_buyers_x:g}x)")
-    if (not desk and cfg.snipe_min_h1_pct and age is not None and age >= 60 and h1c is not None and h1c < cfg.snipe_min_h1_pct):
-        wait.append(f"not moving: {h1c:+.0f}% this hour (it buys coins already moving, +{cfg.snipe_min_h1_pct:g}% or more this hour)")
     # A big run alone isn't a reason: on a coin under a day old the 24h change is "since launch", and every coin that
     # made it is up 1000%+. One red 5-minute candle isn't cooling either. It's a SKIP only when the hour itself is falling.
     h24c = chg.get("h24")
@@ -1328,20 +1251,6 @@ def score_coin(r, cfg):
         if up and up.get("potential_x") is not None and up["potential_x"] < cfg.snipe_min_upside_x:
             wait.append(f"not enough room: ~{up['potential_x']:g}x potential, it wants {cfg.snipe_min_upside_x:g}x+")
     total = max(0, min(100, 25 + sum(p["pts"] for p in pts)))
-    b5c, s5c = buys.get("m5"), sells.get("m5")
-    ctx = {"h1": h1c, "m5": m5c, "mcap": mcap, "age_min": age, "liq": liq, "quote": q, "score": total,
-           "fresh_share": fresh_share, "clustered_pct": mp.get("clustered_pct"), "insider_pct": rug.get("insider_pct"),
-           "top10": F.get("top10_pct"), "buyers_x": round(b5c / s5c, 2) if b5c is not None and s5c else None,
-           "source": r.get("source")}
-    tags = entry_tags(ctx)
-    for tag, lesson in (r.get("learned") or {}).items():
-        if tag in tags:                            # both bots: what one learned, the other doesn't repeat
-            wait.append(f"learned from its own trades: {lesson}")
-    if early and not veto and total >= cfg.snipe_buy_score:
-        if total < cfg.snipe_early_buy_score:
-            wait.append(f"an early bet needs a score of {cfg.snipe_early_buy_score:g}, and this one is {total}")
-        if (r.get("map") or {}).get("status") != "ok":
-            wait.append("an early bet needs the bubble map read first: no buying blind")
     if veto:
         verdict = "SKIP"
     elif wait:
@@ -1403,69 +1312,38 @@ class Sniper:
 
         self.tally = deque(maxlen=600)          # (time, why) for every deep check: the page shows the last hour
         self.again, self.seen = {}, {}          # mint -> {"next", "tries", "source"} / mint -> when it was last checked
-        self.mood = deque(maxlen=400)           # (when, the hour's move) of every hot coin it pre-scores: the market today
         self.last_round, self.rounds, self.note = None, 0, {}
         self.env_wallets = parse_wallets(os.environ.get("SMART_WALLETS", ""))
         with self.state.lock:
             for k, v in (("checks", []), ("radar", []), ("wallets", []), ("wallet_sigs", {})):
                 self.state.data.setdefault(k, v)
 
-    LESSON_COINS, LESSON_LOSSES, LESSON_HOURS = 15, 2, 48
+    LESSON_COINS, LESSON_LOSSES = 15, 2
 
     def lessons(self):
-        """What its own trades taught it. Among both bots' coins closed in the last 48 hours (15 at most), each one
-        tagged with what was true at the buy (fresh, thin, odd pair, many brand-new holders, a map cluster, insiders,
-        thin buyers, a score near the bar, the list it came from...). A tag is avoided from then on when it lost at least
-        twice and lost more than twice as often as it won. A fast dump (down 20%+ within 10 minutes of the buy) counts as
-        two losses for the warning signs, the things it should have stopped at. {tag: why, with the coins}."""
-        coins, order, now = {}, [], time.time()
+        """What its own trades taught it: among the sniper's last 15 coins, a buy-time tag (fresh, thin, odd pair...) that
+        lost at least twice and never won is avoided from then on. {tag: why, with the coins}."""
+        coins, order = {}, []
         for i, t in enumerate(self.state.data.get("trades") or []):          # newest first
-            if t.get("plan") not in ("snipe", "desk", None):
+            if t.get("plan") != "snipe":
                 continue
             k = t.get("order_id") or f"row{i}"
             if k not in coins:
-                coins[k] = {"pnl": 0.0, "cost": 0.0, "tags": None, "ticker": t.get("ticker"), "final": False, "closed": None,
-                            "opened": t.get("opened_at")}
+                coins[k] = {"pnl": 0.0, "tags": None, "ticker": t.get("ticker"), "final": False}
                 order.append(k)
             c = coins[k]
             c["pnl"] += _f(t.get("pnl_usd")) or 0.0
-            c["cost"] += _f(t.get("cost_usd")) or 0.0
             if t.get("final") is not False:
-                c["final"], c["tags"], c["closed"] = True, t.get("entry_tags"), t.get("closed_at")
-        done = []
-        for k in order:
-            c = coins[k]
-            if not (c["final"] and isinstance(c["tags"], list)):
-                continue
-            shut, opened = _ts(c["closed"]), _ts(c["opened"])
-            if shut and now - shut > self.LESSON_HOURS * 3600:
-                continue
-            held = (shut - opened) / 60 if shut and opened else None
-            c["fast"] = bool(c["pnl"] < 0 and c["cost"] and 100 * c["pnl"] / c["cost"] <= -20 and held is not None and held <= 10)
-            done.append(c)
-        done = done[:self.LESSON_COINS]
+                c["final"] = True
+                c["tags"] = t.get("entry_tags")
+        done = [coins[k] for k in order if coins[k]["final"] and isinstance(coins[k]["tags"], list)][:self.LESSON_COINS]
         out = {}
-        for tag in sorted({t for c in done for t in c["tags"]}):
+        for tag, words in ENTRY_TAGS.items():
             lost = [c for c in done if tag in c["tags"] and c["pnl"] < 0]
             won = [c for c in done if tag in c["tags"] and c["pnl"] > 0]
-            weight = sum(2 if c.get("fast") and tag in WARNING_TAGS else 1 for c in lost)
-            if weight >= self.LESSON_LOSSES and len(won) * 2 < weight:
-                fast = sum(1 for c in lost if c.get("fast"))
-                out[tag] = (f"{len(lost)} loss{'es' if len(lost) > 1 else ''}"
-                            + (f" ({fast} a fast dump, counted twice)" if fast and tag in WARNING_TAGS else "")
-                            + (" and no wins" if not won else f" and {len(won)} win{'s' if len(won) > 1 else ''}")
-                            + f" on coins {tag_words(tag)} (" + ", ".join("$" + (c["ticker"] or "?") for c in lost[:3]) + ")")
-        self._announce(out)
+            if len(lost) >= self.LESSON_LOSSES and not won:
+                out[tag] = f"{len(lost)} losses and no wins on coins {words} (" + ", ".join("$" + (c["ticker"] or "?") for c in lost[:3]) + ")"
         return out
-
-    def _announce(self, out):
-        """A new lesson goes in the live feed once, the moment it's learned."""
-        known = getattr(self, "_known_lessons", None)
-        self._known_lessons = set(out)
-        if known is None:
-            return                                         # the first look after a start: nothing new, just what it knew
-        for tag in sorted(set(out) - known):
-            self.state.feed("sniper", "info", f"learned: no more coins {tag_words(tag)}. {out[tag]}"[:160])
 
     # what the page and the runner ask
     def mode(self):
@@ -1518,18 +1396,16 @@ class Sniper:
                 return
 
     # ---------- the losing streak: the fast lane rests ----------
-    def cooling(self, now_ts=None, plan="snipe", streak=None, minutes=None):
+    def cooling(self, now_ts=None):
         """After SNIPE_LOSS_STREAK sniper coins in a row closed at a loss, the fast lane doesn't buy for
         SNIPE_COOLDOWN_MINUTES from the last one (a cold market sinks every new coin). Your own checks still buy.
-        plan="desk" asks the same of the desk's own coins (DESK_LOSS_STREAK / DESK_COOLDOWN_MINUTES).
         Returns {"until", "at", "why"} or None."""
-        n = self.cfg.snipe_loss_streak if streak is None else streak
-        mins = self.cfg.snipe_cooldown_minutes if minutes is None else minutes
-        if n <= 0 or mins <= 0:
+        n = self.cfg.snipe_loss_streak
+        if n <= 0 or self.cfg.snipe_cooldown_minutes <= 0:
             return None
         coins, order = {}, []
         for i, t in enumerate(self.state.data.get("trades") or []):           # newest first
-            if (t.get("plan") or "desk") != plan:
+            if t.get("plan") != "snipe":
                 continue
             k = t.get("order_id") or f"row{i}"
             if k not in coins:
@@ -1544,11 +1420,11 @@ class Sniper:
             last = datetime.fromisoformat(str(done[0]["closed"]).replace("Z", "+00:00")).timestamp()
         except ValueError:
             return None
-        until = last + mins * 60
+        until = last + self.cfg.snipe_cooldown_minutes * 60
         if (now_ts or time.time()) >= until:
             return None
         return {"until": until, "at": datetime.fromtimestamp(until, timezone.utc).strftime("%H:%M UTC"),
-                "why": f"{n} {'sniper' if plan == 'snipe' else 'desk'} losses in a row"}
+                "why": f"{n} sniper losses in a row"}
 
     # ---------- a second look before the money goes in ----------
     def hold_for_confirm(self, rep, now, sources=()):
@@ -1717,9 +1593,7 @@ class Sniper:
     # ---------- the deep check ----------
     def check(self, mint, source, lists=(), wallet_hits=(), manual=False, purpose="snipe"):
         st, cfg = self.state, self.cfg
-        dial = self.r.dial() if callable(getattr(self.r, "dial", None)) else None
         rep = {"id": f"{int(time.time() * 1000)}", "ts": time.time(), "time": _now(), "mint": mint, "source": source, "purpose": purpose,
-               "dial": dial,
                "lists": list(lists), "ticker": None, "name": None, "note": None, "bought": False, "action": None}
         def work(seat, step):
             st.set_working(seat, step, rep.get("ticker"), mint)
@@ -1764,7 +1638,7 @@ class Sniper:
             for h in wallet_hits:
                 smart.setdefault(h["wallet"], {"wallet": h["wallet"], "label": followed.get(h["wallet"], h.get("label"))})["sol"] = h.get("sol")
             rep.update(rug=rug, flow=flw, smart=list(smart.values()), followed_n=len(followed),
-                       learned=self.lessons())   # both bots learn from both bots
+                       learned=self.lessons() if purpose != "desk" else {})
             if not self.cfg.snipe_map:
                 rep["map"] = {"status": "off (SNIPE_MAP=off)"}
             elif purpose == "desk" or manual or self._close_to_buy(rep, F):
@@ -1814,13 +1688,6 @@ class Sniper:
             return hit[1]
         key = os.environ.get("BUBBLEMAPS_API_KEY", "").strip()
         m = bubblemaps_map(mint, key) if key else None
-        days = self.cfg.snipe_map_fresh_days
-        if m and m.get("status") == "ok" and top_wallets:   # Bubblemaps' clusters, plus the chain's brand-new-wallet count
-            try:
-                fm = funding_map(top_wallets, max_wallets=20, mint=mint, fresh_days=days)
-                m = m | {k: fm[k] for k in ("traced", "fresh", "fresh_pct")}
-            except Exception:
-                pass
         if not m or m.get("status") != "ok":
             wallets, via = top_wallets, "the top 20"
             try:
@@ -1834,7 +1701,7 @@ class Sniper:
             if not wallets:
                 return {"status": "not read: the chain didn't list the top holders"}
             try:
-                m = funding_map(wallets, max_wallets=50, mint=mint, fresh_days=days) | {"source": via}
+                m = funding_map(wallets, max_wallets=50) | {"source": via}
             except Exception as exc:                      # a map that can't be read is unknown, never a pass
                 return {"status": f"not read ({type(exc).__name__})"}
         self.maps[mint] = (time.time(), m)
@@ -1920,7 +1787,6 @@ class Sniper:
         if slim["flow"] and slim["flow"].get("ratio15") == math.inf:
             slim["flow"]["ratio15"] = "all buys"
         with self.state.lock:
-            whynot.record(self.state.data, rep, time.time())
             self.state.data["checks"] = ([slim] + [c for c in self.state.data.get("checks") or [] if c.get("id") != rep["id"]])[:CHECKS_KEPT]
             self.state.save()
 
@@ -1951,32 +1817,18 @@ class Sniper:
         if not r.seats.daily_guard(bank):
             return False, "the daily loss limit paused the desk"
         factor = 0.5 if forced else (1.0 if rep["score"] >= 85 else 0.7) * (0.8 if rep.get("setup") == "fresh launch" else 1.0)
-        early = bool((F.get("mcap") or 0) and F["mcap"] < self.cfg.snipe_early_mcap_usd)
-        h1b, ageb = (F.get("chg") or {}).get("h1"), F.get("age_min")
-        hot = (not early and _f(h1b) is not None and _f(ageb) is not None and ageb >= 60 and self.cfg.snipe_hot_h1_pct > 0
-               and h1b >= self.cfg.snipe_hot_h1_pct)
-        if (early or hot) and not forced:
-            factor *= self.cfg.snipe_early_size              # an early bet or a hot entry: half the ticket, profits taken fast
-        fast_why = "early bet" if early else f"hot entry (+{h1b:.0f}% this hour)" if hot else None
-        hy_now = _f((rep.get("hype") or {}).get("score"))
-        viral = bool(self.cfg.snipe_viral_hype > 0 and hy_now is not None and hy_now >= self.cfg.snipe_viral_hype
-                     and (rep.get("narrative") or {}).get("ok"))   # viral-hype hold mode: 100/100 hype, a story behind it
         signals = [("+ " if p["pts"] > 0 else "− ") + p["key"] for p in rep.get("points") or []]
         order = {"order_id": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "-snipe", "model": "sniper",
                  "token": {"ticker": rep.get("ticker"), "address": mint, "network_id": SOL_NET, "chain": "solana"},
-                 "size_factor": round(factor, 3), "size_cuts": ["bought by hand" if forced else f"sniper score {rep['score']}"]
-                 + ([f"early bet under {money(self.cfg.snipe_early_mcap_usd)}: {self.cfg.snipe_early_size:g}x"] if early and not forced else [])
-                 + ([f"a hot entry, already +{h1b:.0f}% this hour: {self.cfg.snipe_early_size:g}x"] if hot and not forced else []),
+                 "size_factor": round(factor, 3), "size_cuts": ["bought by hand" if forced else f"sniper score {rep['score']}"],
                  "confidence": None, "worth_trading_at_all": None, "runner_up": [],
                  "facts": {"liquidity_usd": F.get("liq"), "price_usd": F.get("price"), "mcap_usd": F.get("mcap"),
                            "decimals": (rep.get("facts") or {}).get("decimals"), "age_minutes": F.get("age_min")},
                  "why": {}, "judge_calls": [], "plan": "snipe", "score": rep["score"], "setup": rep.get("setup"),
-                 "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else []), "early": early or hot,
-                 "fast_why": fast_why, "viral": viral,
-                 "why_bought": [rep.get("headline") or ""] + [p["label"] for p in sorted(rep.get("points") or [], key=lambda p: -p["pts"])
-                                                               if p["pts"] > 0 and p["label"] not in (rep.get("headline") or "")][:4]
-                 + ([rep["action"]] if rep.get("action") else []),
-                 "entry_ctx": self._fingerprint(rep, F)}
+                 "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else []),
+                 "entry_ctx": {"mcap": F.get("mcap"), "age_min": F.get("age_min"), "h1": (F.get("chg") or {}).get("h1"),
+                               "m5": (F.get("chg") or {}).get("m5"), "liq": F.get("liq"), "quote": F.get("quote"),
+                               "hype": (rep.get("hype") or {}).get("score"), "score": rep.get("score")}}
         book.take(order)
         before = len(self.state.data.get("feed") or [])
         pos = r.seats.send_to_seats(order, bank)
@@ -1987,19 +1839,6 @@ class Sniper:
         feed = self.state.data.get("feed") or []
         why = next((f.get("text") for f in feed[:max(1, len(feed) - before + 1)] if f.get("kind") in ("skip", "error")), None)
         return False, why or "not filled: see the live feed"
-
-    @staticmethod
-    def _fingerprint(rep, F):
-        """Everything true at the buy that a lesson can be drawn from: the coin's numbers and what the checks saw."""
-        mp, rug, chg = rep.get("map") or {}, rep.get("rug") or {}, F.get("chg") or {}
-        tr, fr = mp.get("traced"), mp.get("fresh")
-        b5, s5 = (F.get("buys") or {}).get("m5"), (F.get("sells") or {}).get("m5")
-        return {"mcap": F.get("mcap"), "age_min": F.get("age_min"), "h1": chg.get("h1"), "m5": chg.get("m5"), "liq": F.get("liq"),
-                "quote": F.get("quote"), "hype": (rep.get("hype") or {}).get("score"), "score": rep.get("score"),
-                "fresh_share": round(100.0 * fr / tr, 1) if tr and tr >= 5 and fr is not None else None, "fresh_n": fr, "traced": tr,
-                "clustered_pct": mp.get("clustered_pct"), "insider_pct": rug.get("insider_pct"),
-                "top10": (rep.get("facts") or {}).get("top10_pct"), "buyers_x": round(b5 / s5, 2) if b5 is not None and s5 else None,
-                "source": rep.get("source"), "dex": F.get("dex"), "setup": rep.get("setup"), "buys5": b5, "sells5": s5}
 
     # ---------- the loop's two entry points ----------
     def run_queued(self):
@@ -2106,9 +1945,6 @@ class Sniper:
             for m in chunk:
                 F = pair_facts(pairs_for(rows, m))
                 self.remember(m, F.get("symbol"), F.get("name"))          # every coin out there counts for the themes
-                h1m = (F.get("chg") or {}).get("h1")
-                if _f(h1m) is not None and (F.get("liq") or 0) >= 10_000:
-                    self.mood.append((now, h1m))
                 pre, why = self._pre(F)
                 c = fresh[m]
                 if why and c["prio"] < 100:
