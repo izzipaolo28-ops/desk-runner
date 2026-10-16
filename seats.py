@@ -84,6 +84,13 @@ class Config:
         self.live = live == "true"
         self.paper_bank_usd = _env_num(env, "PAPER_BANK_USD", 1000, low=1)
         self.min_ticket_usd = _env_num(env, "MIN_TICKET_USD", 5)
+        # A ticket the size cuts (score, fresh launch, early bet, today's dial) shrank under the floor used to be thrown away, so
+        # on a small bank almost nothing could ever be bought. With MIN_TICKET_BUMP=on (default) it is bought AT the floor instead,
+        # but only if the floor is within TICKET_SHARE (6%) of the bank, within 2% of the pool, and inside the real-money cap.
+        bump = str(env.get("MIN_TICKET_BUMP", "on")).strip().lower()
+        if bump not in ("on", "off"):
+            raise ValueError("MIN_TICKET_BUMP must be on or off")
+        self.min_ticket_bump = bump == "on"
         self.max_impact_pct = _env_num(env, "MAX_IMPACT_PCT", 3, high=50)
         self.fee_reserve_sol = _env_num(env, "FEE_RESERVE_SOL", 0.02)
         self.max_daily_loss_pct = _env_num(env, "MAX_DAILY_LOSS_PCT", 20, high=100)
@@ -846,8 +853,12 @@ class Seats:
                 return 0.0, (f"${open_cost:,.2f} already in coins: the {self.cfg.max_exposure_pct:g}% exposure cap "
                              "leaves no room")
             ticket = room
-        if ticket < self.cfg.min_ticket_usd:
-            return 0.0, f"ticket ${ticket:,.2f} is under the ${self.cfg.min_ticket_usd:g} floor"
+        floor = self.cfg.min_ticket_usd
+        if ticket < floor and self.cfg.min_ticket_bump and bank * TICKET_SHARE >= floor and liq * MAX_POOL_SHARE >= floor \
+                and room >= floor and (not self.cfg.live or self.cfg.real_max_ticket_usd >= floor):
+            ticket = floor                           # the cuts took it under the floor: buy the floor, never more than 6% of the bank
+        if ticket < floor:
+            return 0.0, f"ticket ${ticket:,.2f} is under the ${floor:g} floor"
         return round(ticket, 2), None
 
     # ---------- FILLS ----------

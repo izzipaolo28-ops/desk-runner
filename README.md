@@ -409,6 +409,12 @@ the sniper checked, how many passed, and the top reasons the rest were turned do
   dump counts twice), lost more than twice as often as they won, **and lost money overall**. "Scored under 80" is never a
   lesson. (It used to be 2 losses and 48 hours, judged by head count, and could ban nearly every kind of coin.)
   `SNIPE_LESSONS=off` never blocks on them. They are a record of real losses, so turning them off means repeating those buys.
+- `no ticket: ticket $0.95 is under the $5 floor` (the SIZE lines in the feed): the cuts on a ticket (score under 85 x0.7,
+  fresh launch x0.8, early bet x0.5, a weak dial x0.6) stack up to a fraction of a normal ticket. A ticket under
+  `MIN_TICKET_USD` ($5) used to be thrown away, which on a small bank meant nothing could ever be bought. Now it is bought **at
+  the floor** (`MIN_TICKET_BUMP=on`), but only if the floor is no more than 6% of your bank, no more than 2% of the coin's
+  pool, and inside the real-money cap. That needs a bank of about **$84 or more**; below that, set `MIN_TICKET_USD` lower
+  (a $1-2 ticket works on paper, but on real money the network fees are a bigger share of it).
 - `not moving: +3% this hour`: `SNIPE_MIN_H1_PCT` (now 5, was 15). A coin that stays flat is also sold by the fast plan's
   10-minute stall exit.
 `desk_benched` in the same page is the **desk's** side: the coins its own filters and its AI judge ("Jev") turned down and are
@@ -619,6 +625,7 @@ stays paused until you tap **Resume**.
 | `SPEED_PROFILE` | `balanced` | `normal`, `balanced`, `fast` or `turbo`: how often the sniper looks and WATCH reads prices (see "What's new") |
 | `SCALE_OUT` | `100:50,200:25,300:12.5,400:6.25` | the desk's profit ladder: gain% : % of the original bag (`off` = none) |
 | `SNIPE_SCALE_OUT` | `100:50,200:25,300:12.5,400:6.25` | the sniper's profit ladder |
+| `MIN_TICKET_BUMP` | `on` | a ticket the cuts shrank under `MIN_TICKET_USD` is bought at the floor (within 6% of the bank, 2% of the pool), not thrown away |
 | `SNIPE_LESSONS` / `SNIPE_LESSON_LOSSES` / `SNIPE_LESSON_HOURS` | `on` / `4` / `24` | the sniper avoids a coin trait after this many losses in this many hours (`off` = never blocks on lessons) |
 | `SNIPE_VIRAL_HYPE` | `100` | hype (0-100) at the buy that puts a sniper coin in hold mode (`0` = off) |
 | `SNIPE_FAST` | `on` | every non-viral sniper coin uses the fast in-and-out plan |

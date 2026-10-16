@@ -46,7 +46,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-15f: lessons can no longer lock it out, not-moving bar 5%"          # which build is running: the summary page says it
+VERSION = "2026-10-15g: tickets under the floor are bought at the floor"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
