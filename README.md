@@ -404,6 +404,11 @@ the sniper checked, how many passed, and the top reasons the rest were turned do
 - `buyers aren't ahead`, `just ran`, `spiking`, `score ... is under`: the entry timing rules. These are the ones to ease
   (`SNIPE_MIN_BUYERS_X`, `SNIPE_MAX_M5_PCT`, `SNIPE_BUY_SCORE`).
 - `not certified`: that gate is on (`DESK_CERTIFIED=on`). Turn it off.
+`desk_benched` in the same page is the **desk's** side: the coins its own filters and its AI judge ("Jev") turned down and are
+still benched, by reason. `liquidity_fits_ticket` there means the judge said the ticket couldn't be sold into the pool; the
+judge is now asked about the ticket the bot would really buy (cut to 2% of the pool), not the uncut 6% of the bank. If one
+reason dominates, that rule is your blocker (`SOFT_LIQUIDITY_FITS_TICKET=0.45` eases that one; `PRACTICE_MODE=true`, paper
+only, opens the desk's gates so you can watch the whole loop).
 The live feed also lists each stop in plain words ("desk pick stopped by the sniper's checks: ...").
 
 ## Two bots, their own slots

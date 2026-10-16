@@ -46,7 +46,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-15c: easier entry timing (buyers 1.0x, early candle 30%, dial 0.5), why-not tally"          # which build is running: the summary page says it
+VERSION = "2026-10-15d: judge asked about the ticket SIZE really buys, desk_benched on status"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -1238,6 +1238,7 @@ class Runner:
         holding = bool(d.get("positions"))
         full = len(d.get("positions") or []) >= self.cfg.max_positions
         total, desk_n, snipe_n = self.held_counts()
+        d["desk_benched"] = book.bench_counts()          # the desk's own rejections still standing, by reason (liquidity_fits_ticket, ...)
         d["why_not_trading"] = whynot.tally_log(self.state.data, time.time())     # what the last 12 hours of checks said no to
         d.update(slots={"desk": self.cfg.desk_slots, "sniper": self.cfg.snipe_slots, "desk_held": desk_n, "sniper_held": snipe_n,
                         "desk_free": self.desk_slots_free(), "sniper_free": self.snipe_slots_free()},

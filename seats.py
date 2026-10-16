@@ -22,12 +22,11 @@ import learn_exit
 import profiles
 import thresholds
 from jupiter import USDC, WSOL, JupiterError
-from main import TICKET_SHARE
+from main import MAX_POOL_SHARE, TICKET_SHARE
 from solana_wallet import sign_transaction
 
 log = logging.getLogger("seats")
 FEED_MAX = 150
-MAX_POOL_SHARE = 0.02          # SIZE step 3: never more than 2% of the pool, or you are the exit
 LAMPORTS = 1_000_000_000
 
 
