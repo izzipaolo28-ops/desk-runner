@@ -204,7 +204,7 @@ class Config:
         self.snipe_hot_h1_pct = _env_num(env, "SNIPE_HOT_H1_PCT", 150, high=100_000)
         # a coin an hour old or more is bought only if it's already moving this hour (big wins in a short time come from
         # coins in motion; the flat ones were in-and-out for a dollar or two in the simulation). 0 = off
-        self.snipe_min_h1_pct = _env_num(env, "SNIPE_MIN_H1_PCT", 15, low=-100, high=1000)
+        self.snipe_min_h1_pct = _env_num(env, "SNIPE_MIN_H1_PCT", 5, low=-100, high=1000)
         # buyers ahead: the last 5 minutes' buys at least this many times the sells. In the simulation every buy under 1.5x
         # was a coin going sideways (26 of them, -$15 between them); the movers were at 2-3x. 0 = off
         self.snipe_min_buyers_x = _env_num(env, "SNIPE_MIN_BUYERS_X", 1.0, high=100)
@@ -271,6 +271,16 @@ class Config:
         self.snipe_fast_max_hold_hours = _env_num(env, "SNIPE_FAST_MAX_HOLD_HOURS", 3)
         # THE CASH-OUT LINE: a gain at which the whole remaining bag of a fast-plan coin is sold. It starts here and is
         # re-learned from the bot's own closed trades (learn_exit.py). 0 = no line. SNIPE_LEARN=off keeps it fixed.
+        # LESSONS: a trait of the coin at the buy ("under an hour old", "thin liquidity", ...) is avoided for SNIPE_LESSON_HOURS
+        # once coins with it lost SNIPE_LESSON_LOSSES times (a fast dump counts twice), lost more than twice as often as they
+        # won AND lost money overall. Was 2 losses / 48 hours / head count only: after a few bad coins it banned nearly every kind
+        # of coin and stopped trading. SNIPE_LESSONS=off never blocks on them.
+        lessons = str(env.get("SNIPE_LESSONS", "on")).strip().lower()
+        if lessons not in ("on", "off"):
+            raise ValueError("SNIPE_LESSONS must be on or off")
+        self.snipe_lessons = lessons == "on"
+        self.snipe_lesson_losses = int(_env_num(env, "SNIPE_LESSON_LOSSES", 4, low=1, high=50))
+        self.snipe_lesson_hours = _env_num(env, "SNIPE_LESSON_HOURS", 24, low=1, high=720)
         self.snipe_cashout_pct = _env_num(env, "SNIPE_CASHOUT_PCT", 100, high=10_000)
         learn = str(env.get("SNIPE_LEARN", "on")).strip().lower()
         if learn not in ("on", "off"):

@@ -1410,7 +1410,8 @@ class Sniper:
             for k, v in (("checks", []), ("radar", []), ("wallets", []), ("wallet_sigs", {})):
                 self.state.data.setdefault(k, v)
 
-    LESSON_COINS, LESSON_LOSSES, LESSON_HOURS = 15, 2, 48
+    LESSON_COINS = 15
+    LESSON_EXEMPT = {"near_bar"}     # a score band, not a warning: with the bar at 65 it covers nearly every coin, and banning it = a higher bar
 
     def lessons(self):
         """What its own trades taught it. Among both bots' coins closed in the last 48 hours (15 at most), each one
@@ -1418,6 +1419,8 @@ class Sniper:
         thin buyers, a score near the bar, the list it came from...). A tag is avoided from then on when it lost at least
         twice and lost more than twice as often as it won. A fast dump (down 20%+ within 10 minutes of the buy) counts as
         two losses for the warning signs, the things it should have stopped at. {tag: why, with the coins}."""
+        if not self.cfg.snipe_lessons:                     # SNIPE_LESSONS=off: it still records, it never blocks on them
+            return {}
         coins, order, now = {}, [], time.time()
         for i, t in enumerate(self.state.data.get("trades") or []):          # newest first
             if t.get("plan") not in ("snipe", "desk", None):
@@ -1438,7 +1441,7 @@ class Sniper:
             if not (c["final"] and isinstance(c["tags"], list)):
                 continue
             shut, opened = _ts(c["closed"]), _ts(c["opened"])
-            if shut and now - shut > self.LESSON_HOURS * 3600:
+            if shut and now - shut > self.cfg.snipe_lesson_hours * 3600:
                 continue
             held = (shut - opened) / 60 if shut and opened else None
             c["fast"] = bool(c["pnl"] < 0 and c["cost"] and 100 * c["pnl"] / c["cost"] <= -20 and held is not None and held <= 10)
@@ -1446,10 +1449,13 @@ class Sniper:
         done = done[:self.LESSON_COINS]
         out = {}
         for tag in sorted({t for c in done for t in c["tags"]}):
+            if tag in self.LESSON_EXEMPT:
+                continue
             lost = [c for c in done if tag in c["tags"] and c["pnl"] < 0]
             won = [c for c in done if tag in c["tags"] and c["pnl"] > 0]
             weight = sum(2 if c.get("fast") and tag in WARNING_TAGS else 1 for c in lost)
-            if weight >= self.LESSON_LOSSES and len(won) * 2 < weight:
+            net = sum(c["pnl"] for c in done if tag in c["tags"])          # money, not a head count: few big wins can pay for many small losses
+            if weight >= self.cfg.snipe_lesson_losses and len(won) * 2 < weight and net < 0:
                 fast = sum(1 for c in lost if c.get("fast"))
                 out[tag] = (f"{len(lost)} loss{'es' if len(lost) > 1 else ''}"
                             + (f" ({fast} a fast dump, counted twice)" if fast and tag in WARNING_TAGS else "")

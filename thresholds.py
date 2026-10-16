@@ -18,7 +18,7 @@ HARD = {                        # stage 2, arithmetic, runs before anything cost
 SOFT = {                        # applied to Jev's answers, per token
     "concentration_is_exit_risk": ("max", 0.55),
     "momentum_already_spent":     ("max", 0.60),
-    "liquidity_fits_ticket":      ("min", 0.60),
+    "liquidity_fits_ticket":      ("min", 0.40),   # was 0.60: the ticket is already cut to 2% of the pool (seats.size), so this is a second lock
     "account_is_the_project":     ("min", 0.70),
     "recycled_account":           ("max", 0.50),
     "audience_is_real":           ("min", 0.45),

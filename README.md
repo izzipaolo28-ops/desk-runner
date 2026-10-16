@@ -404,10 +404,17 @@ the sniper checked, how many passed, and the top reasons the rest were turned do
 - `buyers aren't ahead`, `just ran`, `spiking`, `score ... is under`: the entry timing rules. These are the ones to ease
   (`SNIPE_MIN_BUYERS_X`, `SNIPE_MAX_M5_PCT`, `SNIPE_BUY_SCORE`).
 - `not certified`: that gate is on (`DESK_CERTIFIED=on`). Turn it off.
+- `learned from its own trades`: the bot's own lessons are blocking it. A trait of the coin ("under an hour old", "thin
+  liquidity") is avoided for 24 hours (`SNIPE_LESSON_HOURS`) once coins with it lost 4 times (`SNIPE_LESSON_LOSSES`; a fast
+  dump counts twice), lost more than twice as often as they won, **and lost money overall**. "Scored under 80" is never a
+  lesson. (It used to be 2 losses and 48 hours, judged by head count, and could ban nearly every kind of coin.)
+  `SNIPE_LESSONS=off` never blocks on them. They are a record of real losses, so turning them off means repeating those buys.
+- `not moving: +3% this hour`: `SNIPE_MIN_H1_PCT` (now 5, was 15). A coin that stays flat is also sold by the fast plan's
+  10-minute stall exit.
 `desk_benched` in the same page is the **desk's** side: the coins its own filters and its AI judge ("Jev") turned down and are
 still benched, by reason. `liquidity_fits_ticket` there means the judge said the ticket couldn't be sold into the pool; the
 judge is now asked about the ticket the bot would really buy (cut to 2% of the pool), not the uncut 6% of the bank. If one
-reason dominates, that rule is your blocker (`SOFT_LIQUIDITY_FITS_TICKET=0.45` eases that one; `PRACTICE_MODE=true`, paper
+reason dominates, that rule is your blocker (`SOFT_LIQUIDITY_FITS_TICKET`, now 0.40, was 0.60, is the bar for that one; `PRACTICE_MODE=true`, paper
 only, opens the desk's gates so you can watch the whole loop).
 The live feed also lists each stop in plain words ("desk pick stopped by the sniper's checks: ...").
 
@@ -612,6 +619,7 @@ stays paused until you tap **Resume**.
 | `SPEED_PROFILE` | `balanced` | `normal`, `balanced`, `fast` or `turbo`: how often the sniper looks and WATCH reads prices (see "What's new") |
 | `SCALE_OUT` | `100:50,200:25,300:12.5,400:6.25` | the desk's profit ladder: gain% : % of the original bag (`off` = none) |
 | `SNIPE_SCALE_OUT` | `100:50,200:25,300:12.5,400:6.25` | the sniper's profit ladder |
+| `SNIPE_LESSONS` / `SNIPE_LESSON_LOSSES` / `SNIPE_LESSON_HOURS` | `on` / `4` / `24` | the sniper avoids a coin trait after this many losses in this many hours (`off` = never blocks on lessons) |
 | `SNIPE_VIRAL_HYPE` | `100` | hype (0-100) at the buy that puts a sniper coin in hold mode (`0` = off) |
 | `SNIPE_FAST` | `on` | every non-viral sniper coin uses the fast in-and-out plan |
 | `SNIPE_FAST_SCALE_OUT` / `SNIPE_FAST_KEEP_PCT` | `15:25,30:25,50:25` / `25` | the fast plan's profit steps and the share kept as the runner |
@@ -659,7 +667,7 @@ stays paused until you tap **Resume**.
 | `DEAD_LOSS_PCT` / `DEAD_MAX_BUYS` / `DEAD_SECONDS` | `3` / `2` / `60` | down this much with this few buys in 5 min (or the sellers 3x the buyers), not rising, this long: out (`0` = off) |
 | `DESK_RED_MINUTES` / `DESK_RED_PCT` | `45` / `8` | a desk coin that never went green this long and is down this much: out |
 | `SNIPE_MAX_RUN_H1_PCT` / `SNIPE_HOT_H1_PCT` | `300` / `150` | up this much in the last hour: wait; up between the two: a hot entry, half the ticket on the fast plan with nothing left riding (`SNIPE_HOT_SCALE_OUT=25:50,50:50`) |
-| `SNIPE_MIN_H1_PCT` | `15` | a coin an hour old or more is bought by the sniper only if it's up this much this hour (`0` = off) |
+| `SNIPE_MIN_H1_PCT` | `5` | a coin an hour old or more is bought by the sniper only if it's up this much this hour (`0` = off) |
 | `SNIPE_MIN_BUYERS_X` | `1.0` | the sniper buys only when the last 5 minutes' buys are at least this many times the sells (`0` = off) |
 | `SNIPE_BOX_MINUTES` / `SNIPE_BOX_GAIN_PCT` | `45` / `25` | the time box: past this, a sniper coin that isn't up this much is sold |
 | `DESK_BOX_MINUTES` / `DESK_BOX_GAIN_PCT` | `120` / `20` | the desk's time box |
