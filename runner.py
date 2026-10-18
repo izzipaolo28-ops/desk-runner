@@ -45,7 +45,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-18 split in 2"          # which build is running: the summary page says it
+VERSION = "2026-10-18 split in 2, whole part"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -1163,7 +1163,8 @@ class Runner:
                 if self.cfg.live:
                     part = min(part, self.cfg.real_max_ticket_usd)
                 self.state.agent("size", f"split {self.cfg.split_coins} ways: ${part:,.2f} a coin (${bank + in_coins:,.2f} / "
-                                         f"{self.cfg.split_coins}); careful or early: half; score under 85: x0.7"
+                                         f"{self.cfg.split_coins})" + ("; careful or early: half; score under 85: x0.7" if self.cfg.split_cuts
+                                                                          else "; every coin that passes gets its whole part")
                                  + (f"; max ${self.cfg.real_max_ticket_usd:g} a buy" if self.cfg.live else ""),
                                  part, "a coin")
             elif _f(bank) is not None:

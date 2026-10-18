@@ -115,6 +115,9 @@ class Config:
         self.split_coins = 0 if raw in ("off", "0", "no", "none", "") else int(_env_num(env, "SPLIT_COINS", 2, low=1, high=10))
         if self.split_coins:
             self.max_positions = self.split_coins
+        # SPLIT_CUTS: with SPLIT_COINS on, a coin that passes gets its WHOLE part ("off", the default). "on" = the old
+        # behaviour: caution, no X account, data dark and the dial all shrink the part (they stacked to $4.68 of a $23 part).
+        self.split_cuts = str(env.get("SPLIT_CUTS", "off")).strip().lower() in ("on", "1", "yes", "true")
         self.max_exposure_pct = _env_num(env, "MAX_EXPOSURE_PCT", 25, low=1, high=100)   # all coins together
         # the two bots share the slots: the desk (normal coins, Jev's picks) and the sniper (early coins) each get their own.
         # Unless set, they follow MAX_POSITIONS: 60% the desk's, the rest the sniper's (5 -> 3 and 2).
@@ -825,7 +828,8 @@ class Seats:
         split = self.cfg.split_coins
         if split:                                # SPLIT_COINS: all the money in N equal parts, one part per coin; a
             part = (bank + open_cost) / split    # careful buy, an early bet or a weaker score takes less of its part
-            ticket = min(part * min(1.0, factor), liq * MAX_POOL_SHARE)
+            share = min(1.0, factor) if self.cfg.split_cuts else 1.0      # SPLIT_CUTS=off: a coin that passed gets its whole part
+            ticket = min(part * share, liq * MAX_POOL_SHARE)
         else:
             ticket = min(bank * TICKET_SHARE * factor, liq * MAX_POOL_SHARE)
         if self.cfg.live:                        # real money: a hard cap on every single buy
@@ -837,7 +841,12 @@ class Seats:
                              f"the {self.cfg.max_exposure_pct:g}% exposure cap leaves no room"))
             ticket = room
         if ticket < self.cfg.min_ticket_usd:
-            return 0.0, f"ticket ${ticket:,.2f} is under the ${self.cfg.min_ticket_usd:g} floor"
+            # the cuts shrank it under the floor but the money and the pool can take the floor: buy the floor, don't skip
+            fits = min(room, liq * MAX_POOL_SHARE) >= self.cfg.min_ticket_usd and (not self.cfg.live or
+                                                                                     self.cfg.real_max_ticket_usd >= self.cfg.min_ticket_usd)
+            if not fits:
+                return 0.0, f"ticket ${ticket:,.2f} is under the ${self.cfg.min_ticket_usd:g} floor"
+            ticket = self.cfg.min_ticket_usd
         return round(ticket, 2), None
 
     # ---------- FILLS ----------

@@ -595,6 +595,7 @@ stays paused until you tap **Resume**.
 | `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
 | `SPLIT_COINS` | `2` | all the money split into this many equal parts, one per coin, at most this many coins at once (`off`: the old sizing, `MAX_POSITIONS` and `MAX_EXPOSURE_PCT`) |
+| `SPLIT_CUTS` | `off` | with `SPLIT_COINS` on: `off` = a coin that passes gets its whole part; `on` = caution, no X account, data dark and the dial shrink the part (never under `MIN_TICKET_USD`: a cut ticket under the floor is bought at the floor when it fits) |
 | `MAX_POSITIONS` | `5` | coins held at once (1 to 10), when `SPLIT_COINS=off` |
 | `MAX_EXPOSURE_PCT` | `25` | all coins together, as % of cash + coins, when `SPLIT_COINS=off` |
 | `TEST_SWAP_USD` | `1` | size of the Test swap round trip, $0.50 to $20 |
