@@ -21,7 +21,6 @@ CHAIN_DOSSIER  = 3          # Solana coins past those: a dossier from the chain 
                             # scan doesn't stop at the 4th good coin while 30 more wait
 DEX_BUDGET     = 25         # DexScreener calls per cycle, pass two only. If 429s keep coming: lower it
 TICKET_SHARE   = 0.06       # the most SIZE could ever allow, as a share of free cash
-MAX_POOL_SHARE = 0.02       # SIZE step 3: never more than 2% of the pool, or you are the exit (seats.py uses this too)
 JUDGE_LOG      = os.environ.get("JUDGE_LOG", "judge_log.jsonl")
 NOT_THE_TOKENS_FAULT = {"dex_rate_limited", "trade_data_unavailable"}   # never benched
 log = logging.getLogger("desk")
@@ -142,7 +141,7 @@ def run_once(fomo, judge, desk, bank, shadow=True):
                 _count(stats, "chain", k)
                 continue
 
-            d["intended_ticket_usd"] = intended_ticket(bank, d.get("liquidity_usd"))   # what SIZE would really buy
+            d["intended_ticket_usd"] = round(bank * TICKET_SHARE, 2)
             try:
                 d["x_account"] = desk.read_x(d["x_handle"]) if d["x_handle"] else None
             except Exception as exc:             # missing is missing: no substitute account, smaller ticket
@@ -184,16 +183,6 @@ def run_once(fomo, judge, desk, bank, shadow=True):
 
     book.take(order)          # the desk is now held. No scan until RISK calls release().
     return order, stats
-
-
-def intended_ticket(bank, liquidity_usd):
-    """The ticket the judge is asked to fit into the pool: the one SIZE will really buy, which is already cut to 2% of
-    the pool (seats.Seats.size). Asking about the uncut 6% of the bank made it say "doesn't fit" for coins the bot
-    would have bought small anyway. Unknown liquidity: the uncut ticket (the judge answers "no evidence" as before)."""
-    ticket = bank * TICKET_SHARE
-    if isinstance(liquidity_usd, (int, float)) and not isinstance(liquidity_usd, bool) and liquidity_usd > 0:
-        ticket = min(ticket, liquidity_usd * MAX_POOL_SHARE)
-    return round(ticket, 2)
 
 
 def main(fomo, judge, desk, shadow=True):

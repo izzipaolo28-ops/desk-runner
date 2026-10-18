@@ -378,15 +378,6 @@ details.pc .inner{padding:4px 8px 8px}
       The buttons need your ADMIN_TOKEN.</p>
   </section>
 
-
-  <section class="panel" id="narrativePanel" aria-label="Narrative scanner">
-    <h2>12H NARRATIVE RADAR <span class="muted" id="narrativeMeta">X + NEWS</span></h2>
-    <p class="muted" style="font-size:12px">Research leads only. Suggested tickers are naming ideas, not verified listings. This panel never buys tokens.</p>
-    <button class="btn go" type="button" id="narrativeScanBtn">Scan X + news · last 12 hours</button>
-    <div class="msg" id="narrativeMsg" role="status"></div>
-    <div id="narrativeResults" style="display:grid;gap:10px;margin-top:10px"></div>
-  </section>
-
   <section class="cards" id="cards" aria-label="Seats"></section>
 
   <section class="floorwrap" aria-label="The floor">
@@ -992,8 +983,11 @@ function planBlock(p, W, i, n, bare){
       + ` if it's still falling ${W.fail_m5_pct}%+ in 5 min, in its first ${W.fail_minutes} min`]] : []),
     ...(W.stall_minutes ? [["no momentum", `out if it hasn't made +${W.stall_gain_pct}% within ${W.stall_minutes} min`]] : []),
     ...((p.why_bought || []).length ? [["why it bought", p.why_bought.join(" · ")]] : []),
-    ...(p.early ? [["fast plan", (p.fast_why && p.fast_why.startsWith("hot") ? `a ${p.fast_why}` : `an early bet, bought under ${mcap(num(W.under_mcap_usd))}`)
+    ...(p.early ? [["fast plan", (p.fast_why && p.fast_why.startsWith("hot") ? `a ${p.fast_why}` : p.fast_why && p.fast_why.startsWith("caution")
+        ? `bought with caution (${p.fast_why.slice(9).trim()})` : `an early bet, bought under ${mcap(num(W.under_mcap_usd))}`)
       + `: half the ticket, out at -${W.stop_loss_pct}%, profits taken fast, ` + (num(W.keep_pct) ? `the last ${W.keep_pct}% rides` : "nothing left riding")]] : []),
+    ...(!p.early && p.ride ? [["the ride", `a 10/10 coin: the full ticket, profit in steps (${(W.ladder || []).map(([g, s]) => `+${g}%: ${s}%`).join(", ")}), `
+      + `the last ${W.keep_pct}% rides to a big market cap: out ${W.runner_trail_pct}% off its best, never under +50% once it has doubled`]] : []),
     ...(W.box_minutes ? [["time box", `past ${W.box_minutes} min it holds only a coin up +${W.box_gain_pct}% or more (on its way to a 2x): otherwise out`]] : []),
     ["bought by", p.plan === "snipe" ? "the sniper" + (p.source ? ` (${p.source})` : "") + (num(p.score) !== null ? `, score ${p.score}/100` : "") : "the desk (Jev's pick)"],
     ["volume ratio", num(p.last_ratio) === null ? "not checked yet" : p.last_ratio.toFixed(2) + " (sells all under 0.20)"]];
@@ -1851,8 +1845,8 @@ function render(d){
     sm.append(tt, el("span", "m", `MC ${mcap(n.entry)} → ${mcap(n.now)}`),
       el("b", n.g === null ? "" : n.g >= 0 ? "pos" : "neg", pcTxt(n.g)), el("b", n.pnl === null ? "" : n.pnl >= 0 ? "pos" : "neg", n.pnl === null ? "P&L —" : signed(n.pnl)));
     det.appendChild(sm);
-    const Wq = q.plan === "snipe" ? Object.assign({}, W, W.snipe || {}, q.early ? W.early || {} : {},
-      q.early && String(q.fast_why || "").startsWith("hot") ? W.hot || {} : {}) : W;   // a sniper buy runs the sniper's exits (fast plans their own)
+    const Wq = Object.assign({}, W, q.plan === "snipe" ? W.snipe || {} : {}, q.early ? W.early || {} : {},   // a sniper buy runs the sniper's exits,
+      q.early && String(q.fast_why || "").startsWith("hot") ? W.hot || {} : {}, !q.early && q.ride ? W.ride || {} : {});   // fast plans and rides their own
     const inner = el("div", "inner");
     const sb = el("button", "btn sellbtn", "Sell all now"); sb.type = "button";
     sb.addEventListener("click", () => { const live = lastStatus && lastStatus.mode === "live";
@@ -1890,8 +1884,11 @@ function render(d){
     if (num(t.mcap_in) !== null || num(t.mcap_out) !== null){ const m = el("div", "muted"); m.style.fontSize = "10px"; m.textContent = `MC ${mcap(num(t.mcap_in))} → ${mcap(num(t.mcap_out))}`; tk.appendChild(m); }
     tr.append(el("td", "muted", (t.closed_at || "").slice(5, 16).replace("T", " ")), tk, el("td", "", usd(num(t.cost_usd))), el("td", "", usd(num(t.proceeds_usd))),
       el("td", pnl === null ? "" : pnl >= 0 ? "pos" : "neg", signed(pnl)), el("td", "muted", t.reason || ""));
-    if ((t.review || []).length){ const w = el("div", "review"); w.textContent = "why it lost: " + t.review.join("; ");
-      tr.lastChild.appendChild(w); }
+    const rv = (t.review || []).filter(x => !String(x).startsWith("next time")), nx = (t.review || []).find(x => String(x).startsWith("next time"));
+    if (rv.length){ const w = el("div", "review"); w.textContent = "why it lost: " + rv.join("; "); tr.lastChild.appendChild(w); }
+    if (nx){ const w = el("div", "review"); w.style.color = "#fde68a"; w.textContent = nx; tr.lastChild.appendChild(w); }
+    if ((t.cautions || []).length){ const w = el("div", "muted"); w.style.fontSize = "10px"; w.textContent = "bought with caution: " + t.cautions.slice(0, 2).join("; "); tr.lastChild.appendChild(w); }
+    else if (t.ride){ const w = el("div", "muted"); w.style.fontSize = "10px"; w.textContent = "a 10/10 ride"; tr.lastChild.appendChild(w); }
     tb.appendChild(tr);
   }
   if (!trades.length){ const tr = el("tr"), td = el("td", "muted", "no closed trades yet"); td.colSpan = 6; tr.appendChild(td); tb.appendChild(tr); }
@@ -2032,13 +2029,17 @@ function sniperRender(d){
   $("deskNote").textContent = SL.desk !== undefined ? `${SL.desk_held}/${SL.desk} DESK SLOTS` : "";
   const deskBits = [];
   if (d.paused) deskBits.push("paused: tap Resume");
+  else if (d.desk_resting && d.entry_mode === "learn") deskBits.push(`after ${d.desk_resting.why}: its picks until ${d.desk_resting.at} are bought small, on the fast plan`);
   else if (d.desk_resting) deskBits.push(`RESTING after ${d.desk_resting.why}: no desk picks until ${d.desk_resting.at}`);
   else if (SL.desk_free === false && (d.desk_waiting || []).length) deskBits.push("its pick is waiting for a good entry: no new scan until it buys or drops it");
   else if (SL.desk_free === false) deskBits.push(SL.desk_held >= SL.desk
     ? `its ${SL.desk} slot${SL.desk === 1 ? " is" : "s are"} full: the next scan starts when one of its coins sells`
     : `all ${d.max_positions} slots are taken: the next scan starts when a coin sells`);
   else deskBits.push("scans for normal coins every " + Math.round((d.cycle_seconds || 300) / 60) + " min" + (leftS !== null ? (leftS > 0 ? ` · next scan in ${Math.floor(leftS / 60)}:${String(leftS % 60).padStart(2, "0")}` : " · scanning now or any second") : ""));
-  const DS = d.desk_sources || {}, DL = d.dial || {};
+  const DS = d.desk_sources || {}, DL = d.dial || {}, CA = d.caution || {};
+  if (d.entry_mode === "learn") deskBits.push(`entry rules: LEARN. A coin that trips one is still bought, at ${CA.size ?? 0.5}x the ticket on the fast plan`
+    + ` (up to ${CA.max ?? 3} warnings at once); only the scam checks, a map it can't read, nobody buying, sellers ahead and a dump say no. A 10/10 coin rides`);
+  else if (d.entry_mode === "strict") deskBits.push("entry rules: STRICT. Every entry rule says no (ENTRY_MODE=learn trades them small instead)");
   if (DL.on && num(DL.value) !== null) deskBits.push(`today's dial ${DL.value.toFixed(2)}: ` + (DL.value < 1 ? `every ticket x${DL.value.toFixed(2)}` : "full tickets")
     + (num(DL.early_min) !== null && DL.value < DL.early_min ? `, no early bets (they need ${DL.early_min})` : "") + ` (${(DL.why || []).join(" · ")})`);
   (d.desk_waiting || []).forEach(w => deskBits.push(`waiting for a retrace or a breakout on $${clip(w.ticker || w.mint.slice(0, 5), 10)} (picked at MC ${mcap(num(w.mcap0))}`
@@ -2061,7 +2062,8 @@ function sniperRender(d){
   const note = S.note || {};
   $("laneNote").textContent = (S.last_round ? `last look ${ago(S.last_round)} ago · ${note.candidates ?? 0} candidates · ${note.checked ?? 0} checked deep` : mode === "off" ? "off" : "first look soon")
     + ((S.confirming || []).length ? ` · second look on ${S.confirming.map(c => "$" + clip(c.ticker || c.mint.slice(0, 5), 10)).join(", ")}` : "")
-    + (S.cooling ? ` · RESTING after ${S.cooling.why}: no fast-lane buys until ${S.cooling.at}` : "")
+    + (S.cooling ? (d.entry_mode === "learn" ? ` · after ${S.cooling.why}: fast-lane buys until ${S.cooling.at} are small, on the fast plan`
+      : ` · RESTING after ${S.cooling.why}: no fast-lane buys until ${S.cooling.at}`) : "")
     + (d.dial && d.dial.on && num(d.dial.value) !== null && d.dial.value < 1 ? ` · dial ${d.dial.value.toFixed(2)}` + (d.dial.value < (d.dial.early_min ?? 0) ? ": no early bets today" : "") : "");
   const rb = $("radar"), radar = d.radar || [], rkey = radar.map(x => x.mint + (x.verdict || "") + (x.score ?? "")).join("|") + Math.floor(Date.now() / 30000);
   if (rb.dataset.key !== rkey){ rb.dataset.key = rkey; rb.textContent = "";
@@ -2298,32 +2300,6 @@ $("testBtn").addEventListener("click", () => {
   if (live && !confirm(`REAL MONEY: swap about $${amt.toFixed(2)} of the bot wallet's SOL to USDC and straight back. Fees are a few cents. Go?`)) return;
   admin("/api/test-swap");
 });
-
-async function renderNarratives(){
-  const btn = $("narrativeScanBtn"), msg = $("narrativeMsg"), out = $("narrativeResults"), meta = $("narrativeMeta");
-  btn.disabled = true; msg.textContent = "Scanning X and recent news…"; out.replaceChildren();
-  try {
-    const r = await admin("/api/narratives", null, "narrativeMsg");
-    if (!r || !r.ok) { msg.textContent = (r && r.text) || "Scan failed. Check Railway logs and X_BEARER_TOKEN."; return; }
-    const data = r.body || {};
-    meta.textContent = data.x_configured ? "X + NEWS · 12H" : "NEWS ONLY · ADD X_BEARER_TOKEN";
-    msg.textContent = `${data.narratives.length} narratives · ${data.sources_seen} unique items · generated ${new Date(data.generated_at).toLocaleTimeString()}`;
-    if (!data.narratives.length) { out.appendChild(el("p", "muted", "No usable narrative signals found in the last 12 hours. Try again later or configure X access.")); return; }
-    data.narratives.forEach((n, i) => {
-      const card = el("div", "panel"); card.style.padding = "12px";
-      const head = el("h3", "", `${i+1}. ${n.category.toUpperCase()} · EARLY ${n.early_score}/10 · STRONG ${n.strength_score}/10`); card.appendChild(head);
-      card.appendChild(el("p", "", n.core_meme));
-      card.appendChild(el("p", "muted", `Ticker ideas: ${n.ticker_ideas.map(t=>"$"+t).join(" · ")} (unverified suggestions)`));
-      card.appendChild(el("p", "muted", `Evidence: ${n.evidence_count} items · ${n.x_posts} X · ${n.news_items} news · rank ${n.rank_score}`));
-      card.appendChild(el("p", "", `What would kill it: ${n.kill_conditions}`));
-      (n.evidence || []).slice(0,3).forEach(e => { const a = el("a", "muted", `${e.source.toUpperCase()}: ${e.text}`); a.href=e.url; a.target="_blank"; a.rel="noopener noreferrer"; a.style.display="block"; a.style.marginTop="6px"; card.appendChild(a); });
-      out.appendChild(card);
-    });
-  } catch(e) { msg.textContent = "Narrative scan failed. Check X_BEARER_TOKEN and Railway service logs."; }
-  finally { btn.disabled = false; }
-}
-$("narrativeScanBtn").addEventListener("click", renderNarratives);
-
 setInterval(() => {
   const n = new Date(); $("clock").textContent = n.toISOString().slice(11, 16) + " UTC";
   if (F.clock){ F.clock.textContent = n.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", hour12: false});

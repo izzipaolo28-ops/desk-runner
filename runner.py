@@ -20,8 +20,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path 
-from narrative_scanner import scan_narratives
+from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 # where the desk keeps what must survive a redeploy: DATA_DIR if set, else the Railway volume, else ./data
@@ -46,7 +45,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-15g: tickets under the floor are bought at the floor"          # which build is running: the summary page says it
+VERSION = "2026-10-17 learn mode"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -108,13 +107,14 @@ try:
 except ValueError:
     TEST_SWAP_USD = 1.0
 DESK_GATE = "off" if os.environ.get("DESK_GATE", "on").strip().lower() == "off" else "on"
-import whynot  # noqa: E402
-import certify  # noqa: E402  (the desk's "certified" safety gate)
-CERT_LIMITS = certify.limits_from_env()
 try:
     DESK_GATE_SCORE = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_SCORE", "65"))))
 except ValueError:
     DESK_GATE_SCORE = 65.0
+try:                    # learn mode: a desk pick scoring under DESK_GATE_SCORE but at least this is bought with caution
+    DESK_GATE_FLOOR = max(0.0, min(100.0, float(os.environ.get("DESK_GATE_FLOOR", "45"))))
+except ValueError:
+    DESK_GATE_FLOOR = 45.0
 # The night of Oct 13-14: the desk's picks were most of the losses (Catnip, Altai, Buddy, DOPE, ARCADES, ROSE): scores
 # of 42-61 against a bar of 25, buyers only 1.0-1.2x the sellers, micro caps on $26-28K pools, bought right after a
 # +17-28% candle. The desk now holds its picks to the sniper's standard.
@@ -143,14 +143,18 @@ try:
     DESK_BREAKOUT_PCT = max(0.0, min(100.0, float(os.environ.get("DESK_BREAKOUT_PCT", "10"))))
 except ValueError:
     DESK_RETRACE_PCT, DESK_RETRACE_MINUTES, DESK_RETRACE_MAX_DROP, DESK_BREAKOUT_PCT = 8.0, 45.0, 20.0, 10.0
+try:
+    DESK_LEARN_ENTRY_MINUTES = max(1.0, min(240.0, float(os.environ.get("DESK_LEARN_ENTRY_MINUTES", "15"))))
+except ValueError:
+    DESK_LEARN_ENTRY_MINUTES = 15.0
 # THE DIAL: how hard to push today, 0.4 to 1, from the bots' own last 24 hours, today's losses and how the hot coins are
 # doing this hour. Every automatic ticket is multiplied by it; under DIAL_EARLY_MIN there are no early bets that day.
 DIAL = "off" if os.environ.get("DIAL", "on").strip().lower() == "off" else "on"
 try:
     DIAL_MIN = max(0.1, min(1.0, float(os.environ.get("DIAL_MIN", "0.4"))))
-    DIAL_EARLY_MIN = max(0.0, min(1.0, float(os.environ.get("DIAL_EARLY_MIN", "0.5"))))
+    DIAL_EARLY_MIN = max(0.0, min(1.0, float(os.environ.get("DIAL_EARLY_MIN", "0.75"))))
 except ValueError:
-    DIAL_MIN, DIAL_EARLY_MIN = 0.4, 0.5
+    DIAL_MIN, DIAL_EARLY_MIN = 0.4, 0.75
 SCAN_NOW_COOLDOWN = 60          # seconds: "Scan now" can't fire twice inside a minute (GeckoTerminal, Jev credits)
 GATE_RETRY_SECONDS = 60         # the desk's pick failed the safety checks: the next scan starts this soon
 
@@ -441,49 +445,70 @@ class Runner:
         ratio = (rep.get("flow") or {}).get("ratio15")
         m5 = ((rep.get("facts") or {}).get("chg") or {}).get("m5")
         h1 = ((rep.get("facts") or {}).get("chg") or {}).get("h1")
-        blind = next((w for w in rep.get("wait") or [] if w.startswith("the bubble map couldn't be read")), None)
-        ran = next((w for w in rep.get("wait") or [] if w.startswith("it just ran")), None)
-        learned = next((w for w in rep.get("wait") or [] if w.startswith("learned from its own trades")), None)
+        learn = self.cfg.learn
+        said = list(rep.get("wait") or []) + list(rep.get("cautions") or [])
+        blind = next((w for w in said if w.startswith("the bubble map couldn't be read")), None)
+        ran = next((w for w in said if w.startswith("it just ran")), None)
+        learned = next((w for w in said if w.startswith("learned from its own trades")), None)
         b5 = (((rep.get("facts") or {}).get("buys") or {}).get("m5"))
         s5 = (((rep.get("facts") or {}).get("sells") or {}).get("m5"))
         mc = _f((rep.get("facts") or {}).get("mcap"))
+        score = rep.get("score") or 0
+        num = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+        # (hard, why) in order. STRICT: the first one found says no. LEARN: only the hard ones say no (a rug check, a map
+        # it couldn't read, nobody buying, sellers ahead, dumping right now, a very low score); the rest are cautions: it buys
+        # at half the ticket on the fast plan, and the trade's result teaches it.
+        found = []
         if rep["verdict"] == "SKIP":
-            ok, why = False, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"
-        elif blind:
-            ok, why = False, blind[:160]
-        elif ran:
-            ok, why = False, ran[:160]
-        elif learned:
-            ok, why = False, learned[:160]
-        elif isinstance(b5, int) and b5 < DESK_MIN_BUYS_5M:
-            ok, why = False, (f"nobody is buying it right now ({b5} buys vs {s5 if s5 is not None else '?'} sells in 5 min): "
-                              "a coin nobody buys only falls")
-        elif mc is not None and DESK_MIN_MCAP_USD > 0 and mc < DESK_MIN_MCAP_USD:
-            ok, why = False, (f"a micro cap (MC {snipe.money(mc)}, under {snipe.money(DESK_MIN_MCAP_USD)}): those are the sniper's "
-                              "early bets, with their stricter checks and half the ticket")
-        elif (isinstance(b5, int) and isinstance(s5, int) and s5 > 0 and DESK_MIN_BUYERS_X > 0 and b5 < s5 * DESK_MIN_BUYERS_X):
-            ok, why = False, f"buyers aren't clearly ahead ({b5} buys vs {s5} sells in 5 min, it wants {DESK_MIN_BUYERS_X:g}x)"
-        elif isinstance(m5, (int, float)) and DESK_MAX_M5_PCT > 0 and m5 >= DESK_MAX_M5_PCT:
-            ok, why = False, f"it's spiking right now ({m5:+.1f}% in 5 min): not buying the top of the candle"
-        elif isinstance(h1, (int, float)) and h1 <= -25:
-            ok, why = False, f"it's a falling knife: {h1:+.0f}% this hour (a bounce in a falling coin isn't an entry)"
-        elif isinstance(m5, (int, float)) and self.cfg.snipe_max_m5_pct > 0 and m5 >= self.cfg.snipe_max_m5_pct:
-            ok, why = False, f"it's spiking right now ({m5:+.1f}% in 5 min): not buying the top of the candle"
-        elif (isinstance(m5, (int, float)) and m5 <= -8) or (isinstance(ratio, (int, float)) and ratio < 0.7):
-            ok, why = False, "it's dumping right now" + (f" ({m5:+.1f}% in 5 min)" if isinstance(m5, (int, float)) and m5 <= -8 else
-                                                          f" (sellers {1 / ratio:.1f}x buyers over 15 min)" if ratio else "")
-        elif (rep.get("score") or 0) < DESK_GATE_SCORE:
-            ok, why = False, f"sniper score {rep.get('score')} is under {DESK_GATE_SCORE:g}"
+            found.append((True, "; ".join(rep.get("veto") or [])[:160] or "a rug check failed"))
+        if blind:
+            found.append((True, blind[:160]))
+        if ran:
+            found.append((False, ran[:160]))
+        if learned:
+            found.append((False, learned[:160]))
+        if isinstance(b5, int) and b5 < DESK_MIN_BUYS_5M:
+            found.append((True, f"nobody is buying it right now ({b5} buys vs {s5 if s5 is not None else '?'} sells in 5 min): "
+                                "a coin nobody buys only falls"))
+        if mc is not None and DESK_MIN_MCAP_USD > 0 and mc < DESK_MIN_MCAP_USD:
+            found.append((False, f"a micro cap (MC {snipe.money(mc)}, under {snipe.money(DESK_MIN_MCAP_USD)}): those are the "
+                                 "sniper's early bets, with their stricter checks and half the ticket"))
+        if learn and isinstance(b5, int) and isinstance(s5, int) and s5 > 0 and b5 < s5:
+            found.append((True, f"sellers are ahead right now ({b5} buys vs {s5} sells in 5 min)"))
+        elif isinstance(b5, int) and isinstance(s5, int) and s5 > 0 and DESK_MIN_BUYERS_X > 0 and b5 < s5 * DESK_MIN_BUYERS_X:
+            found.append((False, f"buyers aren't clearly ahead ({b5} buys vs {s5} sells in 5 min, it wants {DESK_MIN_BUYERS_X:g}x)"))
+        spike = min([x for x in (DESK_MAX_M5_PCT, self.cfg.snipe_max_m5_pct) if x > 0] or [0])
+        if num(m5) and spike > 0 and m5 >= spike:
+            found.append((False, f"it's spiking right now ({m5:+.1f}% in 5 min): not buying the top of the candle"))
+        if num(h1) and h1 <= -25:
+            found.append((False, f"it's a falling knife: {h1:+.0f}% this hour (a bounce in a falling coin isn't an entry)"))
+        if (num(m5) and m5 <= -8) or (num(ratio) and ratio < 0.7):
+            found.append((True, "it's dumping right now" + (f" ({m5:+.1f}% in 5 min)" if num(m5) and m5 <= -8 else
+                                                             f" (sellers {1 / ratio:.1f}x buyers over 15 min)" if ratio else "")))
+        rest = self.sniper.cooling(plan="desk", streak=DESK_LOSS_STREAK, minutes=DESK_COOLDOWN_MINUTES) if learn else None
+        if rest:                                         # learn mode: after a losing streak it buys small, it doesn't stop
+            found.append((False, f"right after {rest['why']}"))
+        if score < DESK_GATE_SCORE:
+            found.append((not learn or score < DESK_GATE_FLOOR, f"sniper score {rep.get('score')} is under {DESK_GATE_SCORE:g}"
+                          + (f" (and under {DESK_GATE_FLOOR:g}, the floor in learn mode)" if learn and score < DESK_GATE_FLOOR else "")))
+        cautions = []
+        if not learn:
+            ok, why = (False, found[0][1]) if found else (True, f"sniper score {rep.get('score')}")
         else:
-            ok, why = True, f"sniper score {rep.get('score')}"
-        rep["certified"] = False
-        if ok and self.cfg.desk_certified:
-            cert_ok, cert_no = certify.certify(rep, CERT_LIMITS)       # every check read and passed, or no buy
-            rep["certified"], rep["cert_no"] = cert_ok, cert_no
-            if not cert_ok:
-                ok, why = False, "not certified: " + "; ".join(cert_no[:4])[:200]
+            hard = [w for h, w in found if h]
+            cautions = list(dict.fromkeys([w for h, w in found if not h] + [c for c in rep.get("cautions") or []
+                                                                             if not c.startswith(("it just ran", "learned from"))]))
+            if hard:
+                ok, why = False, hard[0]
+            elif len(cautions) > self.cfg.caution_max:
+                ok, why = False, f"{len(cautions)} warnings at once (it buys with up to {self.cfg.caution_max:g}): " + "; ".join(cautions[:3])
+            elif cautions and self.caution_room("desk"):
+                ok, why = False, self.caution_room("desk") + f" (careful: {cautions[0][:90]})"
             else:
-                why += ", certified"
+                ok, why = True, f"sniper score {rep.get('score')}" + (f", {len(cautions)} caution(s): bought small and fast"
+                                                                      if cautions else "")
+        if ok:
+            self._careful(order, rep, cautions)
         self._gate_rep = rep
         rep["action"] = ("desk pick: passed the sniper's checks" + (", waiting for a retrace" if DESK_RETRACE_PCT > 0 else ", buying")
                          if ok else f"desk pick not bought: {why}")
@@ -491,6 +516,27 @@ class Runner:
         if not ok:
             self.state.feed("chief", "cut", f"desk pick stopped by the sniper's checks: {why}", tok.get("ticker"), tok["address"])
         return ok, why
+
+    def _careful(self, order, rep, cautions):
+        """Learn mode: a desk pick that tripped an entry rule is bought at CAUTION_SIZE of the ticket on the fast plan.
+        A 10/10 pick with nothing to be careful about (score 90+, hype 80+, buyers 2x+) gets the full ticket and rides."""
+        order["cautions"] = [str(c)[:160] for c in cautions][:4]
+        if cautions:
+            order["size_factor"] = round((_f(order.get("size_factor")) or 1.0) * self.cfg.caution_size, 3)
+            order["early"] = True
+            order["fast_why"] = "caution: " + str(cautions[0])[:120]
+            order["size_cuts"] = list(order.get("size_cuts") or []) + [f"bought with caution ({str(cautions[0])[:80]}): "
+                                                                      f"{self.cfg.caution_size:g}x"]
+            return
+        F = rep.get("facts") or {}
+        b5, s5 = (F.get("buys") or {}).get("m5"), (F.get("sells") or {}).get("m5")
+        bx = b5 / s5 if isinstance(b5, int) and isinstance(s5, int) and s5 else (99.0 if b5 else None)
+        hype = _f((rep.get("hype") or {}).get("score"))
+        if (self.cfg.learn and (rep.get("score") or 0) >= self.cfg.ride_score and hype is not None and hype >= self.cfg.ride_hype
+                and bx is not None and bx >= self.cfg.ride_buyers_x):
+            order["ride"] = True
+            order["size_cuts"] = list(order.get("size_cuts") or []) + [f"a 10/10 coin (score {rep.get('score')}, hype {hype:.0f}, "
+                                                                      f"buyers {bx:.1f}x): profit in steps, 30% rides"]
 
     # ---------- MONEY: FAKE (paper) or REAL (the bot wallet's SOL), your wallet, funding, withdrawals ----------
     def money_mode(self):
@@ -838,6 +884,23 @@ class Runner:
         snipe = sum(1 for p in ps if p.get("plan") == "snipe")
         return len(ps), len(ps) - snipe, snipe
 
+    def free_slots(self, plan):
+        """How many more coins this bot ("desk" or "snipe") may buy right now."""
+        total, desk, snipe = self.held_counts()
+        waiting = len(self.pending_desk)
+        own = self.cfg.desk_slots - desk - waiting if plan == "desk" else self.cfg.snipe_slots - snipe
+        return max(0, min(self.cfg.max_positions - total - waiting, own))
+
+    def caution_room(self, plan):
+        """Learn mode: a cautious buy never takes a bot's last CAUTION_RESERVE free slots (kept for a clean BUY),
+        unless the bot has only that many slots in all. None = room; else why not."""
+        keep = int(self.cfg.caution_reserve)
+        slots = self.cfg.desk_slots if plan == "desk" else self.cfg.snipe_slots
+        if keep <= 0 or slots <= keep or self.free_slots(plan) > keep:
+            return None
+        return (f"a cautious buy never takes the {'desk' if plan == 'desk' else 'sniper'}'s last "
+                + (f"{keep} free slots" if keep > 1 else "free slot") + ": kept for a clean BUY")
+
     def desk_slots_free(self):
         total, desk, _ = self.held_counts()
         waiting = len(self.pending_desk)                  # a pick waiting for its retrace holds its slot
@@ -853,9 +916,14 @@ class Runner:
                                              "mcap0": _f(F.get("mcap")) or _f((order.get("facts") or {}).get("mcap_usd")), "ticker": tok.get("ticker"), "last": None, "strong": 0}
         if not self.state.positions():
             book.release()                               # nothing bought yet: taken again when it's bought
-        self.state.feed("chief", "info", f"picked at MC {snipe.money(self.pending_desk[tok['address']]['mcap0'])}: waiting up to {DESK_RETRACE_MINUTES:g} min for a "
+        self.state.feed("chief", "info", f"picked at MC {snipe.money(self.pending_desk[tok['address']]['mcap0'])}: waiting up to {self.entry_minutes():g} min for a "
                         f"{DESK_RETRACE_PCT:g}%+ pullback and a bounce before buying (it doesn't buy the top)", tok.get("ticker"), tok["address"])
         return True
+
+    def entry_minutes(self):
+        """How long a desk pick waits for its retrace. Learn mode: DESK_LEARN_ENTRY_MINUTES (15), then it buys at the
+        market if the buyers are still ahead and it hasn't slid 10%; strict: DESK_RETRACE_MINUTES (45), then it drops it."""
+        return min(DESK_RETRACE_MINUTES, DESK_LEARN_ENTRY_MINUTES) if self.cfg.learn else DESK_RETRACE_MINUTES
 
     def entries_due(self, now):
         return bool(self.pending_desk) and (self.last_entry_check is None or now - self.last_entry_check >= 20)
@@ -895,9 +963,19 @@ class Runner:
                     continue
                 if strong:
                     did = "entry: breakout building"
-            if age_min >= DESK_RETRACE_MINUTES:
+            wait_for = self.entry_minutes()
+            if age_min >= wait_for and self.cfg.learn and price and p.get("last"):
+                chg, b5, s5 = F.get("chg") or {}, (F.get("buys") or {}).get("m5"), (F.get("sells") or {}).get("m5")
+                m5, drop = chg.get("m5"), (1 - price / p["price0"]) * 100
+                if (drop < 10 and isinstance(b5, int) and isinstance(s5, int) and b5 >= s5 and b5 >= max(1, DESK_MIN_BUYS_5M)
+                        and (not isinstance(m5, (int, float)) or m5 > -3)):
+                    did = self._buy_entry(m, now, f"no retrace in {wait_for:g} min, but the buyers are still ahead ({b5} buys vs "
+                                                  f"{s5} sells): bought at the market, {-drop:+.0f}% since the pick, at MC "
+                                                  f"{snipe.money(F.get('mcap'))}")
+                    continue
+            if age_min >= wait_for:
                 ran = price and price > p["price0"]
-                did = self._drop_entry(m, now, f"no clean entry in {DESK_RETRACE_MINUTES:g} min"
+                did = self._drop_entry(m, now, f"no clean entry in {wait_for:g} min"
                                           + (f": it drifted {(price / p['price0'] - 1) * 100:+.0f}% up without a pullback or a breakout with "
                                              "the buyers heavily ahead, and it doesn't chase" if ran
                                              else ": it never bounced with the buyers ahead in an uptrend"))
@@ -1004,7 +1082,7 @@ class Runner:
         if self.pending_desk and self.entries_due(now) and not self.state.data.get("paused"):
             done.append((3, self.run_entries(now)))      # the desk's picks waiting for their retrace
         ran_cycle = False
-        resting = self.sniper.cooling(plan="desk", streak=DESK_LOSS_STREAK, minutes=DESK_COOLDOWN_MINUTES)
+        resting = None if self.cfg.learn else self.sniper.cooling(plan="desk", streak=DESK_LOSS_STREAK, minutes=DESK_COOLDOWN_MINUTES)
         if resting and self.desk_slots_free() and not self.state.data.get("paused") and \
                 (self.last_cycle is None or now - self.last_cycle >= CYCLE_SECONDS):
             self.last_cycle = now                     # resting: no scan until the rest is over
@@ -1054,10 +1132,9 @@ class Runner:
                 self.last_cycle = now - max(0.0, CYCLE_SECONDS - GATE_RETRY_SECONDS)
                 self.snapshot()
                 return "cycle: gate said no"
-            order["why_bought"] = self._why_bought(order)
+            order["why_bought"] = self._why_bought(order) + [f"careful: {c}" for c in (order.get("cautions") or [])[:2]]
             if self._gate_rep:                           # what it bought into, so a loss gets its review too
                 order["entry_ctx"] = snipe.Sniper._fingerprint(self._gate_rep, self._gate_rep.get("facts") or {})
-            order["certified"] = bool((self._gate_rep or {}).get("certified"))     # certified coins get the longer-hold plan
             if DESK_RETRACE_PCT > 0 and self.wait_entry(order, self._gate_rep, now):
                 self.snapshot()
                 return "cycle: waiting for a retrace"
@@ -1200,7 +1277,9 @@ class Runner:
             c = t.get("entry_ctx") or {}
             return {"closed_at": t.get("closed_at"), "ticker": t.get("ticker"), "plan": t.get("plan"), "mode": t.get("mode"),
                     "final": t.get("final"), "sold_pct": t.get("sold_pct"), "cost": t.get("cost_usd"), "pnl": t.get("pnl_usd"),
-                    "why": (t.get("reason") or "")[:100], "tags": t.get("entry_tags"), "review": (t.get("review") or [])[:4],
+                    "why": (t.get("reason") or "")[:100], "tags": t.get("entry_tags"), "review": (t.get("review") or [])[:4]
+                    + [x for x in (t.get("review") or [])[4:] if str(x).startswith("next time")],
+                    "fast": t.get("fast_why"), "ride": bool(t.get("ride")), "cautions": (t.get("cautions") or [])[:3],
                     "at_buy": {k: c.get(k) for k in ctx_keys if c.get(k) is not None}}
         coins, wins, losses = {}, 0, 0
         for t in trades:
@@ -1211,7 +1290,8 @@ class Runner:
         for c in coins.values():
             if c["final"]:
                 wins, losses = wins + (c["pnl"] > 0), losses + (c["pnl"] <= 0)
-        return {"now": _now(), "version": VERSION, "money": self.money_mode(), "paused": bool(self.state.data.get("paused")),
+        return {"now": _now(), "version": VERSION, "entry_mode": self.cfg.entry_mode, "money": self.money_mode(),
+                "paused": bool(self.state.data.get("paused")),
                 "pause_reason": self.state.data.get("pause_reason"), "bank_usd": self.last_bank,
                 "today": daily, "last40": {"coins_closed": wins + losses, "won": wins, "lost": losses,
                                            "pnl": round(sum(c["pnl"] for c in coins.values()), 2)},
@@ -1221,7 +1301,8 @@ class Runner:
                 "desk_waiting": [{"ticker": p.get("ticker"), "last": p.get("last")} for p in self.pending_desk.values()],
                 "positions": [{"ticker": p.get("ticker"), "plan": p.get("plan"), "mode": p.get("mode"), "cost": p.get("cost_usd"),
                                "gain_pct": p.get("gain_pct"), "best_pct": p.get("peak_gain_pct"), "opened_at": p.get("opened_at"),
-                               "fast": p.get("fast_why"), "runner": bool(p.get("runner")),
+                               "fast": p.get("fast_why"), "runner": bool(p.get("runner")), "ride": bool(p.get("ride")),
+                               "cautions": (p.get("cautions") or [])[:3],
                                "why_bought": (p.get("why_bought") or [])[:3]} for p in positions],
                 "trades": [short(t) for t in trades], "errors": errors}
 
@@ -1238,11 +1319,10 @@ class Runner:
         holding = bool(d.get("positions"))
         full = len(d.get("positions") or []) >= self.cfg.max_positions
         total, desk_n, snipe_n = self.held_counts()
-        d["desk_benched"] = book.bench_counts()          # the desk's own rejections still standing, by reason (liquidity_fits_ticket, ...)
-        d["why_not_trading"] = whynot.tally_log(self.state.data, time.time())     # what the last 12 hours of checks said no to
         d.update(slots={"desk": self.cfg.desk_slots, "sniper": self.cfg.snipe_slots, "desk_held": desk_n, "sniper_held": snipe_n,
                         "desk_free": self.desk_slots_free(), "sniper_free": self.snipe_slots_free()},
-                 desk_gate={"on": DESK_GATE == "on", "score": DESK_GATE_SCORE})
+                 desk_gate={"on": DESK_GATE == "on", "score": DESK_GATE_SCORE, "floor": DESK_GATE_FLOOR},
+                 entry_mode=self.cfg.entry_mode, caution={"size": self.cfg.caution_size, "max": self.cfg.caution_max})
         d["dial"] = self.dial()
         d["money"] = self.money_status()
         d.update(max_positions=self.cfg.max_positions, max_exposure_pct=self.cfg.max_exposure_pct,
@@ -1256,10 +1336,10 @@ class Runner:
                  thresholds_extra={"SHAPE_MIN_CROWD": thresholds.SHAPE_MIN_CROWD},
                  sniper=self.sniper.status(), scorecard=snipe.scorecard(d.get("trades")), storage=STORAGE,
                  desk_waiting=[{"mint": m, "ticker": p.get("ticker"), "mcap0": p.get("mcap0"), "minutes_left":
-                                round(max(0.0, DESK_RETRACE_MINUTES - (self.clock() - p["at"]) / 60), 1), "last": p.get("last")}
+                                round(max(0.0, self.entry_minutes() - (self.clock() - p["at"]) / 60), 1), "last": p.get("last")}
                                for m, p in self.pending_desk.items()],
                  desk_resting=self.sniper.cooling(plan="desk", streak=DESK_LOSS_STREAK, minutes=DESK_COOLDOWN_MINUTES),
-                 desk_retrace={"pct": DESK_RETRACE_PCT, "minutes": DESK_RETRACE_MINUTES, "max_drop": DESK_RETRACE_MAX_DROP,
+                 desk_retrace={"pct": DESK_RETRACE_PCT, "minutes": self.entry_minutes(), "max_drop": DESK_RETRACE_MAX_DROP,
                                "breakout_pct": DESK_BREAKOUT_PCT},
                  desk_sources={"trending": DESK_TRENDING, "new_pool_pages": DESK_NEW_POOL_PAGES, "metas": DESK_METAS,
                                "min_age_minutes": thresholds.HARD.get("min_age_minutes")})
@@ -1367,7 +1447,7 @@ def make_handler(runner, admin_token):
             return self._send(404, {"detail": "not found"})
 
         def do_POST(self):
-            if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/narratives", "/api/test-swap", "/api/goal",
+            if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap", "/api/goal",
                                  "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets", "/api/sell",
                                  "/api/money", "/api/owner", "/api/fund", "/api/withdraw"):
                 return self._send(404, {"detail": "not found"})
@@ -1377,12 +1457,6 @@ def make_handler(runner, admin_token):
             if self.path == "/api/scan-now":
                 code, msg = runner.request_scan()
                 return self._send(code, {"detail": msg})
-            if self.path == "/api/narratives":
-                try:
-                    return self._send(200, scan_narratives())
-                except Exception as exc:
-                    log.exception("narrative scan failed")
-                    return self._send(502, {"detail": "narrative scan failed; check service logs"})
             if self.path == "/api/test-swap":
                 code, msg = runner.request_test()
                 return self._send(code, {"detail": msg})

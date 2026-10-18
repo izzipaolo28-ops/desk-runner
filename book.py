@@ -67,13 +67,6 @@ def benched(tid: str) -> bool:
     return bool(r and r[0] > time.time())
 
 
-def bench_counts(top: int = 10):
-    """The desk's rejections still standing, by reason: [{"reason": ..., "coins": n}, ...], biggest first."""
-    rows = DB.execute("SELECT reason, COUNT(*) FROM bench WHERE until > ? GROUP BY reason ORDER BY 2 DESC LIMIT ?",
-                      (time.time(), top)).fetchall()
-    return [{"reason": r, "coins": n} for r, n in rows]
-
-
 def sit(tid: str, reason: str):
     mins = BENCH_MINUTES.get(reason, DEFAULT_BENCH)
     DB.execute("INSERT OR REPLACE INTO bench VALUES (?,?,?)",

@@ -35,7 +35,6 @@ import requests
 
 import book
 import collect
-import whynot
 from collect import FetchFailed, _num
 from seats import ENTRY_TAGS, NOT_A_SOURCE, QUOTES_OK, WARNING_TAGS, entry_tags, tag_words
 
@@ -898,6 +897,12 @@ def hype_score(F, fl, growth, lists, metas_hit, bz):
 
 
 # ---------- the score ----------
+# Learn mode: these still stop a buy, because they mean the coin can't be read yet or the bubble map is a bundle. Every
+# other entry rule becomes a caution: the coin is bought at half size on the fast plan, and the trade teaches it.
+HARD_WAITS = ("the chain didn't answer", "age unknown", "only ", "market cap ", "the bubble map couldn't be read",
+              "an early bet needs the bubble map read first", "an early bet needs a clean bubble map", "sellers are ahead")
+
+
 def score_coin(r, cfg):
     """Points, vetoes and the verdict, from the report's facts. Each point says what it was given for."""
     F, rug, fl, jev, bz = r["facts"], r["rug"], r.get("flow"), r.get("jev") or {}, r.get("buzz") or {}
@@ -1203,7 +1208,10 @@ def score_coin(r, cfg):
     b5m, s5m = buys.get("m5"), sells.get("m5")
     if (not desk and cfg.snipe_min_buyers_x > 0 and b5m is not None and s5m is not None and s5m > 0
             and b5m < s5m * cfg.snipe_min_buyers_x):
-        wait.append(f"buyers aren't clearly ahead: {b5m} buys vs {s5m} sells in 5 min (it wants {cfg.snipe_min_buyers_x:g}x)")
+        if getattr(cfg, "learn", False) and b5m < s5m:          # learn mode: behind is a no, ahead but not by 1.5x a caution
+            wait.append(f"sellers are ahead right now: {b5m} buys vs {s5m} sells in 5 min")
+        else:
+            wait.append(f"buyers aren't clearly ahead: {b5m} buys vs {s5m} sells in 5 min (it wants {cfg.snipe_min_buyers_x:g}x)")
     if (not desk and cfg.snipe_min_h1_pct and age is not None and age >= 60 and h1c is not None and h1c < cfg.snipe_min_h1_pct):
         wait.append(f"not moving: {h1c:+.0f}% this hour (it buys coins already moving, +{cfg.snipe_min_h1_pct:g}% or more this hour)")
     # A big run alone isn't a reason: on a coin under a day old the 24h change is "since launch", and every coin that
@@ -1342,6 +1350,12 @@ def score_coin(r, cfg):
             wait.append(f"an early bet needs a score of {cfg.snipe_early_buy_score:g}, and this one is {total}")
         if (r.get("map") or {}).get("status") != "ok":
             wait.append("an early bet needs the bubble map read first: no buying blind")
+    cautions = []
+    if getattr(cfg, "learn", False):           # learn mode: an entry rule is a caution (half size, profits fast), not a no.
+        cautions = [w for w in wait if not w.startswith(HARD_WAITS)]   # only the scam checks and "can't read it" still wait
+        wait = [w for w in wait if w.startswith(HARD_WAITS)]
+        if len(cautions) > cfg.caution_max:
+            wait.append(f"{len(cautions)} warnings at once (it buys with up to {cfg.caution_max:g}): " + "; ".join(cautions[:3]))
     if veto:
         verdict = "SKIP"
     elif wait:
@@ -1355,7 +1369,7 @@ def score_coin(r, cfg):
         if total >= cfg.snipe_buy_score and mom_ok is False:     # a high score with the sellers in charge right now
             wait.append("sellers are ahead right now (more sold than bought, or the price falling): it waits for buyers to lead")
     return {"score": total, "verdict": verdict, "veto": veto, "wait": wait, "points": pts, "checks": checks, "setup": setup,
-            "momentum_ok": mom_ok}
+            "momentum_ok": mom_ok, "cautions": cautions}
 
 
 def headline(rep, cfg):
@@ -1364,7 +1378,8 @@ def headline(rep, cfg):
     if rep["verdict"] == "SKIP":
         return f"SKIP {tick}: " + "; ".join(rep["veto"][:2])
     if rep["verdict"] == "BUY":
-        return f"BUY {tick} · {rep['score']}/100 · {rep['setup']}: " + "; ".join(good)
+        return (f"BUY {tick} · {rep['score']}/100 · {rep['setup']}: " + "; ".join(good)
+                + (f" · careful ({len(rep['cautions'])}): {rep['cautions'][0][:70]}" if rep.get("cautions") else ""))
     need = rep["wait"][:1] or [f"score {rep['score']} is under {cfg.snipe_buy_score:g}"]
     return f"WATCH {tick} · {rep['score']}/100 · {rep['setup']}: " + "; ".join(need + good[:1])
 
@@ -1378,7 +1393,7 @@ def why_key(rep):
         return ("copycat" if "copycat" in v else "already ran" if "already ran" in v else "too old or too big" if "old (" in v or "past the sniper" in v
                 else "thin liquidity" if "liquidity" in v else "rug risk")
     w = " ".join((rep.get("wait") or [])[:1]).lower()
-    for key, label in (("learned from its own trades", "learned: avoided"), ("a bounce in a falling coin", "falling this hour"),
+    for key, label in (("warnings at once", "too many warnings at once"), ("learned from its own trades", "learned: avoided"), ("a bounce in a falling coin", "falling this hour"),
                        ("bubble map couldn't", "bubble map unreadable"), ("spiking", "spiking: waiting for it to cool"), ("no narrative", "no narrative"), ("hype", "hype too slow"),
                        ("not enough room", "no 2x room"),
                        ("too new", "too new"), ("market cap", "market cap too small"), ("no dex pair", "no pair yet"),
@@ -1410,8 +1425,7 @@ class Sniper:
             for k, v in (("checks", []), ("radar", []), ("wallets", []), ("wallet_sigs", {})):
                 self.state.data.setdefault(k, v)
 
-    LESSON_COINS = 15
-    LESSON_EXEMPT = {"near_bar"}     # a score band, not a warning: with the bar at 65 it covers nearly every coin, and banning it = a higher bar
+    LESSON_COINS, LESSON_LOSSES, LESSON_HOURS = 15, 2, 48
 
     def lessons(self):
         """What its own trades taught it. Among both bots' coins closed in the last 48 hours (15 at most), each one
@@ -1419,8 +1433,6 @@ class Sniper:
         thin buyers, a score near the bar, the list it came from...). A tag is avoided from then on when it lost at least
         twice and lost more than twice as often as it won. A fast dump (down 20%+ within 10 minutes of the buy) counts as
         two losses for the warning signs, the things it should have stopped at. {tag: why, with the coins}."""
-        if not self.cfg.snipe_lessons:                     # SNIPE_LESSONS=off: it still records, it never blocks on them
-            return {}
         coins, order, now = {}, [], time.time()
         for i, t in enumerate(self.state.data.get("trades") or []):          # newest first
             if t.get("plan") not in ("snipe", "desk", None):
@@ -1441,7 +1453,7 @@ class Sniper:
             if not (c["final"] and isinstance(c["tags"], list)):
                 continue
             shut, opened = _ts(c["closed"]), _ts(c["opened"])
-            if shut and now - shut > self.cfg.snipe_lesson_hours * 3600:
+            if shut and now - shut > self.LESSON_HOURS * 3600:
                 continue
             held = (shut - opened) / 60 if shut and opened else None
             c["fast"] = bool(c["pnl"] < 0 and c["cost"] and 100 * c["pnl"] / c["cost"] <= -20 and held is not None and held <= 10)
@@ -1449,13 +1461,10 @@ class Sniper:
         done = done[:self.LESSON_COINS]
         out = {}
         for tag in sorted({t for c in done for t in c["tags"]}):
-            if tag in self.LESSON_EXEMPT:
-                continue
             lost = [c for c in done if tag in c["tags"] and c["pnl"] < 0]
             won = [c for c in done if tag in c["tags"] and c["pnl"] > 0]
             weight = sum(2 if c.get("fast") and tag in WARNING_TAGS else 1 for c in lost)
-            net = sum(c["pnl"] for c in done if tag in c["tags"])          # money, not a head count: few big wins can pay for many small losses
-            if weight >= self.cfg.snipe_lesson_losses and len(won) * 2 < weight and net < 0:
+            if weight >= self.LESSON_LOSSES and len(won) * 2 < weight:
                 fast = sum(1 for c in lost if c.get("fast"))
                 out[tag] = (f"{len(lost)} loss{'es' if len(lost) > 1 else ''}"
                             + (f" ({fast} a fast dump, counted twice)" if fast and tag in WARNING_TAGS else "")
@@ -1556,6 +1565,16 @@ class Sniper:
         return {"until": until, "at": datetime.fromtimestamp(until, timezone.utc).strftime("%H:%M UTC"),
                 "why": f"{n} {'sniper' if plan == 'snipe' else 'desk'} losses in a row"}
 
+    def _cool_blocks(self, rep):
+        """After a losing streak. STRICT: no buys until the rest is over. LEARN: the next buys are small and on the fast
+        plan (a caution) instead of stopped, so it keeps trading and keeps learning."""
+        cool = self.cooling()
+        if cool and self.cfg.learn:
+            note = f"right after {cool['why']}"
+            rep["cautions"] = list(rep.get("cautions") or []) + ([note] if note not in (rep.get("cautions") or []) else [])
+            return None
+        return cool
+
     # ---------- a second look before the money goes in ----------
     def hold_for_confirm(self, rep, now, sources=()):
         self.pending[rep["mint"]] = {"rep": rep, "price": (rep.get("facts") or {}).get("price"), "at": now, "sources": list(sources)}
@@ -1603,7 +1622,7 @@ class Sniper:
             rep = p["rep"]
             F = pair_facts(pairs_for(rows, m))
             ok, why = self._confirm_ok(p, F, now)
-            cool = self.cooling() if ok else None
+            cool = self._cool_blocks(rep) if ok else None
             if ok and self.mode() != "auto":
                 ok, why = False, "the sniper was set to WATCH meanwhile"
             elif cool:
@@ -1926,7 +1945,6 @@ class Sniper:
         if slim["flow"] and slim["flow"].get("ratio15") == math.inf:
             slim["flow"]["ratio15"] = "all buys"
         with self.state.lock:
-            whynot.record(self.state.data, rep, time.time())
             self.state.data["checks"] = ([slim] + [c for c in self.state.data.get("checks") or [] if c.get("id") != rep["id"]])[:CHECKS_KEPT]
             self.state.save()
 
@@ -1941,6 +1959,8 @@ class Sniper:
                            else f"the sniper's {self.cfg.snipe_slots} slots are full (the rest are the desk's)")
         if self.state.data.get("paused"):
             return False, "the desk is paused"
+        if rep.get("cautions") and not forced and hasattr(r, "caution_room") and r.caution_room("snipe"):
+            return False, r.caution_room("snipe") + f" (careful: {str(rep['cautions'][0])[:90]})"
         if mint in {p.get("mint") for p in self.state.positions()}:
             return False, "already held: RISK is managing it"
         if book.benched(f"{mint}:{SOL_NET}") and not forced:
@@ -1964,24 +1984,35 @@ class Sniper:
         if (early or hot) and not forced:
             factor *= self.cfg.snipe_early_size              # an early bet or a hot entry: half the ticket, profits taken fast
         fast_why = "early bet" if early else f"hot entry (+{h1b:.0f}% this hour)" if hot else None
-        hy_now = _f((rep.get("hype") or {}).get("score"))
-        viral = bool(self.cfg.snipe_viral_hype > 0 and hy_now is not None and hy_now >= self.cfg.snipe_viral_hype
-                     and (rep.get("narrative") or {}).get("ok"))   # viral-hype hold mode: 100/100 hype, a story behind it
+        cautions = [] if forced else [str(c) for c in rep.get("cautions") or []]
+        if cautions and not (early or hot):                  # learn mode: an entry rule tripped, so it buys small and fast
+            factor *= self.cfg.caution_size                  # (one cut: an early bet or hot entry is already half)
+            fast_why = "caution: " + cautions[0]
+        b5r, s5r = (F.get("buys") or {}).get("m5"), (F.get("sells") or {}).get("m5")
+        bx = b5r / s5r if b5r is not None and s5r else (99.0 if b5r else None)
+        hype = _f((rep.get("hype") or {}).get("score"))
+        ride = (self.cfg.learn and not forced and not cautions and not early and not hot and rep["score"] >= self.cfg.ride_score
+                and hype is not None and hype >= self.cfg.ride_hype and bx is not None and bx >= self.cfg.ride_buyers_x)
+        if ride:                                             # a 10/10 coin: the full ticket, profit in steps, 30% rides
+            factor = max(factor, 1.0)
         signals = [("+ " if p["pts"] > 0 else "− ") + p["key"] for p in rep.get("points") or []]
         order = {"order_id": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") + "-snipe", "model": "sniper",
                  "token": {"ticker": rep.get("ticker"), "address": mint, "network_id": SOL_NET, "chain": "solana"},
                  "size_factor": round(factor, 3), "size_cuts": ["bought by hand" if forced else f"sniper score {rep['score']}"]
                  + ([f"early bet under {money(self.cfg.snipe_early_mcap_usd)}: {self.cfg.snipe_early_size:g}x"] if early and not forced else [])
-                 + ([f"a hot entry, already +{h1b:.0f}% this hour: {self.cfg.snipe_early_size:g}x"] if hot and not forced else []),
+                 + ([f"a hot entry, already +{h1b:.0f}% this hour: {self.cfg.snipe_early_size:g}x"] if hot and not forced else [])
+                 + ([f"bought with caution ({cautions[0][:80]}): {self.cfg.caution_size:g}x"] if cautions and not (early or hot) else [])
+                 + ([f"a 10/10 coin (score {rep['score']}, hype {hype:.0f}, buyers {bx:.1f}x): the full ticket, it rides"] if ride else []),
                  "confidence": None, "worth_trading_at_all": None, "runner_up": [],
                  "facts": {"liquidity_usd": F.get("liq"), "price_usd": F.get("price"), "mcap_usd": F.get("mcap"),
                            "decimals": (rep.get("facts") or {}).get("decimals"), "age_minutes": F.get("age_min")},
                  "why": {}, "judge_calls": [], "plan": "snipe", "score": rep["score"], "setup": rep.get("setup"),
-                 "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else []), "early": early or hot,
-                 "fast_why": fast_why, "viral": viral,
+                 "source": rep.get("source"), "signals": signals + (["+ bought by hand"] if forced else []),
+                 "early": early or hot or bool(cautions), "fast_why": fast_why, "cautions": cautions, "ride": ride,
                  "why_bought": [rep.get("headline") or ""] + [p["label"] for p in sorted(rep.get("points") or [], key=lambda p: -p["pts"])
                                                                if p["pts"] > 0 and p["label"] not in (rep.get("headline") or "")][:4]
-                 + ([rep["action"]] if rep.get("action") else []),
+                 + ([rep["action"]] if rep.get("action") else [])
+                 + [f"careful: {c}" for c in cautions[:2]],
                  "entry_ctx": self._fingerprint(rep, F)}
         book.take(order)
         before = len(self.state.data.get("feed") or [])
@@ -2128,7 +2159,7 @@ class Sniper:
             rep = self.check(m, ", ".join(c["sources"][:2]), lists=[s for s in c["sources"] if "bought" not in s],
                              wallet_hits=c["hits"])
             if rep["verdict"] == "BUY" and self.mode() == "auto":
-                cool = self.cooling()
+                cool = self._cool_blocks(rep)
                 if cool:
                     rep["action"] = f"BUY signal, not bought: cooling off after {cool['why']} (buys again from {cool['at']})"
                     self._retally("BUY, not bought: cooling off")
