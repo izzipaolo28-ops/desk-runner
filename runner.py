@@ -45,7 +45,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-17 learn mode"          # which build is running: the summary page says it
+VERSION = "2026-10-17 learn mode + crash fix"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -441,7 +441,12 @@ class Runner:
             return True, "gate off"
         # Normal coins: the safety checks only (rugs, copycats, can't sell, already ran and cooling, sellers ahead).
         # Not the sniper's early-coin rules (its age and size window, narrative, hype, 2x room): those are the sniper's.
-        rep = self.sniper.check(tok["address"], "desk pick", purpose="desk")
+        try:
+            rep = self.sniper.check(tok["address"], "desk pick", purpose="desk")
+        except Exception as exc:                          # a check that crashes is a no for this pick, not a dead cycle
+            why = f"the safety check failed ({snipe.where(exc)})"
+            self.state.error(f"desk pick ${tok.get('ticker') or tok['address'][:6]}: {why}")
+            return False, why[:160]
         ratio = (rep.get("flow") or {}).get("ratio15")
         m5 = ((rep.get("facts") or {}).get("chg") or {}).get("m5")
         h1 = ((rep.get("facts") or {}).get("chg") or {}).get("h1")
@@ -1270,7 +1275,7 @@ class Runner:
             d = self.state.data
             trades = list(d.get("trades") or [])[:40]
             positions = [dict(p) for p in self.state.positions()]
-            errors = [e.get("text", "")[:160] for e in (d.get("errors") or [])[:5]]
+            errors = [{"time": e.get("time"), "text": e.get("text", "")[:240]} for e in (d.get("errors") or [])[:8]]
             daily = dict(d.get("daily") or {})
         ctx_keys = ("mcap", "age_min", "h1", "m5", "liq", "score", "buyers_x", "source", "fresh_share")
         def short(t):
@@ -1296,6 +1301,15 @@ class Runner:
                 "today": daily, "last40": {"coins_closed": wins + losses, "won": wins, "lost": losses,
                                            "pnl": round(sum(c["pnl"] for c in coins.values()), 2)},
                 "dial": self.dial(), "lessons": self.sniper.lessons(), "sniper_mode": self.sniper.mode(),
+                "sniper_why_no_buy_last_hour": self.sniper._why_hour(), "sniper_rounds": self.sniper.rounds,
+                "sniper_last_round": self.sniper.last_round and _iso(self.sniper.last_round),
+                "sniper_confirming": [p["rep"].get("ticker") for p in self.sniper.pending.values()],
+                "slots": dict(zip(("held", "desk", "sniper"), self.held_counts()),
+                              desk_slots=self.cfg.desk_slots, sniper_slots=self.cfg.snipe_slots),
+                "last_checks": [{"ticker": c.get("ticker"), "time": c.get("time"), "verdict": c.get("verdict"), "score": c.get("score"),
+                                 "wait": (c.get("wait") or [])[:2], "cautions": (c.get("cautions") or [])[:3],
+                                 "veto": (c.get("veto") or [])[:1], "action": (c.get("action") or "")[:140]}
+                                for c in (self.state.data.get("checks") or [])[:12]],
                 "sniper_resting": self.sniper.cooling(),
                 "desk_resting": self.sniper.cooling(plan="desk", streak=DESK_LOSS_STREAK, minutes=DESK_COOLDOWN_MINUTES),
                 "desk_waiting": [{"ticker": p.get("ticker"), "last": p.get("last")} for p in self.pending_desk.values()],
@@ -1731,7 +1745,7 @@ def serve():
         try:
             runner.tick()
         except Exception as exc:                  # a bad cycle never stops the desk
-            runner.state.error(f"loop: {type(exc).__name__}: {exc}")
+            runner.state.error(f"loop: {snipe.where(exc)}")
         time.sleep(5)
 
 
