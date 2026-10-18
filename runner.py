@@ -45,7 +45,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-17 learn mode + crash fix"          # which build is running: the summary page says it
+VERSION = "2026-10-18 split in 2"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -1156,7 +1156,17 @@ class Runner:
         quotes right now, the rule RISK would sell on. Never a made-up figure: unknown stays unknown."""
         bank = self.last_bank
         if True:
-            if _f(bank) is not None:
+            if _f(bank) is not None and self.cfg.split_coins:
+                mode = self.seats.money()
+                in_coins = sum(_f(p.get("cost_usd")) or 0.0 for p in self.state.positions() if p.get("mode", mode) == mode)
+                part = (bank + in_coins) / self.cfg.split_coins
+                if self.cfg.live:
+                    part = min(part, self.cfg.real_max_ticket_usd)
+                self.state.agent("size", f"split {self.cfg.split_coins} ways: ${part:,.2f} a coin (${bank + in_coins:,.2f} / "
+                                         f"{self.cfg.split_coins}); careful or early: half; score under 85: x0.7"
+                                 + (f"; max ${self.cfg.real_max_ticket_usd:g} a buy" if self.cfg.live else ""),
+                                 part, "a coin")
+            elif _f(bank) is not None:
                 top = bank * main.TICKET_SHARE * thresholds.NO_SOCIAL_CUT
                 self.state.agent("size", f"ready: next ticket up to ${top:,.2f} = 6% of ${bank:,.0f} x {thresholds.NO_SOCIAL_CUT} "
                                          f"(no X read); never under ${self.cfg.min_ticket_usd:g} or over 2% of the pool",
@@ -1295,7 +1305,8 @@ class Runner:
         for c in coins.values():
             if c["final"]:
                 wins, losses = wins + (c["pnl"] > 0), losses + (c["pnl"] <= 0)
-        return {"now": _now(), "version": VERSION, "entry_mode": self.cfg.entry_mode, "money": self.money_mode(),
+        return {"now": _now(), "version": VERSION, "entry_mode": self.cfg.entry_mode, "split_coins": self.cfg.split_coins,
+                "money": self.money_mode(),
                 "paused": bool(self.state.data.get("paused")),
                 "pause_reason": self.state.data.get("pause_reason"), "bank_usd": self.last_bank,
                 "today": daily, "last40": {"coins_closed": wins + losses, "won": wins, "lost": losses,
@@ -1336,7 +1347,8 @@ class Runner:
         d.update(slots={"desk": self.cfg.desk_slots, "sniper": self.cfg.snipe_slots, "desk_held": desk_n, "sniper_held": snipe_n,
                         "desk_free": self.desk_slots_free(), "sniper_free": self.snipe_slots_free()},
                  desk_gate={"on": DESK_GATE == "on", "score": DESK_GATE_SCORE, "floor": DESK_GATE_FLOOR},
-                 entry_mode=self.cfg.entry_mode, caution={"size": self.cfg.caution_size, "max": self.cfg.caution_max})
+                 entry_mode=self.cfg.entry_mode, caution={"size": self.cfg.caution_size, "max": self.cfg.caution_max},
+                 split_coins=self.cfg.split_coins)
         d["dial"] = self.dial()
         d["money"] = self.money_status()
         d.update(max_positions=self.cfg.max_positions, max_exposure_pct=self.cfg.max_exposure_pct,

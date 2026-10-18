@@ -426,6 +426,16 @@ only); the safety checks now run on every pick either way.
 
 ## Several coins at once
 
+**How much each coin gets: `SPLIT_COINS` (default 2, half and half).** All the money (the free cash plus what's in
+coins, minus the 0.02 SOL kept for fees on real money) is split into that many equal parts, one part per coin, and it
+holds at most that many coins at once. With $48 and 2: about $24 a coin. A coin scoring under 85 takes 70% of its part,
+a careful buy, an early bet or a hot entry half of that, and a bad day's dial less again; never under $5
+(`MIN_TICKET_USD`), never over 2% of the coin's pool, never more than the free cash, and on real money never over
+`REAL_MAX_TICKET_USD` ($25) a buy: raise that one when the parts grow past $25. The sniper may use every slot, the desk
+half of them (at least one). As the money grows the parts grow with it. `SPLIT_COINS=5` = a fifth each, five coins at
+once. `SPLIT_COINS=off` = the old sizing below (6% of the cash a ticket, 25% in coins at most): on $48 that's $2.88,
+under the $5 floor, so it bought nothing (in the simulation: no trades at all on $48, against 56 split in two).
+
 The desk holds up to `MAX_POSITIONS` coins (default **5**) and keeps scanning while it has a free slot. Each coin
 gets its own plan below. All coins together stay under `MAX_EXPOSURE_PCT` (default **25**%) of everything (cash +
 what's in coins): a ticket that would go over is cut to the room left, or skipped. A coin it already holds is
@@ -584,8 +594,9 @@ stays paused until you tap **Resume**.
 | `DESK_METAS` | `60` | coins from DexScreener's trending narratives the desk reads too (0 = none) |
 | `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
-| `MAX_POSITIONS` | `5` | coins held at once (1 to 10) |
-| `MAX_EXPOSURE_PCT` | `25` | all coins together, as % of cash + coins |
+| `SPLIT_COINS` | `2` | all the money split into this many equal parts, one per coin, at most this many coins at once (`off`: the old sizing, `MAX_POSITIONS` and `MAX_EXPOSURE_PCT`) |
+| `MAX_POSITIONS` | `5` | coins held at once (1 to 10), when `SPLIT_COINS=off` |
+| `MAX_EXPOSURE_PCT` | `25` | all coins together, as % of cash + coins, when `SPLIT_COINS=off` |
 | `TEST_SWAP_USD` | `1` | size of the Test swap round trip, $0.50 to $20 |
 | `DESK_TITLE` / `DESK_TAGLINE` | `GROKBOT + JEV` / `JEV PICKS, CODE TRADES` | the page's name and tagline |
 | `HARD_<NAME>` | thresholds.py | override one HARD number, e.g. `HARD_MAX_AGE_HOURS=168` |
