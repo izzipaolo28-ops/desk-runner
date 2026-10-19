@@ -296,7 +296,6 @@ details.pc .inner{padding:4px 8px 8px}
 .rpts .pt{display:grid;grid-template-columns:38px minmax(0,1fr);gap:6px} .rpts .pt b{text-align:right}
 .rlist{margin:8px 0 0;padding:0;list-style:none} .rlist li{padding:2px 0} .rlist.veto li{color:#fca5a5} .rlist.veto li::before{content:"✗ ";font-weight:800}
 .rlist.wait li{color:#fde68a} .rlist.wait li::before{content:"… "}
-.rlist.careful li{color:#fdba74} .rlist.careful li::before{content:"careful: ";font-weight:700}
 .rbuzz{margin-top:8px;color:#c6cfdf} .rbuzz a{color:#93c5fd;text-decoration:none;margin-right:10px;display:inline-block}
 .racts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px} .racts .btn,.racts a.btn{min-height:36px;padding:6px 12px;font-size:12px;text-decoration:none;display:inline-flex;align-items:center}
 .sgrid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px;margin-top:14px}
@@ -1939,8 +1938,6 @@ function reportCard(rep, full){
   if (facts.length) body.appendChild(el("div", "rfacts", facts.join(" · ")));
   if ((rep.veto || []).length){ const ul = el("ul", "rlist veto"); rep.veto.forEach(v => ul.appendChild(el("li", "", v))); body.appendChild(ul); }
   if ((rep.wait || []).length){ const ul = el("ul", "rlist wait"); rep.wait.forEach(v => ul.appendChild(el("li", "", v))); body.appendChild(ul); }
-  if ((rep.cautions || []).length){ const ul = el("ul", "rlist careful"); rep.cautions.forEach(v => ul.appendChild(el("li", "", v)));   // learn mode: a BUY
-    body.appendChild(ul); if (rep.verdict === "BUY") body.appendChild(el("div", "rline", "so it buys small: half the ticket, on the fast plan")); }   // bought small
   const groups = el("div", "rgroups");
   for (const [g, title] of GROUPS){
     const rows = (rep.checks || []).filter(c => c.group === g); if (!rows.length) continue;

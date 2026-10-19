@@ -108,16 +108,6 @@ class Config:
         self.fade_off_peak_pct = _env_num(env, "FADE_OFF_PEAK_PCT", 4, high=100)   # it has slipped this far off its best
         self.max_hold_hours = _env_num(env, "MAX_HOLD_HOURS", 24)
         self.max_positions = int(_env_num(env, "MAX_POSITIONS", 5, low=1, high=10))
-        # SPLIT_COINS: the money (cash plus what's in coins) split into this many equal parts, one part per coin, and at
-        # most that many coins at once. 2 = half and half; 5 = a fifth each. "off" = the old sizing (6% of the cash a
-        # ticket, 25% in coins at most). The sniper may use every slot, the desk half of them (at least one).
-        raw = str(env.get("SPLIT_COINS", "")).strip().lower() or "2"
-        self.split_coins = 0 if raw in ("off", "0", "no", "none", "") else int(_env_num(env, "SPLIT_COINS", 2, low=1, high=10))
-        if self.split_coins:
-            self.max_positions = self.split_coins
-        # SPLIT_CUTS: with SPLIT_COINS on, a coin that passes gets its WHOLE part ("off", the default). "on" = the old
-        # behaviour: caution, no X account, data dark and the dial all shrink the part (they stacked to $4.68 of a $23 part).
-        self.split_cuts = str(env.get("SPLIT_CUTS", "off")).strip().lower() in ("on", "1", "yes", "true")
         self.max_exposure_pct = _env_num(env, "MAX_EXPOSURE_PCT", 25, low=1, high=100)   # all coins together
         # the two bots share the slots: the desk (normal coins, Jev's picks) and the sniper (early coins) each get their own.
         # Unless set, they follow MAX_POSITIONS: 60% the desk's, the rest the sniper's (5 -> 3 and 2).
@@ -273,8 +263,6 @@ class Config:
 
     @property
     def desk_slots(self):
-        if self._desk_slots is None and self.split_coins:
-            return max(1, self.split_coins // 2)
         return self._desk_slots if self._desk_slots is not None else max(1, round(self.max_positions * 0.6))
 
     @desk_slots.setter
@@ -283,8 +271,6 @@ class Config:
 
     @property
     def snipe_slots(self):
-        if self._snipe_slots is None and self.split_coins:
-            return self.split_coins
         return self._snipe_slots if self._snipe_slots is not None else max(1, self.max_positions - max(1, round(self.max_positions * 0.6)))
 
     @snipe_slots.setter
@@ -823,30 +809,19 @@ class Seats:
             return 0.0, "pool liquidity unknown"
         if factor is None:
             return 0.0, "no size factor on the order"
-        mode = "live" if self.cfg.live else "paper"
-        open_cost = sum(_f(p.get("cost_usd")) or 0.0 for p in self.state.positions() if p.get("mode", mode) == mode)
-        split = self.cfg.split_coins
-        if split:                                # SPLIT_COINS: all the money in N equal parts, one part per coin; a
-            part = (bank + open_cost) / split    # careful buy, an early bet or a weaker score takes less of its part
-            share = min(1.0, factor) if self.cfg.split_cuts else 1.0      # SPLIT_CUTS=off: a coin that passed gets its whole part
-            ticket = min(part * share, liq * MAX_POOL_SHARE)
-        else:
-            ticket = min(bank * TICKET_SHARE * factor, liq * MAX_POOL_SHARE)
+        ticket = min(bank * TICKET_SHARE * factor, liq * MAX_POOL_SHARE)
         if self.cfg.live:                        # real money: a hard cap on every single buy
             ticket = min(ticket, self.cfg.real_max_ticket_usd)
-        room = bank if split else (bank + open_cost) * self.cfg.max_exposure_pct / 100 - open_cost
-        if ticket > room:                        # all coins together stay under MAX_EXPOSURE_PCT of everything (split: the free cash)
+        mode = "live" if self.cfg.live else "paper"
+        open_cost = sum(_f(p.get("cost_usd")) or 0.0 for p in self.state.positions() if p.get("mode", mode) == mode)
+        room = (bank + open_cost) * self.cfg.max_exposure_pct / 100 - open_cost
+        if ticket > room:                        # all coins together stay under MAX_EXPOSURE_PCT of everything
             if room < self.cfg.min_ticket_usd:
-                return 0.0, (f"${open_cost:,.2f} already in coins: " + ("no free cash left" if split else
-                             f"the {self.cfg.max_exposure_pct:g}% exposure cap leaves no room"))
+                return 0.0, (f"${open_cost:,.2f} already in coins: the {self.cfg.max_exposure_pct:g}% exposure cap "
+                             "leaves no room")
             ticket = room
         if ticket < self.cfg.min_ticket_usd:
-            # the cuts shrank it under the floor but the money and the pool can take the floor: buy the floor, don't skip
-            fits = min(room, liq * MAX_POOL_SHARE) >= self.cfg.min_ticket_usd and (not self.cfg.live or
-                                                                                     self.cfg.real_max_ticket_usd >= self.cfg.min_ticket_usd)
-            if not fits:
-                return 0.0, f"ticket ${ticket:,.2f} is under the ${self.cfg.min_ticket_usd:g} floor"
-            ticket = self.cfg.min_ticket_usd
+            return 0.0, f"ticket ${ticket:,.2f} is under the ${self.cfg.min_ticket_usd:g} floor"
         return round(ticket, 2), None
 
     # ---------- FILLS ----------
