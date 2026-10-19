@@ -59,6 +59,15 @@ def _f(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
 
 
+def where(exc):
+    """'TypeError: ... (snipe.py:1124 in score_coin)': an error with the line it came from, for the page and the summary."""
+    import traceback
+    tb = traceback.extract_tb(exc.__traceback__)
+    mine = [f for f in tb if os.path.dirname(os.path.abspath(f.filename)) == os.path.dirname(os.path.abspath(__file__))] or tb
+    at = f" ({os.path.basename(mine[-1].filename)}:{mine[-1].lineno} in {mine[-1].name})" if mine else ""
+    return f"{type(exc).__name__}: {str(exc)[:160]}{at}"
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -1121,7 +1130,8 @@ def score_coin(r, cfg):
         b5, ratio, big = fl["buyers5"], fl["ratio15"], fl.get("biggest15")
         check("flow", "unique buyers, last 5 min", b5 >= 10, str(b5))
         check("flow", "buy $ vs sell $, last 15 min", None if ratio is None else ratio >= 1.0,
-              ("all buys" if ratio == math.inf else f"{ratio:.2f}x") + f" (${fl['buy15']:,.0f} vs ${fl['sell15']:,.0f})")
+              ("no trades in 15 min" if ratio is None else "all buys" if ratio == math.inf else f"{ratio:.2f}x")
+              + f" (${fl.get('buy15') or 0:,.0f} vs ${fl.get('sell15') or 0:,.0f})")
         if b5 >= 40:
             add("40+ buyers in 5m", f"{b5} different wallets bought in 5 min", 12)
         elif b5 >= 20:
@@ -2156,8 +2166,13 @@ class Sniper:
         ranked.sort(key=lambda x: -x[0])
         did = []
         for _, m, F, c in ranked[:self.cfg.snipe_deep_per_round]:
-            rep = self.check(m, ", ".join(c["sources"][:2]), lists=[s for s in c["sources"] if "bought" not in s],
-                             wallet_hits=c["hits"])
+            try:
+                rep = self.check(m, ", ".join(c["sources"][:2]), lists=[s for s in c["sources"] if "bought" not in s],
+                                 wallet_hits=c["hits"])
+            except Exception as exc:                     # one coin's bad data never stops the round (or the next ones)
+                self.seen[m] = now
+                self.state.error(f"sniper check of ${F.get('symbol') or m[:6]} failed: {where(exc)}")
+                continue
             if rep["verdict"] == "BUY" and self.mode() == "auto":
                 cool = self._cool_blocks(rep)
                 if cool:

@@ -296,6 +296,7 @@ details.pc .inner{padding:4px 8px 8px}
 .rpts .pt{display:grid;grid-template-columns:38px minmax(0,1fr);gap:6px} .rpts .pt b{text-align:right}
 .rlist{margin:8px 0 0;padding:0;list-style:none} .rlist li{padding:2px 0} .rlist.veto li{color:#fca5a5} .rlist.veto li::before{content:"✗ ";font-weight:800}
 .rlist.wait li{color:#fde68a} .rlist.wait li::before{content:"… "}
+.rlist.careful li{color:#fdba74} .rlist.careful li::before{content:"careful: ";font-weight:700}
 .rbuzz{margin-top:8px;color:#c6cfdf} .rbuzz a{color:#93c5fd;text-decoration:none;margin-right:10px;display:inline-block}
 .racts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px} .racts .btn,.racts a.btn{min-height:36px;padding:6px 12px;font-size:12px;text-decoration:none;display:inline-flex;align-items:center}
 .sgrid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px;margin-top:14px}
@@ -303,6 +304,21 @@ details.pc .inner{padding:4px 8px 8px}
 .sbox{border:1px solid #161c2a;border-radius:6px;padding:10px 12px;background:#080a11;min-width:0}
 .sbox h3{margin:0 0 8px;font:700 11px var(--mono);letter-spacing:.14em;color:#9aa6bd;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .modes{display:flex;gap:6px;flex-wrap:wrap} .modes .btn{min-height:36px;padding:6px 12px;font-size:12px}
+.tabs{display:flex;gap:8px;margin-top:12px}
+.tabs button{flex:1;font:700 14px var(--mono);letter-spacing:.14em;padding:12px;border-radius:6px;border:1px solid #05060a;background:#0b0d14;color:var(--muted);min-height:48px}
+.tabs button.on{color:#0b0d14;background:#ff5fd2;border-color:#ff5fd2}
+.pbal{display:flex;gap:16px;flex-wrap:wrap;font:12px var(--mono);color:var(--muted);margin:12px 0 4px}
+.pbal b{color:var(--ink);font-size:16px;margin-left:4px} .pbal b.pos{color:var(--green)} .pbal b.neg{color:var(--red)}
+.ppos{border:1px solid var(--line);border-radius:6px;padding:12px;margin:10px 0;background:var(--panel2)}
+.ppos .hd{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font:700 15px var(--mono);margin-bottom:6px}
+.ppos td:first-child{color:var(--muted);width:34%}
+.pcoins{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:10px}
+.pcoin{border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--panel2);font:12px var(--mono)}
+.pcoin .t{display:flex;justify-content:space-between;font:700 14px var(--mono);margin-bottom:4px}
+.pcoin .tr.up{color:var(--green)} .pcoin .tr.down{color:var(--red)} .pcoin .tr.flat,.pcoin .tr.unknown{color:var(--muted)}
+.pcoin .w{color:#fde68a;margin-top:6px} .pcoin .s{color:var(--green);margin-top:6px}
+.side.long{color:var(--green)} .side.short{color:var(--red)}
+.pfeed div{padding:5px 0;border-top:1px solid var(--line);font:12px var(--mono)} .pfeed div:first-child{border-top:0}
 .modes .btn.on.off{border-color:#6b7489;color:#e8edf6} .modes .btn.on.watch{border-color:#fbbf24;color:#fde68a;background:#2a1f05}
 .modes .btn.on.auto{border-color:#34d399;color:#bbf7d0;background:#06281a}
 .gates{font:11px/1.6 var(--mono);color:#8b97b0;margin:8px 0}
@@ -354,6 +370,38 @@ details.pc .inner{padding:4px 8px 8px}
     and what the bots learned over from zero. In Railway: open the project, add a <b>Volume</b>, connect it to this service with mount path
     <b>/data</b>, and redeploy.</div>
 
+  <nav class="tabs" role="tablist" aria-label="Which bot">
+    <button type="button" role="tab" id="tabMemes" class="on">MEMECOINS</button>
+    <button type="button" role="tab" id="tabPerps">PERPS</button>
+  </nav>
+
+  <div id="perpsView" hidden>
+  <section class="panel" id="perpsPanel">
+    <h2>PERPS · SOL ETH BTC · JUPITER <span id="perpsNote"></span></h2>
+    <div class="modes" id="perpsModes"></div>
+    <div class="pbal" id="perpsBal"></div>
+    <div id="perpsPos"></div>
+    <div class="pcoins" id="perpsCoins"></div>
+    <div class="msg" id="perpsMsg" role="status"></div>
+    <p class="muted" style="font-size:12px" id="perpsRules"></p>
+    <button class="btn" type="button" id="perpsReset">Reset the fake balance</button>
+    <p class="muted" style="font-size:12px">How it trades: the <b>4-hour chart</b> sets the direction (it only trades with a clear trend).
+      On the <b>1-hour chart</b> it waits for a dip into the 20 EMA with the RSI cooling off, then a green candle closing back over it,
+      and buys when the price breaks that candle's high (shorts: the mirror image). It never enters after a big candle, when the price
+      is stretched over its average, or at the 24-hour high. Every trade has a stop under the dip; at +1R the stop goes to break-even,
+      at +2R half is closed, the rest trails. It stands aside after a violent hour, and rests 2 hours after a loss.</p>
+  </section>
+  <section class="panel">
+    <h2>PERPS TRADES <span id="perpsCount"></span></h2>
+    <table><thead><tr><th>time</th><th>trade</th><th>entry → exit</th><th>P&amp;L</th><th>why</th></tr></thead><tbody id="perpsTrades"></tbody></table>
+  </section>
+  <section class="panel">
+    <h2>PERPS FEED <span>signals · entries · exits</span></h2>
+    <div class="feed pfeed" id="perpsFeed"></div>
+  </section>
+  </div>
+
+  <div id="memeView">
   <section class="panel" id="moneyPanel" aria-label="Money">
     <h2>MONEY <span id="moneyNote"></span></h2>
     <div class="moneyseg" role="group" aria-label="fake or real money">
@@ -507,6 +555,7 @@ details.pc .inner{padding:4px 8px 8px}
       Pause stops new buys; an open position stays with RISK, which alone sells it.
       All four need the ADMIN_TOKEN you set on the server. It's kept only on this phone.</p>
   </section>
+  </div>
 </div>
 
 <script>
@@ -1775,8 +1824,81 @@ function thresholdsRender(d){
     (c && c.why ? "  ·  last scan: " + c.why : "") : "no coin under the lens yet";
 }
 
+// ---------- PERPS: its own tab ----------
+function setTab(t){
+  t = t === "perps" ? "perps" : "memes"; store.set("tab", t);
+  $("memeView").hidden = t === "perps"; $("perpsView").hidden = t !== "perps";
+  $("tabMemes").classList.toggle("on", t !== "perps"); $("tabPerps").classList.toggle("on", t === "perps");
+  $("tabMemes").setAttribute("aria-selected", String(t !== "perps")); $("tabPerps").setAttribute("aria-selected", String(t === "perps"));
+}
+$("tabMemes").addEventListener("click", () => setTab("memes"));
+$("tabPerps").addEventListener("click", () => setTab("perps"));
+$("perpsReset").addEventListener("click", () => { if (confirm("Start the fake perps balance over from the beginning?")) admin("/api/perps-reset", null, "perpsMsg"); });
+setTab(store.get("tab"));
+const fmtPx = v => num(v) === null ? "—" : v >= 100 ? "$" + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})
+  : v >= 1 ? "$" + v.toFixed(3) : "$" + v.toFixed(5);
+function renderPerps(P){
+  if (!P) return;
+  const mode = P.mode, mb = $("perpsModes");
+  if (mb.dataset.key !== mode){ mb.dataset.key = mode; mb.textContent = "";
+    [["off", "OFF", "no new trades"], ["watch", "WATCH", "reads the charts and says what it would do, no trades"], ["auto", "AUTO", "trades the setups"]].forEach(([m, label, tip]) => {
+      const b = el("button", "btn " + m + (mode === m ? " on" : ""), label); b.type = "button"; b.title = tip;
+      b.addEventListener("click", () => { if (m !== mode) admin("/api/perps-mode", {mode: m}, "perpsMsg"); });
+      mb.appendChild(b); });
+    mb.appendChild(el("span", "muted small", {off: "OFF: no new trades (an open one is still managed)", watch: "WATCH: reads the charts, no trades",
+      auto: "AUTO: trades the setups, on fake money"}[mode] || "")); }
+  $("perpsNote").textContent = (P.money || "fake").toUpperCase() + " MONEY";
+  const R = P.record || {}, eq = num(P.equity), start = num(P.start_bank), pnl = eq !== null && start !== null ? eq - start : null;
+  const bal = $("perpsBal"); bal.textContent = "";
+  [["balance", usd(eq), ""], ["started", usd(start), ""], ["P&L", signed(pnl), pnl === null ? "" : pnl >= 0 ? "pos" : "neg"],
+   ["trades", `${R.won || 0}W ${R.lost || 0}L`, ""]].forEach(([k, v, c]) => { const sp = el("span", "", k); sp.appendChild(el("b", c, v)); bal.appendChild(sp); });
+  const pp = $("perpsPos"), p = P.position; pp.textContent = "";
+  if (!p) pp.appendChild(el("div", "empty", P.cooldown_until ? `no trade open · resting after a loss until ${P.cooldown_until.slice(11, 16)} UTC` : "no trade open"));
+  else {
+    const box = el("div", "ppos"), hd = el("div", "hd");
+    hd.append(el("span", "side " + p.side, `${p.coin} ${String(p.side).toUpperCase()} ${p.leverage}x`),
+      el("span", num(p.pnl) === null ? "" : p.pnl >= 0 ? "pos" : "neg", `${signed(num(p.pnl))} (${pcTxt(num(p.pnl_pct))})`));
+    box.appendChild(hd);
+    const t = el("table"), sl = num(p.stop_loss_usd);
+    [["in the trade", `${usd(num(p.stake_left))} · position ${usd(num(p.size))}`], ["entry → now", `${fmtPx(p.entry)} → ${fmtPx(p.mark)}`],
+     ["stop", fmtPx(p.stop) + (p.tp1 ? " (trailing)" : p.be ? " (break-even)" : "") + (sl === null ? "" : sl > 0 ? ` · a stop-out costs ${usd(sl)}` : ` · a stop-out keeps ${usd(-sl)}`)],
+     ["liquidation", fmtPx(p.liq)], ["plan", "stop to break-even at +1R, half out at +2R, the rest trails 1.5 ATR behind"],
+     ["opened", p.opened_at ? ago(p.opened_at) + " ago" : "—"], ["why", (p.why || []).join(" · ") || "—"]].forEach(([k, v]) => {
+      const tr = el("tr"); tr.append(el("td", "", k), el("td", "", v)); t.appendChild(tr); });
+    box.appendChild(t);
+    const cb = el("button", "btn warn", "Close now"); cb.type = "button";
+    cb.addEventListener("click", () => { if (confirm(`Close the ${p.coin} ${p.side} now?`)) admin("/api/perps-close", null, "perpsMsg"); });
+    box.appendChild(cb); pp.appendChild(box);
+  }
+  const pc = $("perpsCoins"), S = P.settings || {}; pc.textContent = "";
+  for (const c of S.coins || Object.keys(P.reads || {})){
+    const r = (P.reads || {})[c] || {}, a = (P.armed || {})[c], box = el("div", "pcoin"), t = el("div", "t");
+    t.append(el("span", "", c), el("span", "", fmtPx(num((P.prices || {})[c]) ?? num(r.price)))); box.appendChild(t);
+    box.appendChild(el("div", "tr " + (r.trend || "unknown"), `4h trend: ${r.trend || "—"}` + (num(r.rsi) !== null ? ` · 1h RSI ${r.rsi}` : "")
+      + (num(r.atr_pct) !== null ? ` · moves ~${r.atr_pct}% an hour` : "")));
+    if (a) box.appendChild(el("div", "s", `${String(a.side).toUpperCase()} setup: ${a.side === "long" ? "buys" : "shorts"} a break of ${fmtPx(a.trigger)}, stop ${fmtPx(a.stop)}` + (a.note ? ` (${a.note})` : "")));
+    else if ((r.wait || []).length) box.appendChild(el("div", "w", r.wait[0]));
+    else box.appendChild(el("div", "w", mode === "off" ? "off" : "reading the charts…"));
+    pc.appendChild(box); }
+  $("perpsRules").textContent = `All of the balance in each trade (${S.stake_pct ?? "?"}%), up to ${S.max_leverage ?? "?"}x: the stop sets the leverage, so a stop-out `
+    + `costs about ${S.max_loss_pct ?? "?"}% at most and the liquidation price stays at least ${S.liq_buffer ?? "?"}x further away than the stop. Jupiter's fees: `
+    + `${(S.open_fee_bps ?? 6) / 100}% to open and to close on the full size, plus an hourly borrow fee. ${P.real || ""}`
+    + (P.data_error ? ` · prices: ${P.data_error}` : P.price_source ? ` · prices from ${P.price_source}` : "");
+  const tb = $("perpsTrades"), T = P.trades || []; tb.textContent = "";
+  $("perpsCount").textContent = R.closed ? `${R.closed} closed` : "";
+  for (const x of T){ const tr = el("tr"), pn = num(x.pnl);
+    tr.append(el("td", "muted", (x.time || "").slice(5, 16).replace("T", " ")), el("td", "side " + x.side, `${x.coin} ${x.side} ${x.leverage}x`),
+      el("td", "", `${fmtPx(x.entry)} → ${fmtPx(x.exit)}`), el("td", pn === null ? "" : pn >= 0 ? "pos" : "neg", signed(pn) + (num(x.pct) !== null ? ` (${pcTxt(x.pct)})` : "")),
+      el("td", "muted", (x.why || "") + (x.final ? "" : " (part)"))); tb.appendChild(tr); }
+  if (!T.length){ const tr = el("tr"), td = el("td", "muted", "no perps trades yet"); td.colSpan = 5; tr.appendChild(td); tb.appendChild(tr); }
+  const fd = $("perpsFeed"); fd.textContent = "";
+  for (const e of P.events || []){ const row = el("div"); row.append(el("span", "muted", (e.time || "").slice(11, 19) + "  "),
+    el("span", e.kind === "open" ? "pos" : e.kind === "signal" ? "" : "", e.text || "")); fd.appendChild(row); }
+  if (!(P.events || []).length) fd.appendChild(el("div", "empty", "nothing yet: the first look at the charts fills this in"));
+}
 function render(d){
   lastStatus = d;
+  try { renderPerps(d.perps); } catch (e) { console.error("perps", e); }
   const srv = Date.parse(d.server_now); if (Number.isFinite(srv)) clockOffset = srv - Date.now();
   if (d.title) $("title").textContent = d.title;
   if (typeof d.tagline === "string") $("tagline").textContent = d.tagline;
@@ -1938,6 +2060,8 @@ function reportCard(rep, full){
   if (facts.length) body.appendChild(el("div", "rfacts", facts.join(" · ")));
   if ((rep.veto || []).length){ const ul = el("ul", "rlist veto"); rep.veto.forEach(v => ul.appendChild(el("li", "", v))); body.appendChild(ul); }
   if ((rep.wait || []).length){ const ul = el("ul", "rlist wait"); rep.wait.forEach(v => ul.appendChild(el("li", "", v))); body.appendChild(ul); }
+  if ((rep.cautions || []).length){ const ul = el("ul", "rlist careful"); rep.cautions.forEach(v => ul.appendChild(el("li", "", v)));   // learn mode: a BUY
+    body.appendChild(ul); if (rep.verdict === "BUY") body.appendChild(el("div", "rline", "so it buys small: half the ticket, on the fast plan")); }   // bought small
   const groups = el("div", "rgroups");
   for (const [g, title] of GROUPS){
     const rows = (rep.checks || []).filter(c => c.group === g); if (!rows.length) continue;
