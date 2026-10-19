@@ -80,6 +80,13 @@ does, on the trend. The memecoin bots keep running on the **MEMECOINS** tab, unt
 - **Buttons:** OFF (no new trades; an open one is still managed), WATCH (reads the charts and shows what it would do),
   AUTO (trades). Each coin's card says the trend and what it's waiting for; a setup shows its trigger and stop. **Close now**
   closes the open trade.
+- **Live chart** at the top of the tab: 1-hour or 4-hour candles (1H / 4H) for SOL, ETH or BTC, with the 20 EMA (pink) and
+  50 EMA (blue). It opens on the coin being traded (marked •), or the coin with a setup. An open trade draws its ENTRY,
+  STOP (it moves up to break-even, then trails), LIQUIDATION, the break-even point and the take-profit; a setup draws its
+  trigger (BUYS ABOVE / SHORTS BELOW) and its stop. ▲ / ▼ mark entries and dots mark exits (green won, red lost). The last
+  candle moves with the price; it refreshes every 5 seconds while the tab is open. Tap a candle to read it, tap it again to
+  hide that. On a phone it shows the last 2 days of 1-hour candles; a computer shows 4. `GET /api/perps-chart?coin=SOL&tf=1h`
+  is the data behind it.
 
 **Fake money only in this version.** It trades a fake balance of $50 (`PERP_PAPER_BANK_USD`), the size of a small real
 wallet, with Jupiter's costs: 0.06% of the position to open and to close, a price-impact estimate, an hourly borrow fee on

@@ -18,6 +18,7 @@ import secrets
 import statistics
 import threading
 import time
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -45,7 +46,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-19 perps (fake money)"          # which build is running: the summary page says it
+VERSION = "2026-10-19 perps chart (fake money)"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -1485,7 +1486,17 @@ def make_handler(runner, admin_token):
             self.wfile.write(data)
 
         def do_GET(self):
+            query = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             self.path = self.path.split("?", 1)[0]          # ?anything is ignored (cache-busting links still work)
+            if self.path == "/api/perps-chart":
+                desk = getattr(runner, "perps", None)
+                if desk is None:
+                    return self._send(409, {"detail": "the desk isn't running"})
+                try:
+                    code, body = desk.chart((query.get("coin") or [""])[0], (query.get("tf") or ["1h"])[0])
+                except Exception as exc:                    # a bad chart never takes the page down
+                    code, body = 500, {"detail": f"chart: {snipe.where(exc)}"[:300]}
+                return self._send(code, body)
             if self.path in ("/", "/index.html"):
                 return self._send(200, page, "text/html; charset=utf-8")
             if self.path == "/api/status":

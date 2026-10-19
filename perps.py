@@ -696,6 +696,69 @@ class Perps:
                 if d.get("last_loss_ts") and self.clock() - d["last_loss_ts"] < self.cfg.cooldown_minutes * 60 else None,
                 "settings": self.cfg.settings(), "real": "not yet: real Jupiter Perps orders come in the next version"}
 
+    def chart(self, coin, tf="1h"):
+        """One coin's chart for the page: candles (the last one live, at the latest price), its 20 and 50 EMAs, the
+        open trade's levels (entry, stop, break-even, take-profit, liquidation), a setup's trigger, and the entries and
+        exits of its trades. GET /api/perps-chart?coin=SOL&tf=1h."""
+        coin = str(coin or "").strip().upper()
+        if coin not in self.cfg.coins:
+            return 404, {"detail": "unknown coin"}
+        tf = "4h" if str(tf or "").strip().lower() == "4h" else "1h"
+        k = self.candles.get(coin)
+        price = self.prices.get(coin)
+        out = {"coin": coin, "tf": tf, "price": price, "candles": [], "ema20": [], "ema50": [], "levels": [], "markers": [],
+               "updated": _now_iso(self.clock()), "source": (k or {}).get("src")}
+        if not k:
+            out["note"] = self.data_error or "no prices yet: the first read takes a minute"
+            return 200, out
+        series = list(k["h1" if tf == "1h" else "h4"])
+        cur = k.get("cur1" if tf == "1h" else "cur4")
+        if cur and (not series or cur["t"] > series[-1]["t"]):
+            cur = dict(cur)
+            if price:
+                cur.update(c=price, h=max(cur["h"], price), l=min(cur["l"], price))
+            series.append(cur)
+        closes = [c["c"] for c in series]
+        e20, e50 = ema(closes, 20), ema(closes, 50)
+        keep = 96 if tf == "1h" else 90
+        r6 = lambda v: float(f"{v:.6g}")
+        out["candles"] = [[c["t"], r6(c["o"]), r6(c["h"]), r6(c["l"]), r6(c["c"])] for c in series[-keep:]]
+        out["ema20"], out["ema50"] = [r6(v) for v in e20[-keep:]], [r6(v) for v in e50[-keep:]]
+        t0 = out["candles"][0][0] if out["candles"] else 0
+        pos = self.d.get("position")
+        if pos and pos["coin"] == coin:
+            sgn = 1 if pos["side"] == "long" else -1
+            lv = [("entry", "ENTRY", pos["entry"]), ("stop", "TRAILING STOP" if pos.get("tp1") else "STOP AT BREAK-EVEN"
+                  if pos.get("be") else "STOP", pos["stop"]), ("liq", "LIQUIDATION", liq_price(pos, self.cfg))]
+            if not pos.get("be"):
+                lv.append(("be", "STOP TO BREAK-EVEN AT", pos["entry"] + sgn * self.cfg.be_r * pos["r"]))
+            if not pos.get("tp1"):
+                lv.append(("tp", f"TAKE {self.cfg.tp1_pct:g}% PROFIT", pos["entry"] + sgn * self.cfg.tp1_r * pos["r"]))
+            out["levels"] = [{"kind": a, "label": b, "price": r6(v)} for a, b, v in lv]
+            out["position"] = {"side": pos["side"], "leverage": pos["leverage"], "opened": pos["opened_ts"]}
+        a = (self.d.get("armed") or {}).get(coin)
+        if a and not (pos and pos["coin"] == coin):
+            out["levels"] += [{"kind": "trigger", "label": "BUYS ABOVE" if a["side"] == "long" else "SHORTS BELOW", "price": r6(a["trigger"])},
+                              {"kind": "stop", "label": "ITS STOP", "price": r6(a["stop"])}]
+        seen = set()
+        for t in self.d.get("trades") or []:
+            if t.get("coin") != coin:
+                continue
+            try:
+                te = datetime.fromisoformat(str(t.get("time")).replace("Z", "+00:00")).timestamp()
+                to = datetime.fromisoformat(str(t.get("opened_at")).replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+            if te >= t0:
+                out["markers"].append({"t": te, "price": r6(t["exit"]), "kind": "close" if t.get("final") else "partial",
+                                       "side": t["side"], "pnl": t.get("pnl"), "why": str(t.get("why") or "")[:80]})
+            if to >= t0 and to not in seen:
+                seen.add(to)
+                out["markers"].append({"t": to, "price": r6(t["entry"]), "kind": "open", "side": t["side"]})
+        if pos and pos["coin"] == coin and pos["opened_ts"] >= t0 and pos["opened_ts"] not in seen:
+            out["markers"].append({"t": pos["opened_ts"], "price": r6(pos["entry"]), "kind": "open", "side": pos["side"]})
+        return 200, out
+
     def reset_bank(self):
         if self.d.get("position"):
             return 409, "close the open perps trade first"
