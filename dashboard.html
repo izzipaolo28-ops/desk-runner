@@ -317,6 +317,13 @@ details.pc .inner{padding:4px 8px 8px}
 .pcoin .t{display:flex;justify-content:space-between;font:700 14px var(--mono);margin-bottom:4px}
 .pcoin .tr.up{color:var(--green)} .pcoin .tr.down{color:var(--red)} .pcoin .tr.flat,.pcoin .tr.unknown{color:var(--muted)}
 .pcoin .w{color:#fde68a;margin-top:6px} .pcoin .s{color:var(--green);margin-top:6px}
+.preplay{border:1px solid var(--line);border-radius:6px;padding:12px;margin:10px 0;background:var(--panel2)}
+.preplay h3{margin:0 0 6px;font:700 12px var(--mono);letter-spacing:.12em;color:var(--ink)}
+.preplay .pbal{margin:6px 0}
+.preplay summary{cursor:pointer;font:12px var(--mono);color:var(--muted);margin-top:6px}
+.preplay .xrow{padding:6px 0;border-top:1px solid var(--line);font:12px var(--mono)}
+.preplay .xrow div{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.preplay .xrow .muted{font-size:11px}
 .side.long{color:var(--green)} .side.short{color:var(--red)}
 .pfeed div{padding:5px 0;border-top:1px solid var(--line);font:12px var(--mono)} .pfeed div:first-child{border-top:0}
 .pchart{margin:12px 0 4px}
@@ -404,14 +411,11 @@ details.pc .inner{padding:4px 8px 8px}
     </div>
     <div id="perpsPos"></div>
     <div class="pcoins" id="perpsCoins"></div>
+    <div class="preplay" id="perpsReplay"></div>
     <div class="msg" id="perpsMsg" role="status"></div>
     <p class="muted" style="font-size:12px" id="perpsRules"></p>
     <button class="btn" type="button" id="perpsReset">Reset the fake balance</button>
-    <p class="muted" style="font-size:12px">How it trades: the <b>4-hour chart</b> sets the direction (it only trades with a clear trend).
-      On the <b>1-hour chart</b> it waits for a dip into the 20 EMA with the RSI cooling off, then a green candle closing back over it,
-      and buys when the price breaks that candle's high (shorts: the mirror image). It never enters after a big candle, when the price
-      is stretched over its average, or at the 24-hour high. Every trade has a stop under the dip; at +1R the stop goes to break-even,
-      at +2R half is closed, the rest trails. It stands aside after a violent hour, and rests 2 hours after a loss.</p>
+    <p class="muted" style="font-size:12px" id="perpsHow"></p>
   </section>
   <section class="panel">
     <h2>PERPS TRADES <span id="perpsCount"></span></h2>
@@ -1860,6 +1864,35 @@ $("perpsReset").addEventListener("click", () => { if (confirm("Start the fake pe
 setTab(store.get("tab"));
 const fmtPx = v => num(v) === null ? "—" : v >= 100 ? "$" + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})
   : v >= 1 ? "$" + v.toFixed(3) : "$" + v.toFixed(5);
+const TFS = {m15: "15m", h1: "1h", h4: "4h"}, TFN = {m15: "15-minute", h1: "1-hour", h4: "4-hour"};
+function renderReplay(R, running, S){
+  const box = $("perpsReplay"), key = JSON.stringify([R && R.at, R && R.error, !!running]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key; box.textContent = "";
+  box.appendChild(el("h3", "", "REPLAY · THESE RULES ON THE PAST WEEK OF REAL PRICES"));
+  if (!R){ box.appendChild(el("div", "muted small", running ? "replaying the past week of prices…" : "waits for the first prices (a minute or two), then replays them")); return; }
+  if (R.error){ box.appendChild(el("div", "muted small", "the replay failed: " + R.error)); return; }
+  const pn = num(R.end) !== null && num(R.start) !== null ? R.end - R.start : null, row = el("div", "pbal");
+  [["trades", `${R.trades} (${R.won}W ${R.lost}L)`, ""], ["$" + (R.start ?? "?") + " →", usd(num(R.end)), pn === null ? "" : pn >= 0 ? "pos" : "neg"],
+   ["", pcTxt(num(R.pnl_pct)), pn === null ? "" : pn >= 0 ? "pos" : "neg"], ["worst drop", "−" + (R.max_drawdown_pct ?? 0) + "%", ""],
+   ["a day", String(R.per_day ?? 0), ""], ["held", R.avg_hold_min === null || R.avg_hold_min === undefined ? "—" : `~${Math.round(R.avg_hold_min)} min`, ""]]
+    .forEach(([k, v, c]) => { const sp = el("span", "", k); sp.appendChild(el("b", c, v)); row.appendChild(sp); });
+  box.appendChild(row);
+  const when = R.from && R.to ? `${new Date(R.from).toLocaleDateString([], {month: "short", day: "numeric"})} – ${new Date(R.to).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})}` : "";
+  box.appendChild(el("div", "muted small", `${R.days} days (${when}) of ${TFN[R.entry_tf] || ""} candles on ${(R.coins || []).join(", ")}, starting from $${R.start}, the whole balance in each trade. `
+    + (R.stopped ? `The balance fell under Jupiter's $${S.min_collateral ?? 10} minimum, so it would have stopped trading. ` : "")
+    + (R.liquidated ? `${R.liquidated} liquidated. ` : "")
+    + `Not a promise: the fills are guessed from candles, and when one candle touched both the stop and the target it counts the stop.`));
+  if ((R.list || []).length){
+    const d = el("details");
+    d.appendChild(el("summary", "", `the ${R.list.length === R.trades ? "" : "last "}${R.list.length} replayed exits`));
+    for (const x of R.list){ const row = el("div", "xrow"), a = el("div"), b = el("div"), p = num(x.pnl);
+      const lead = el("span"); lead.append(el("span", "muted", (x.time || "").slice(5, 16).replace("T", " ") + "  "), el("span", "side " + x.side, `${x.coin} ${x.side} ${x.leverage}x`));
+      a.append(lead, el("span", p === null ? "" : p >= 0 ? "pos" : "neg", signed(p) + (num(x.pct) !== null ? ` (${pcTxt(x.pct)})` : "")));
+      b.append(el("span", "muted", `${fmtPx(x.entry)} → ${fmtPx(x.exit)}`), el("span", "muted", (x.why || "") + (x.final ? "" : " (part)")));
+      row.append(a, b); d.appendChild(row); }
+    box.appendChild(d); }
+}
 function renderPerps(P){
   if (!P) return;
   const mode = P.mode, mb = $("perpsModes");
@@ -1875,7 +1908,7 @@ function renderPerps(P){
   const bal = $("perpsBal"); bal.textContent = "";
   [["balance", usd(eq), ""], ["started", usd(start), ""], ["P&L", signed(pnl), pnl === null ? "" : pnl >= 0 ? "pos" : "neg"],
    ["trades", `${R.won || 0}W ${R.lost || 0}L`, ""]].forEach(([k, v, c]) => { const sp = el("span", "", k); sp.appendChild(el("b", c, v)); bal.appendChild(sp); });
-  const pp = $("perpsPos"), p = P.position; pp.textContent = "";
+  const pp = $("perpsPos"), p = P.position, S0 = P.settings || {}; pp.textContent = "";
   if (!p) pp.appendChild(el("div", "empty", P.cooldown_until ? `no trade open · resting after a loss until ${P.cooldown_until.slice(11, 16)} UTC` : "no trade open"));
   else {
     const box = el("div", "ppos"), hd = el("div", "hd");
@@ -1885,7 +1918,9 @@ function renderPerps(P){
     const t = el("table"), sl = num(p.stop_loss_usd);
     [["in the trade", `${usd(num(p.stake_left))} · position ${usd(num(p.size))}`], ["entry → now", `${fmtPx(p.entry)} → ${fmtPx(p.mark)}`],
      ["stop", fmtPx(p.stop) + (p.tp1 ? " (trailing)" : p.be ? " (break-even)" : "") + (sl === null ? "" : sl > 0 ? ` · a stop-out costs ${usd(sl)}` : ` · a stop-out keeps ${usd(-sl)}`)],
-     ["liquidation", fmtPx(p.liq)], ["plan", "stop to break-even at +1R, half out at +2R, the rest trails 1.5 ATR behind"],
+     ["liquidation", fmtPx(p.liq)],
+     ["plan", p.target ? `stop to break-even at +${S0.be_r ?? 1}R; all out at the target ${fmtPx(p.target)}${p.tp1 ? " (hit)" : ""}; out after ${S0.max_hold_hours ?? 3}h at most`
+       : `stop to break-even at +${S0.be_r ?? 1}R, ${S0.tp1_pct ?? 50}% out at +${S0.tp1_r ?? 2}R, the rest trails ${S0.trail_atr ?? 1.5} ATR behind`],
      ["opened", p.opened_at ? ago(p.opened_at) + " ago" : "—"], ["why", (p.why || []).join(" · ") || "—"]].forEach(([k, v]) => {
       const tr = el("tr"); tr.append(el("td", "", k), el("td", "", v)); t.appendChild(tr); });
     box.appendChild(t);
@@ -1897,9 +1932,10 @@ function renderPerps(P){
   for (const c of S.coins || Object.keys(P.reads || {})){
     const r = (P.reads || {})[c] || {}, a = (P.armed || {})[c], box = el("div", "pcoin"), t = el("div", "t");
     t.append(el("span", "", c), el("span", "", fmtPx(num((P.prices || {})[c]) ?? num(r.price)))); box.appendChild(t);
-    box.appendChild(el("div", "tr " + (r.trend || "unknown"), `4h trend: ${r.trend || "—"}` + (num(r.rsi) !== null ? ` · 1h RSI ${r.rsi}` : "")
-      + (num(r.atr_pct) !== null ? ` · moves ~${r.atr_pct}% an hour` : "")));
-    if (a) box.appendChild(el("div", "s", `${String(a.side).toUpperCase()} setup: ${a.side === "long" ? "buys" : "shorts"} a break of ${fmtPx(a.trigger)}, stop ${fmtPx(a.stop)}` + (a.note ? ` (${a.note})` : "")));
+    box.appendChild(el("div", "tr " + (r.trend || "unknown"), `${TFS[S.trend_tf] || "4h"} trend: ${r.trend || "—"}` + (num(r.rsi) !== null ? ` · ${TFS[S.entry_tf] || "1h"} RSI ${r.rsi}` : "")
+      + (num(r.atr_pct) !== null ? ` · moves ~${r.atr_pct}% ${S.entry_tf === "m15" ? "per 15 min" : "an hour"}` : "")));
+    if (a) box.appendChild(el("div", "s", `${String(a.side).toUpperCase()} setup: ${a.side === "long" ? "buys" : "shorts"} a break of ${fmtPx(a.trigger)}, stop ${fmtPx(a.stop)}`
+      + (a.target ? `, target ${fmtPx(a.target)}` : "") + (a.note ? ` (${a.note})` : "")));
     else if ((r.wait || []).length) box.appendChild(el("div", "w", r.wait[0]));
     else box.appendChild(el("div", "w", mode === "off" ? "off" : "reading the charts…"));
     pc.appendChild(box); }
@@ -1907,6 +1943,15 @@ function renderPerps(P){
     + `costs about ${S.max_loss_pct ?? "?"}% at most and the liquidation price stays at least ${S.liq_buffer ?? "?"}x further away than the stop. Jupiter's fees: `
     + `${(S.open_fee_bps ?? 6) / 100}% to open and to close on the full size, plus an hourly borrow fee. ${P.real || ""}`
     + (P.data_error ? ` · prices: ${P.data_error}` : P.price_source ? ` · prices from ${P.price_source}` : "");
+  const swing = S.style !== "trend", E = TFN[S.entry_tf] || "1-hour", TT = TFN[S.trend_tf] || "4-hour";
+  $("perpsHow").textContent = `How it trades (${swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
+    + `On the ${E} chart it waits for a dip into the 20 EMA with the RSI cooling off, then a green candle closing back over it, and buys when the price `
+    + `breaks that candle's high (shorts: the mirror image). It never enters after a big candle, when the price is stretched over its average, or at the recent high. `
+    + `Every trade has a stop under the dip; at +${S.be_r ?? 1}R the stop goes to break-even. `
+    + (swing ? `The whole trade closes at the last swing high (low for a short), between ${S.tp1_r ?? 1.5}R and ${S.tp_max_r ?? 3}R away, and it's out after ${S.max_hold_hours ?? 3} hours at most. `
+             : `At +${S.tp1_r ?? 2}R ${S.tp1_pct ?? 50}% is closed and the rest trails; out after ${S.max_hold_hours ?? 48} hours at most. `)
+    + `It stands aside after a violent candle, and rests ${S.cooldown_minutes ?? 30} minutes after a loss.`;
+  renderReplay(P.replay, P.replay_running, S);
   const tb = $("perpsTrades"), T = P.trades || []; tb.textContent = "";
   $("perpsCount").textContent = R.closed ? `${R.closed} closed` : "";
   for (const x of T){ const tr = el("tr"), pn = num(x.pnl);
@@ -1920,7 +1965,7 @@ function renderPerps(P){
   if (!(P.events || []).length) fd.appendChild(el("div", "empty", "nothing yet: the first look at the charts fills this in"));
 }
 // ---------- PERPS: the live chart ----------
-var PC = {coin: null, pinned: false, tf: store.get("pcTf") === "4h" ? "4h" : "1h", data: null, busy: false, hover: null, last: null};
+var PC = {coin: null, pinned: false, tf: ["15m", "1h", "4h"].includes(store.get("pcTf")) ? store.get("pcTf") : null, data: null, busy: false, hover: null, last: null};
 const PCOL = {up: "#34d399", down: "#f87171", ema20: "#d55181", ema50: "#3987e5", entry: "#e8edf6", stop: "#e66767", liq: "#e66767",
   be: "#7f8aa3", tp: "#34d399", trigger: "#c98500", grid: "#141a28", axis: "#4b5569"};
 function pcDefaultCoin(){
@@ -1935,9 +1980,10 @@ function pcControls(){
   if (cb.dataset.key !== key){ cb.dataset.key = key; cb.textContent = "";
     for (const c of coins){ const b = el("button", c === coin ? "on" : "", c + (P.position && P.position.coin === c ? " •" : "")); b.type = "button";
       b.addEventListener("click", () => { PC.coin = c; PC.pinned = true; PC.data = null; PC.hover = null; pcControls(); loadPerpsChart(); }); cb.appendChild(b); } }
+  if (!PC.tf) PC.tf = {m15: "15m", h1: "1h", h4: "4h"}[(P.settings || {}).entry_tf] || "15m";
   const tb = $("pcTf");
   if (tb.dataset.key !== PC.tf){ tb.dataset.key = PC.tf; tb.textContent = "";
-    for (const [tf, label] of [["1h", "1H"], ["4h", "4H"]]){ const b = el("button", tf === PC.tf ? "on" : "", label); b.type = "button";
+    for (const [tf, label] of [["15m", "15M"], ["1h", "1H"], ["4h", "4H"]]){ const b = el("button", tf === PC.tf ? "on" : "", label); b.type = "button";
       b.addEventListener("click", () => { PC.tf = tf; store.set("pcTf", tf); PC.data = null; PC.hover = null; pcControls(); loadPerpsChart(); }); tb.appendChild(b); } }
 }
 async function loadPerpsChart(){
@@ -1963,7 +2009,7 @@ function drawPerpsChart(){
   const keep = W < 560 ? (D.tf === "4h" ? 45 : 48) : 96, cut = Math.max(0, (D.candles || []).length - keep);
   const C = (D.candles || []).slice(cut), E20 = (D.ema20 || []).slice(cut), E50 = (D.ema50 || []).slice(cut);
   const upd = D.updated ? new Date(D.updated) : null;
-  $("pcNote").textContent = C.length ? `${D.coin} · ${D.tf === "4h" ? "4-hour" : "1-hour"} candles` + (D.source ? ` from ${D.source}` : "")
+  $("pcNote").textContent = C.length ? `${D.coin} · ${{"15m": "15-minute", "4h": "4-hour"}[D.tf] || "1-hour"} candles` + (D.source ? ` from ${D.source}` : "")
     + (upd && !isNaN(upd) ? ` · updated ${upd.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}` : "")
     + " · tap the chart to read a candle" : (D.note || "no candles yet");
   if (!C.length) return;
@@ -1987,7 +2033,7 @@ function drawPerpsChart(){
   for (let i = n - 1; i >= 0; i -= every){ const d = new Date(C[i][0] * 1000);
     if (x(i) < (D.tf === "4h" ? 18 : 36) || x(i) > W - padR + 20) continue;
     const t = svgEl("text", {x: x(i), y: H - 6, fill: PCOL.axis, "font-size": 10, "text-anchor": "middle", "font-family": "ui-monospace,Menlo,monospace"});
-    t.textContent = `${d.getMonth() + 1}/${d.getDate()}` + (D.tf === "4h" ? "" : ` ${String(d.getHours()).padStart(2, "0")}:00`); svg.appendChild(t); }
+    t.textContent = `${d.getMonth() + 1}/${d.getDate()}` + (D.tf === "4h" ? "" : ` ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`); svg.appendChild(t); }
   // EMAs (2px lines)
   for (const [e, col] of [[E50, PCOL.ema50], [E20, PCOL.ema20]]){
     if (e.length === n) svg.appendChild(svgEl("polyline", {points: e.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" "), fill: "none", stroke: col, "stroke-width": 2,

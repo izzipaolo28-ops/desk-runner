@@ -1,24 +1,32 @@
 # perps.py
-"""PERPS: SOL, ETH and BTC on Jupiter Perps, traded on the trend.
+"""PERPS: SOL, ETH and BTC on Jupiter Perps, swing-traded with the trend.
 
-The 4-hour chart decides the direction. The 1-hour chart decides the entry: in an uptrend it waits for a dip into the
-1-hour 20 EMA, the RSI to cool under 45 and turn back up, and a green candle closing back over the EMA; it then buys when
-the price breaks that candle's high. Shorts are the mirror image. It never enters right after a big candle, never when
-the price is stretched more than one ATR over its average, and never at the 24-hour high (no buying the top).
+Two styles (PERP_STYLE):
+- swing (the default): the 1-hour chart decides the direction, the 15-minute chart the entry, and each trade is out within
+  a few hours: the whole position is closed at the last swing high (low for a short), at least 1.5R and at most 3R away.
+- trend: the 4-hour chart decides the direction and the 1-hour chart the entry; half is closed at +2R, the rest trails.
+
+The entry is the same in both: in an uptrend it waits for a dip into the entry chart's 20 EMA, the RSI to cool under 45
+and turn back up, and a green candle closing back over the EMA; it then buys when the price breaks that candle's high.
+Shorts are the mirror image. It never enters right after a big candle, never when the price is stretched more than one
+ATR over its average, and never at the recent high (no buying the top).
 
 Every trade has a stop under the dip it bought (over the bounce it shorted). The whole balance goes in each trade
 (PERP_STAKE_PCT=100, what you chose), at the leverage the stop allows, up to PERP_MAX_LEVERAGE (50): the liquidation price
 is always at least 1.5x as far as the stop, and a stop-out costs about half the balance at most (PERP_MAX_LOSS_PCT).
-At +1R the stop moves to break-even, at +2R half is closed, and the rest
-trails 1.5 ATR behind the best price. It stands aside after a violent hour and around news times you give it.
+At +1R the stop moves to break-even. It stands aside after a violent candle and around news times you give it.
+
+replay() runs the same rules over the last week of real candles, so the page can show what they would have done.
 
 This first version trades a FAKE balance only (PERP_PAPER_BANK_USD, $50), with Jupiter's fees (0.06% to open and to
 close, on the full size), an hourly borrow fee and Jupiter's liquidation rule. Real orders come next.
 
 Prices: Kraken's public candles and ticker (no key), Coinbase's when Kraken doesn't answer.
 """
+import bisect
 import logging
 import math
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -34,6 +42,10 @@ COINS = {
     "BTC": {"kraken": "XBTUSD", "keys": ("XXBTZUSD", "XBTUSD"), "coinbase": "BTC-USD"},
 }
 MODES = ("off", "watch", "auto")
+STYLES = ("swing", "trend")
+TF_MIN = {"m15": 15, "h1": 60, "h4": 240}
+TF_NAME = {"m15": "15-minute", "h1": "1-hour", "h4": "4-hour"}
+TF_SHORT = {"m15": "15m", "h1": "1h", "h4": "4h"}
 
 
 def _num(v):
@@ -78,6 +90,13 @@ class PerpConfig:
         if mode not in MODES:
             raise ValueError("PERP_MODE must be off, watch or auto")
         self.mode = mode
+        style = str(env.get("PERP_STYLE", "swing")).strip().lower() or "swing"
+        if style not in STYLES:
+            raise ValueError("PERP_STYLE must be swing or trend")
+        self.style = style
+        swing = style == "swing"
+        # swing: the 1-hour trend, entries on the 15-minute chart, out within hours. trend: the 4-hour trend, 1-hour entries
+        self.entry_tf, self.trend_tf = ("m15", "h1") if swing else ("h1", "h4")
         coins = [c.strip().upper() for c in str(env.get("PERP_COINS", "SOL,ETH,BTC")).split(",") if c.strip()]
         bad = [c for c in coins if c not in COINS]
         if bad or not coins:
@@ -102,16 +121,21 @@ class PerpConfig:
         self.min_stop_pct = _env_num(env, "PERP_MIN_STOP_PCT", 0.35, low=0.05, high=10)
         self.max_stop_pct = _env_num(env, "PERP_MAX_STOP_PCT", 3, low=0.1, high=20)
         self.be_r = _env_num(env, "PERP_BREAKEVEN_R", 1, high=10)
-        self.tp1_r = _env_num(env, "PERP_TP1_R", 2, high=20)
-        self.tp1_pct = _env_num(env, "PERP_TP1_PCT", 50, high=100)
+        # swing: the whole trade closes at the last swing high / low, but never under 1.5R or over 3R away (PERP_TP1_R,
+        # PERP_TP_MAX_R). trend: half closes at +2R and the rest trails PERP_TRAIL_ATR behind the best price
+        self.tp1_r = _env_num(env, "PERP_TP1_R", 1.5 if swing else 2, low=0.1, high=20)
+        self.tp_max_r = _env_num(env, "PERP_TP_MAX_R", 3, low=0.1, high=50)
+        if self.tp_max_r < self.tp1_r:
+            raise ValueError("PERP_TP_MAX_R must be at least PERP_TP1_R")
+        self.tp1_pct = _env_num(env, "PERP_TP1_PCT", 100 if swing else 50, high=100)
         self.trail_atr = _env_num(env, "PERP_TRAIL_ATR", 1.5, low=0.1, high=20)
-        self.max_hold_hours = _env_num(env, "PERP_MAX_HOLD_HOURS", 48, low=1, high=24 * 30)
+        self.max_hold_hours = _env_num(env, "PERP_MAX_HOLD_HOURS", 3 if swing else 48, low=0.25, high=24 * 30)
         self.stretch_atr = _env_num(env, "PERP_STRETCH_ATR", 1, low=0.1, high=10)
         self.spike_atr = _env_num(env, "PERP_SPIKE_ATR", 2.5, low=0.5, high=20)
         self.shock_atr = _env_num(env, "PERP_SHOCK_ATR", 3.5, low=0.5, high=20)
-        self.cooldown_minutes = _env_num(env, "PERP_COOLDOWN_MINUTES", 120, high=24 * 60)
-        self.min_trend = _env_num(env, "PERP_MIN_TREND", 0.3, high=20)              # 4h 20/50 EMA gap, in 4h ATRs
-        self.candle_seconds = _env_num(env, "PERP_CANDLE_SECONDS", 120, low=30)
+        self.cooldown_minutes = _env_num(env, "PERP_COOLDOWN_MINUTES", 30 if swing else 120, high=24 * 60)
+        self.min_trend = _env_num(env, "PERP_MIN_TREND", 0.3, high=20)              # trend chart 20/50 EMA gap, in its ATRs
+        self.candle_seconds = _env_num(env, "PERP_CANDLE_SECONDS", 60 if swing else 120, low=30)
         self.news = []
         for part in str(env.get("PERP_NEWS_TIMES", "")).split(","):
             part = part.strip()
@@ -126,7 +150,7 @@ class PerpConfig:
         return ((self.open_fee_bps if which == "open" else self.close_fee_bps) + self.impact_bps) / 1e4
 
     def settings(self):
-        return {k: getattr(self, k) for k in ("coins", "paper_bank", "max_leverage", "stake_pct", "min_collateral",
+        return {k: getattr(self, k) for k in ("style", "entry_tf", "trend_tf", "tp_max_r", "coins", "paper_bank", "max_leverage", "stake_pct", "min_collateral",
                                                "open_fee_bps", "close_fee_bps", "impact_bps", "borrow_pct_hour", "maint_pct",
                                                "liq_buffer", "max_loss_pct", "min_stop_pct", "max_stop_pct", "be_r", "tp1_r", "tp1_pct",
                                                "trail_atr", "max_hold_hours", "stretch_atr", "spike_atr", "shock_atr",
@@ -162,15 +186,16 @@ def kraken_candles(coin, minutes):
 
 
 def coinbase_candles(coin, minutes):
-    """Coinbase has 1-hour candles (no 4-hour): 4-hour ones are built from them, on the same UTC boundaries as Kraken's."""
-    body = _get(f"{COINBASE}/products/{COINS[coin]['coinbase']}/candles", {"granularity": 3600})
+    """Coinbase has 15-minute and 1-hour candles (no 4-hour): 4-hour ones are built from the 1-hour ones, on the same UTC
+    boundaries as Kraken's."""
+    body = _get(f"{COINBASE}/products/{COINS[coin]['coinbase']}/candles", {"granularity": 900 if minutes == 15 else 3600})
     if not isinstance(body, list):
         raise collect.FetchFailed("coinbase", "no candles in the answer")
     hours = [c for c in (_candle(r[0], r[3], r[2], r[1], r[4]) for r in body if isinstance(r, list) and len(r) >= 5) if c]
     hours.sort(key=lambda c: c["t"])
     if len(hours) < 2:
         raise collect.FetchFailed("coinbase", "too few candles")
-    if minutes == 60:
+    if minutes in (15, 60):
         return hours[:-1], hours[-1]
     span = minutes * 60
     buckets = {}
@@ -241,9 +266,13 @@ def rsi(closes, n=14):
 
 # ---------- the read: trend, setup, why it waits ----------
 def read_coin(coin, h1, h4, cfg, now=None):
-    """What the charts say for one coin. h1 / h4: CLOSED candles, oldest first.
+    """What the charts say for one coin. h1: the entry chart's CLOSED candles, oldest first (15-minute in the swing style,
+    1-hour in the trend style); h4: the trend chart's (1-hour / 4-hour).
     Returns {"coin", "trend", "setup" (or None), "wait": [...], "atr", "atr_pct", ...}."""
     now = now if now is not None else time.time()
+    E, T = TF_NAME[cfg.entry_tf], TF_NAME[cfg.trend_tf]
+    step = TF_MIN[cfg.entry_tf] * 60
+    look_h = round(24 * step / 3600)                             # the "recent high": the last 24 entry candles
     out = {"coin": coin, "trend": "unknown", "setup": None, "wait": []}
     if len(h4) < 60 or len(h1) < 60:
         out["wait"].append("not enough price history yet")
@@ -265,14 +294,14 @@ def read_coin(coin, h1, h4, cfg, now=None):
     b, a = h1[-1], a1[-1]
     out.update(trend=trend, strength=round(strength, 2), price=b["c"], ema20=e20[-1], ema50=e50[-1], atr=a,
                atr_pct=round(100 * a / b["c"], 3), rsi=round(r[-1], 1), bar_time=b["t"])
-    if now - b["t"] > 3 * 3600:
+    if now - b["t"] > 3 * step:
         out["wait"].append("the price data is stale")
         return out
     if trend == "flat":
-        out["wait"].append("no clear 4-hour trend: it only trades with one")
+        out["wait"].append(f"no clear {T} trend: it only trades with one")
         return out
     if (b["h"] - b["l"]) > cfg.shock_atr * a:
-        out["wait"].append(f"a violent hour ({(b['h'] - b['l']) / a:.1f}x the usual range): standing aside")
+        out["wait"].append(f"a violent {E} candle ({(b['h'] - b['l']) / a:.1f}x the usual range): standing aside")
         return out
     near = [t for t in cfg.news if abs(now - t) <= cfg.news_minutes * 60]
     if near:
@@ -299,13 +328,13 @@ def read_coin(coin, h1, h4, cfg, now=None):
     spike = (b["h"] - b["l"]) > cfg.spike_atr * a
     word = "dip" if long else "bounce"
     if not pulled:
-        out["wait"].append(f"waiting for a {word} to the 1-hour 20 EMA ({_px(e20[-1])})")
+        out["wait"].append(f"waiting for a {word} to the {E} 20 EMA ({_px(e20[-1])})")
     elif too_deep:
-        out["wait"].append(f"the {word} went past the 1-hour 50 EMA: the trend may be breaking")
+        out["wait"].append(f"the {word} went past the {E} 50 EMA: the trend may be breaking")
     elif not cooled:
         out["wait"].append("the RSI hasn't cooled off yet" + (" (under 45)" if long else " (over 55)"))
     elif not turned:
-        out["wait"].append(f"waiting for a {'green' if long else 'red'} 1-hour candle closing back "
+        out["wait"].append(f"waiting for a {'green' if long else 'red'} {E} candle closing back "
                            f"{'over' if long else 'under'} the 20 EMA, the RSI turning")
     elif spike:
         out["wait"].append("the last candle was too big: no entry after a spike")
@@ -313,19 +342,34 @@ def read_coin(coin, h1, h4, cfg, now=None):
         out["wait"].append(f"stretched {abs(b['c'] - e20[-1]) / a:.1f} ATR from the 20 EMA: no buying the top" if long
                            else f"stretched {abs(b['c'] - e20[-1]) / a:.1f} ATR from the 20 EMA: no shorting the bottom")
     elif at_top:
-        out["wait"].append("right at the 24-hour high: no buying the top" if long else "right at the 24-hour low: no shorting the bottom")
+        out["wait"].append(f"right at the {look_h}-hour high: no buying the top" if long
+                           else f"right at the {look_h}-hour low: no shorting the bottom")
     if out["wait"]:
         return out
     trigger = b["h"] + 0.05 * a if long else b["l"] - 0.05 * a
     stop = dip - 0.15 * a if long else dip + 0.15 * a
     out["setup"] = {"side": "long" if long else "short", "trigger": trigger, "stop": stop, "bar": b["t"],
-                    "expires": b["t"] + 2 * 3600, "chase_limit": trigger + 0.3 * a if long else trigger - 0.3 * a,
+                    "expires": b["t"] + step + max(step, 1800),      # the trigger must break within 30 min (1 hour: trend)
+                    "chase_limit": trigger + 0.3 * a if long else trigger - 0.3 * a,
                     "atr": a, "score": round(strength + (45 - min(r[-6:]) if long else max(r[-6:]) - 55) / 10, 2),
-                    "why": [f"4-hour trend {trend} (20 EMA {'over' if long else 'under'} the 50, strength {strength:.1f})",
-                            f"1-hour {word} to the 20 EMA, RSI {'cooled to' if long else 'heated to'} "
+                    "why": [f"{T} trend {trend} (20 EMA {'over' if long else 'under'} the 50, strength {strength:.1f})",
+                            f"{E} {word} to the 20 EMA, RSI {'cooled to' if long else 'heated to'} "
                             f"{min(r[-6:]) if long else max(r[-6:]):.0f} and turning",
                             f"{'green' if long else 'red'} candle closed {'over' if long else 'under'} the 20 EMA"]}
+    if cfg.style == "swing":                     # the target: the last swing high (low), the top of the move it dipped from
+        swing_px = max(c["h"] for c in h1[-24:]) if long else min(c["l"] for c in h1[-24:])
+        out["setup"]["swing"] = swing_px
+        out["setup"]["target"] = target_for(trigger, stop, swing_px, long, cfg)
     return out
+
+
+def target_for(entry, stop, swing_px, long, cfg):
+    """The swing style's take-profit: the last swing high (low), but at least PERP_TP1_R and at most PERP_TP_MAX_R away."""
+    r = abs(entry - stop)
+    sgn = 1 if long else -1
+    lo, hi = entry + sgn * cfg.tp1_r * r, entry + sgn * cfg.tp_max_r * r
+    want = swing_px if swing_px is not None else lo
+    return min(max(want, lo), hi) if long else max(min(want, lo), hi)
 
 
 def _px(v):
@@ -360,17 +404,147 @@ def pnl_at(pos, price):
     return pos["size"] * (price / pos["entry"] - 1) * d
 
 
+class _MemState:
+    """A State that lives in memory only: the replay's."""
+
+    def __init__(self):
+        self.lock, self.data = threading.RLock(), {}
+
+    def save(self):
+        pass
+
+
+REPLAY_WINDOW = 130                              # candles of history each step reads (enough for the 50 EMA)
+
+
+def replay(data, cfg, bank=None):
+    """The rules, run over past candles. data: {coin: {"entry": [...], "trend": [...]}}, the CLOSED candles of the entry and
+    trend charts, oldest first. It is the live bot itself (the same entries, stops, targets, fees, borrow, liquidation,
+    cooldown: one trade at a time, the whole balance in each) fed the candles one at a time. Inside a candle the price is
+    walked open -> one extreme -> the other -> close, in the order that's WORSE for the trade (down first when it's long;
+    on the candle it enters: in at the trigger, then the drop), stopping at every trigger, stop, target and liquidation
+    price on the way. So when one candle touched both the stop and the target, it counts the stop."""
+    step = TF_MIN[cfg.entry_tf] * 60
+    tstep = TF_MIN[cfg.trend_tf] * 60
+    clock = [0.0]
+    st = _MemState()
+    p = Perps(cfg, st, clock=lambda: clock[0])
+    p.refresh = lambda now: None
+    with st.lock:
+        p.d["mode"] = "auto"
+        if bank is not None:
+            p.d["bank"] = p.d["start_bank"] = float(bank)
+    coins = [c for c in cfg.coins if c in data and len(data[c].get("entry") or []) > 60 and len(data[c].get("trend") or []) > 60]
+    ent = {c: data[c]["entry"] for c in coins}
+    trd = {c: data[c]["trend"] for c in coins}
+    trd_t = {c: [x["t"] + tstep for x in trd[c]] for c in coins}          # when each trend candle closed
+    at = {c: {x["t"]: i for i, x in enumerate(ent[c])} for c in coins}
+    times = sorted({x["t"] for c in coins for x in ent[c]})
+    warm = 60
+    first = None
+    for t in times:
+        live = [c for c in coins if at[c].get(t, -1) >= warm]
+        if not live:
+            continue
+        first = first if first is not None else t
+        bars = {c: ent[c][at[c][t]] for c in live}
+        clock[0] = t + 1
+        for c, b in bars.items():
+            p.prices[c] = b["o"]
+        p.tick(clock[0])
+        pos = p.d.get("position")
+        order = sorted(live, key=lambda c: (0 if pos and pos["coin"] == c else 1, -((p.d.get("armed") or {}).get(c) or {}).get("score", -99)))
+        for c in order:
+            b = bars[c]
+            pos = p.d.get("position")
+            a = (p.d.get("armed") or {}).get(c)
+            if pos and pos["coin"] == c:                      # an open trade: against it first
+                path = [b["l"], b["h"], b["c"]] if pos["side"] == "long" else [b["h"], b["l"], b["c"]]
+            elif a and a["side"] == "long" and b["o"] < a["trigger"] <= b["h"]:
+                path = [a["trigger"], b["l"], b["h"], b["c"]]  # the worst order: in at the trigger, then the drop, then the rise
+            elif a and a["side"] == "short" and b["o"] > a["trigger"] >= b["l"]:
+                path = [a["trigger"], b["h"], b["l"], b["c"]]
+            else:
+                path = [b["l"], b["h"], b["c"]]
+            x = b["o"]
+            for k, goal in enumerate(path):
+                ts = t + step * (k + 1) / (len(path) + 1)
+                for _ in range(8):                             # every level on the way: trigger, stop, target, liquidation
+                    lv = _levels(p, c)
+                    between = [v for v in lv if (x < v < goal) or (goal < v < x)]
+                    nxt = min(between, key=lambda v: abs(v - x)) if between else goal
+                    p.prices[c] = nxt
+                    clock[0] = ts
+                    p.tick(ts)
+                    x = nxt
+                    if nxt == goal:
+                        break
+        clock[0] = t + step                                    # the candle closed: read the charts
+        for c in live:
+            i = at[c][t]
+            j = bisect.bisect_right(trd_t[c], t + step)
+            if j < 60:
+                continue
+            p.prices[c] = bars[c]["c"]
+            p.reads[c] = read_coin(c, ent[c][max(0, i + 1 - REPLAY_WINDOW): i + 1], trd[c][max(0, j - REPLAY_WINDOW): j], cfg, t + step)
+        p.tick(t + step)
+    if p.d.get("position"):
+        p.close(1.0, p.prices[p.d["position"]["coin"]], "the replay ended (still open)", clock[0])
+    closed = [x for x in p.d.get("trades") or [] if x.get("final")]
+    won = [x for x in closed if (x.get("total") or 0) > 0]
+    end = float(p.d.get("bank") or 0.0)
+    start = float(p.d.get("start_bank") or 0.0)
+    peak, dd, eq = start, 0.0, start
+    for x in reversed(p.d.get("trades") or []):
+        eq += x.get("pnl") or 0.0
+        peak = max(peak, eq)
+        dd = max(dd, (peak - eq) / peak if peak > 0 else 0.0)
+    days = (times[-1] + step - first) / 86400 if first is not None else 0.0
+    return {"style": cfg.style, "entry_tf": cfg.entry_tf, "trend_tf": cfg.trend_tf, "coins": coins,
+            "from": _now_iso(first) if first is not None else None, "to": _now_iso(times[-1] + step) if times else None,
+            "days": round(days, 1), "trades": len(closed), "won": len(won), "lost": len(closed) - len(won),
+            "start": round(start, 2), "end": round(end, 2), "pnl_pct": round(100 * (end / start - 1), 1) if start else None,
+            "max_drawdown_pct": round(100 * dd, 1), "liquidated": sum(1 for x in closed if str(x.get("why", "")).startswith("LIQ")),
+            "avg_hold_min": round(sum(x.get("held_min") or 0 for x in closed) / len(closed), 1) if closed else None,
+            "per_day": round(len(closed) / days, 2) if days else None,
+            "stopped": end < cfg.min_collateral,
+            "list": [{k: x.get(k) for k in ("time", "opened_at", "coin", "side", "leverage", "entry", "exit", "pnl", "pct", "why", "final",
+                                             "held_min", "total")} for x in (p.d.get("trades") or [])[:40]]}
+
+
+def _levels(p, coin):
+    """The prices the replay must stop at for one coin: its trigger, or the open trade's stop, target, break-even point
+    and liquidation."""
+    out = []
+    pos = p.d.get("position")
+    if pos and pos["coin"] == coin:
+        sgn = 1 if pos["side"] == "long" else -1
+        out += [pos["stop"], pos.get("liq") or liq_price(pos, p.cfg)]
+        if pos.get("target") and not pos.get("tp1"):
+            out.append(pos["target"])
+        elif not pos.get("tp1"):
+            out.append(pos["entry"] + sgn * p.cfg.tp1_r * pos["r"])
+        if not pos.get("be"):
+            out.append(pos["entry"] + sgn * p.cfg.be_r * pos["r"])
+    a = (p.d.get("armed") or {}).get(coin)
+    if a and not pos:
+        out += [a["trigger"], a.get("chase_limit")]
+    return [v for v in out if v and math.isfinite(v)]
+
+
 class Perps:
     """The perps desk. state: the runner's State (one JSON file); everything perps keeps is under state.data["perps"]."""
 
     def __init__(self, cfg, state, clock=time.time):
         self.cfg, self.state, self.clock = cfg, state, clock
-        self.candles = {}                      # coin -> {"h1": [...], "h4": [...], "at": ts, "src": "kraken"}
+        self.candles = {}                      # coin -> {"m15"/"h1"/"h4": [closed...], "cur_m15"...: forming, "at_m15"...: ts, "src"}
         self.prices, self.price_at, self.price_src = {}, 0.0, None
         self.reads = {}
         self.data_error = None
         self.tried = {}                            # coin -> when its candles were last asked for
         self.price_fail_at = 0.0
+        self.down = {}                             # source -> until when it's left alone after failing
+        self.replay_result, self.replay_busy, self.replay_key = None, False, None
         with self.state.lock:
             p = self.state.data.setdefault("perps", {})
             p.setdefault("bank", cfg.paper_bank)
@@ -408,33 +582,75 @@ class Perps:
             del ev[60:]
 
     # ----- data -----
+    def _every(self, tf):
+        """How often a timeframe's candles are fetched: the two the bot trades from every PERP_CANDLE_SECONDS, the other
+        one (only drawn on the chart) every 15 minutes."""
+        return self.cfg.candle_seconds if tf in (self.cfg.entry_tf, self.cfg.trend_tf) else max(900.0, self.cfg.candle_seconds)
+
+    def maybe_replay(self, now, wait=False):
+        """Each new entry-chart candle, the rules are replayed over the candles it has (about a week of 15-minute ones), in
+        the background: the page shows what they would have done."""
+        if self.replay_busy or not all(self.has_data(c) for c in self.cfg.coins):
+            return
+        key = tuple(self.candles[c][self.cfg.entry_tf][-1]["t"] for c in self.cfg.coins)
+        if key == self.replay_key:
+            return
+        self.replay_key, self.replay_busy = key, True
+        snap = {c: {"entry": list(self.candles[c][self.cfg.entry_tf]), "trend": list(self.candles[c][self.cfg.trend_tf])}
+                for c in self.cfg.coins}
+
+        def job():
+            t0 = time.time()
+            try:
+                out = replay(snap, self.cfg)
+                out.update(took_s=round(time.time() - t0, 2), at=_now_iso(self.clock()))
+                self.replay_result = out
+            except Exception as exc:              # a replay problem never touches the trading
+                self.replay_result = {"error": f"{type(exc).__name__}: {exc}"[:200], "at": _now_iso(self.clock())}
+            finally:
+                self.replay_busy = False
+        if wait:
+            job()
+        else:
+            threading.Thread(target=job, daemon=True, name="perps-replay").start()
+
+    def has_data(self, coin):
+        k = self.candles.get(coin) or {}
+        return bool(k.get(self.cfg.entry_tf)) and bool(k.get(self.cfg.trend_tf))
+
     def refresh(self, now):
-        """Candles every PERP_CANDLE_SECONDS, the price every few seconds. When both sources fail it waits a minute before
-        trying again, so a dead price feed never slows the memecoin bots (they share the loop)."""
-        due = [c for c in self.cfg.coins if now - (self.candles.get(c) or {}).get("at", 0) >= self.cfg.candle_seconds
-               and now - self.tried.get(c, 0) >= 60]
-        dead = set()                               # a source that just failed isn't asked again for the next coin
-        for c in due:
-            self.tried[c] = now
-            got, why = None, []
-            for name, fn in (("Kraken", kraken_candles), ("Coinbase", coinbase_candles)):
-                if name in dead:
-                    why.append(f"{name} down")
-                    continue
-                try:
-                    h1, cur1 = fn(c, 60)
-                    h4, cur4 = fn(c, 240)
-                    got = name.lower()
-                    break
-                except collect.FetchFailed as exc:
-                    dead.add(name)
-                    why.append(f"{name} {exc}")
-            if not got:
-                self.data_error = f"{c} candles: " + "; ".join(why)[:180]
+        """Candles every PERP_CANDLE_SECONDS, the price every few seconds. A source that fails is left alone for a minute
+        (the other one stands in), so a dead price feed never slows the loop down."""
+        sources = [(n, fn) for n, fn in (("Kraken", kraken_candles), ("Coinbase", coinbase_candles)) if now >= self.down.get(n, 0)]
+        for c in self.cfg.coins:
+            k = self.candles.setdefault(c, {})
+            due = [tf for tf in (self.cfg.entry_tf, self.cfg.trend_tf, *[t for t in TF_MIN if t not in (self.cfg.entry_tf, self.cfg.trend_tf)])
+                   if now - k.get("at_" + tf, 0) >= self._every(tf)]
+            if not due or now - self.tried.get(c, 0) < min(60.0, self.cfg.candle_seconds):
                 continue
-            src = got
-            self.candles[c] = {"h1": h1, "h4": h4, "cur1": cur1, "cur4": cur4, "at": now, "src": src}
-            self.data_error = None
+            self.tried[c] = now
+            for tf in due:
+                got, why = None, []
+                for name, fn in sources:
+                    if now < self.down.get(name, 0):
+                        why.append(f"{name} down")
+                        continue
+                    try:
+                        closed, cur = fn(c, TF_MIN[tf])
+                        got = name.lower()
+                        break
+                    except collect.FetchFailed as exc:
+                        self.down[name] = now + 60
+                        why.append(f"{name} {exc}")
+                if not got:
+                    self.data_error = f"{c} {TF_NAME[tf]} candles: " + ("; ".join(why) or "both sources down")[:180]
+                    break
+                k[tf], k["cur_" + tf], k["at_" + tf], k["src"] = closed, cur, now, got
+            else:
+                k["at"] = now
+                self.data_error = None
+            break                                  # one coin per step: Kraken is asked a couple of times, never in a burst
+        self.maybe_replay(now)
         pos = self.d.get("position")
         armed = self.d.get("armed") or {}
         fast = bool(pos) or bool(armed)
@@ -465,9 +681,9 @@ class Perps:
         if self.d.get("position"):
             did = self.manage(now) or "perps: holding"
         for c in self.cfg.coins:
-            k = self.candles.get(c)
-            if k:
-                self.reads[c] = read_coin(c, k["h1"], k["h4"], self.cfg, now)
+            if self.has_data(c):
+                k = self.candles[c]
+                self.reads[c] = read_coin(c, k[self.cfg.entry_tf], k[self.cfg.trend_tf], self.cfg, now)
         if self.mode() == "off":
             return did
         self.arm(now)
@@ -476,16 +692,19 @@ class Perps:
         return did
 
     def arm(self, now):
-        """A setup on a closed candle waits for its trigger (the price breaking that candle's high / low) for the next hour."""
+        """A setup on a closed candle waits for its trigger (the price breaking that candle's high / low) for the next
+        30 minutes (an hour in the trend style). A setup that was already traded isn't armed again."""
         with self.state.lock:
             armed = self.d.setdefault("armed", {})
+            taken = self.d.setdefault("taken", {})
             for c, rd in self.reads.items():
                 s = rd.get("setup")
                 old = armed.get(c)
-                if s and (not old or old.get("bar") != s["bar"]):
+                if s and (not old or old.get("bar") != s["bar"]) and taken.get(c) != s["bar"]:
                     armed[c] = {**s, "coin": c}
-                    self.event("signal", f"{c} {s['side'].upper()} setup: buys a break of {_px(s['trigger'])}, stop {_px(s['stop'])}. "
-                               + "; ".join(s["why"]), c)
+                    self.event("signal", f"{c} {s['side'].upper()} setup: {'buys' if s['side'] == 'long' else 'shorts'} a break of "
+                               f"{_px(s['trigger'])}, stop {_px(s['stop'])}" + (f", target {_px(s['target'])}" if s.get("target") else "")
+                               + ". " + "; ".join(s["why"]), c)
             for c in list(armed):
                 a = armed[c]
                 tr = (self.reads.get(c) or {}).get("trend")
@@ -542,22 +761,25 @@ class Perps:
                 self.d["armed"].pop(coin, None)
             return "perps: stop too far"
         lev = choose_leverage(stop_pct, cfg)
+        target = target_for(entry, stop, a.get("swing"), side == "long", cfg) if cfg.style == "swing" else None
         size = stake * lev
         fee = size * cfg.fee_frac("open")
         pos = {"coin": coin, "side": side, "entry": entry, "size": size, "size0": size, "stake": stake, "stake_left": stake,
                "collateral": stake - fee, "leverage": round(lev, 1), "stop": stop, "stop0": stop, "r": abs(entry - stop),
                "best": entry, "opened_ts": now, "opened_at": _now_iso(now), "borrow": 0.0, "borrow_ts": now,
                "open_fee": round(fee, 4), "open_fee_left": fee, "fees": fee, "tp1": False, "be": False, "realized": 0.0, "mode": "paper",
-               "why": a.get("why") or [], "atr": a.get("atr")}
+               "why": a.get("why") or [], "atr": a.get("atr"), "target": target, "style": cfg.style}
         pos["liq"] = liq_price(pos, cfg)
         with self.state.lock:
             self.d["bank"] = round(bank - stake, 2)
             self.d["position"] = pos
             self.d["armed"] = {}
+            self.d.setdefault("taken", {})[coin] = a.get("bar")          # this setup is used: never traded twice
             self.state.save()
         self.event("open", f"OPENED {coin} {side.upper()} {lev:.1f}x: ${stake:,.2f} in, ${size:,.0f} position at {_px(entry)}; "
                    f"stop {_px(stop)} ({stop_pct:.2f}% away, a stop-out costs about ${self._loss_at(pos, stop):,.2f}); "
-                   f"liquidation {_px(pos['liq'])}", coin)
+                   + (f"target {_px(target)} (+${-self._loss_at(pos, target):,.2f}); " if target else "")
+                   + f"liquidation {_px(pos['liq'])}", coin)
         return "perps: opened"
 
     def _loss_at(self, pos, price):
@@ -589,16 +811,18 @@ class Perps:
             return self.close(1.0, fill, f"{why} at {_px(pos['stop'])}", now)
         gain_r = ((price - pos["entry"]) if long else (pos["entry"] - price)) / pos["r"] if pos["r"] else 0.0
         if not pos["be"] and gain_r >= cfg.be_r:
-            fees_px = pos["entry"] * (cfg.fee_frac("open") + cfg.fee_frac("close"))
+            fees_px = pos["entry"] * (cfg.fee_frac("open") + cfg.fee_frac("close") + cfg.slippage_bps / 1e4)   # truly even
             be = pos["entry"] + fees_px if long else pos["entry"] - fees_px
             with self.state.lock:
                 pos["stop"] = max(pos["stop"], be) if long else min(pos["stop"], be)
                 pos["be"] = True
             self.event("info", f"{pos['coin']}: up {gain_r:.1f}R, the stop moves to break-even ({_px(pos['stop'])})", pos["coin"])
-        if not pos["tp1"] and gain_r >= cfg.tp1_r and cfg.tp1_pct > 0:
+        tgt = pos.get("target")
+        at_target = (price >= tgt if long else price <= tgt) if tgt else gain_r >= cfg.tp1_r
+        if not pos["tp1"] and at_target and cfg.tp1_pct > 0:
             with self.state.lock:
                 pos["tp1"] = True
-            self.close(cfg.tp1_pct / 100, price, f"take profit at +{gain_r:.1f}R", now)
+            self.close(cfg.tp1_pct / 100, price, (f"target hit at {_px(tgt)} (+{gain_r:.1f}R)" if tgt else f"take profit at +{gain_r:.1f}R"), now)
             pos = self.d.get("position")
             if not pos:
                 return "perps: closed"
@@ -610,9 +834,9 @@ class Perps:
                     pos["stop"] = max(pos["stop"], trail) if long else min(pos["stop"], trail)
         trend = (self.reads.get(pos["coin"]) or {}).get("trend")
         if trend in ("up", "down") and trend != ("up" if long else "down"):
-            return self.close(1.0, price, f"the 4-hour trend turned {trend}", now)
+            return self.close(1.0, price, f"the {TF_NAME[cfg.trend_tf]} trend turned {trend}", now)
         if now - pos["opened_ts"] >= cfg.max_hold_hours * 3600:
-            return self.close(1.0, price, f"held {cfg.max_hold_hours:g}h, the limit", now)
+            return self.close(1.0, price, f"held {cfg.max_hold_hours:g}h, the limit: out", now)
         return "perps: holding"
 
     def close(self, frac, price, why, now, liquidated=False):
@@ -694,7 +918,8 @@ class Perps:
                 "trades": trades, "events": events, "record": {"closed": len(closed), "won": wins, "lost": len(closed) - wins},
                 "cooldown_until": _now_iso(d["last_loss_ts"] + self.cfg.cooldown_minutes * 60)
                 if d.get("last_loss_ts") and self.clock() - d["last_loss_ts"] < self.cfg.cooldown_minutes * 60 else None,
-                "settings": self.cfg.settings(), "real": "not yet: real Jupiter Perps orders come in the next version"}
+                "settings": self.cfg.settings(), "real": "not yet: real Jupiter Perps orders come in the next version",
+                "replay": self.replay_result, "replay_running": self.replay_busy}
 
     def chart(self, coin, tf="1h"):
         """One coin's chart for the page: candles (the last one live, at the latest price), its 20 and 50 EMAs, the
@@ -703,16 +928,17 @@ class Perps:
         coin = str(coin or "").strip().upper()
         if coin not in self.cfg.coins:
             return 404, {"detail": "unknown coin"}
-        tf = "4h" if str(tf or "").strip().lower() == "4h" else "1h"
-        k = self.candles.get(coin)
+        tf = {"15m": "15m", "4h": "4h"}.get(str(tf or "").strip().lower(), "1h")
+        key = {"15m": "m15", "1h": "h1", "4h": "h4"}[tf]
+        k = self.candles.get(coin) or {}
         price = self.prices.get(coin)
         out = {"coin": coin, "tf": tf, "price": price, "candles": [], "ema20": [], "ema50": [], "levels": [], "markers": [],
-               "updated": _now_iso(self.clock()), "source": (k or {}).get("src")}
-        if not k:
-            out["note"] = self.data_error or "no prices yet: the first read takes a minute"
+               "updated": _now_iso(self.clock()), "source": k.get("src"), "style": self.cfg.style}
+        if not k.get(key):
+            out["note"] = f"no {TF_NAME[key]} candles for {coin} yet: " + (self.data_error or "the first read takes a minute")
             return 200, out
-        series = list(k["h1" if tf == "1h" else "h4"])
-        cur = k.get("cur1" if tf == "1h" else "cur4")
+        series = list(k[key])
+        cur = k.get("cur_" + key)
         if cur and (not series or cur["t"] > series[-1]["t"]):
             cur = dict(cur)
             if price:
@@ -720,7 +946,7 @@ class Perps:
             series.append(cur)
         closes = [c["c"] for c in series]
         e20, e50 = ema(closes, 20), ema(closes, 50)
-        keep = 96 if tf == "1h" else 90
+        keep = 90 if tf == "4h" else 96
         r6 = lambda v: float(f"{v:.6g}")
         out["candles"] = [[c["t"], r6(c["o"]), r6(c["h"]), r6(c["l"]), r6(c["c"])] for c in series[-keep:]]
         out["ema20"], out["ema50"] = [r6(v) for v in e20[-keep:]], [r6(v) for v in e50[-keep:]]
@@ -732,7 +958,9 @@ class Perps:
                   if pos.get("be") else "STOP", pos["stop"]), ("liq", "LIQUIDATION", liq_price(pos, self.cfg))]
             if not pos.get("be"):
                 lv.append(("be", "STOP TO BREAK-EVEN AT", pos["entry"] + sgn * self.cfg.be_r * pos["r"]))
-            if not pos.get("tp1"):
+            if pos.get("target") and not pos.get("tp1"):
+                lv.append(("tp", "TARGET", pos["target"]))
+            elif not pos.get("tp1"):
                 lv.append(("tp", f"TAKE {self.cfg.tp1_pct:g}% PROFIT", pos["entry"] + sgn * self.cfg.tp1_r * pos["r"]))
             out["levels"] = [{"kind": a, "label": b, "price": r6(v)} for a, b, v in lv]
             out["position"] = {"side": pos["side"], "leverage": pos["leverage"], "opened": pos["opened_ts"]}
@@ -740,6 +968,8 @@ class Perps:
         if a and not (pos and pos["coin"] == coin):
             out["levels"] += [{"kind": "trigger", "label": "BUYS ABOVE" if a["side"] == "long" else "SHORTS BELOW", "price": r6(a["trigger"])},
                               {"kind": "stop", "label": "ITS STOP", "price": r6(a["stop"])}]
+            if a.get("target"):
+                out["levels"].append({"kind": "tp", "label": "ITS TARGET", "price": r6(a["target"])})
         seen = set()
         for t in self.d.get("trades") or []:
             if t.get("coin") != coin:

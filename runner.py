@@ -46,7 +46,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-19 perps chart (fake money)"          # which build is running: the summary page says it
+VERSION = "2026-10-19 perps swing (fake money)"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -227,6 +227,7 @@ class Runner:
         self.cfg, self.seats, self.state, self._judge, self.lister, self.clock = cfg, seats, state, judge, lister, clock
         # PERPS: SOL, ETH and BTC on Jupiter Perps, its own section on the page (fake money in this version)
         self.perps = perps.Perps(perps.PerpConfig(os.environ if perps_env is None else perps_env), state, clock=clock)
+        self.perps_own_thread = False
         self.last_cycle = self.last_risk = self.last_watch = None
         self.last_bank = None
         self.test_requested = False
@@ -1047,10 +1048,11 @@ class Runner:
         """One step of the loop: WATCH and RISK manage every open coin on their clocks, and while a slot is free
         (MAX_POSITIONS) the desk keeps scanning for the next one. Returns the most important thing it did."""
         now = self.clock()
-        try:                                      # PERPS runs on its own, every step, whatever the memecoin bots do
-            self.perps.tick(now)
-        except Exception as exc:                  # a perps problem never stops the memecoin bots (or the other way round)
-            self.state.error(f"perps: {snipe.where(exc)}")
+        if not self.perps_own_thread:             # on the server PERPS has its own thread (perps_loop); here in tests
+            try:
+                self.perps.tick(now)
+            except Exception as exc:              # a perps problem never stops the memecoin bots (or the other way round)
+                self.state.error(f"perps: {snipe.where(exc)}")
         if self.money_request:                    # FAKE / REAL from the page: switched here, between two steps
             done = self.apply_money()
             if done:
@@ -1346,7 +1348,11 @@ class Runner:
             "trades": [{k: t.get(k) for k in ("time", "coin", "side", "leverage", "entry", "exit", "stake", "pnl", "pct", "why",
                                               "final", "total")} for t in (p.get("trades") or [])[:15]],
             "reads": {c: {k: r.get(k) for k in ("trend", "price", "rsi", "atr_pct", "wait", "setup")} for c, r in (p.get("reads") or {}).items()},
-            "armed": p.get("armed"), "events": [e.get("time", "")[11:19] + " " + e.get("text", "") for e in (p.get("events") or [])[:10]]}
+            "armed": p.get("armed"), "events": [e.get("time", "")[11:19] + " " + e.get("text", "") for e in (p.get("events") or [])[:10]],
+            "style": (p.get("settings") or {}).get("style"),
+            "replay": {k: v for k, v in (p.get("replay") or {}).items() if k != "list"} | {
+                "exits": [{k: t.get(k) for k in ("time", "coin", "side", "leverage", "entry", "exit", "pnl", "why")}
+                          for t in ((p.get("replay") or {}).get("list") or [])[:20]]} if p.get("replay") else None}
 
     def status(self):
         with self.state.lock:
@@ -1775,6 +1781,22 @@ def safe_build(env=os.environ):
         return Stopped(str(exc))
 
 
+def perps_loop(runner, sleep=time.sleep, rounds=None):
+    """PERPS on its own clock, every 2 seconds, whatever the memecoin bots are doing: a memecoin scan can take a minute,
+    and a 50x trade can't wait that long for its stop. The same error is logged once every 5 minutes at most."""
+    last, last_at, n = None, 0.0, 0
+    while rounds is None or n < rounds:
+        n += 1
+        try:
+            runner.perps.tick(runner.clock())
+        except Exception as exc:                  # a perps problem never stops the memecoin bots (or the other way round)
+            msg, now = f"perps: {snipe.where(exc)}", time.time()
+            if msg != last or now - last_at > 300:
+                runner.state.error(msg)
+                last, last_at = msg, now
+        sleep(2)
+
+
 def serve():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     runner = safe_build()
@@ -1799,6 +1821,8 @@ def serve():
     if isinstance(runner, Stopped):
         while True:
             time.sleep(3600)
+    runner.perps_own_thread = True
+    threading.Thread(target=perps_loop, args=(runner,), daemon=True, name="perps").start()
     log.info("dashboard on port %s, %s mode, wallet %s", httpd.server_address[1], "LIVE" if runner.cfg.live else "paper",
              runner.seats.kp.address if runner.seats.kp else "none")
     while True:
