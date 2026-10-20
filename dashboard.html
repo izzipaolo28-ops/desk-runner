@@ -296,6 +296,7 @@ details.pc .inner{padding:4px 8px 8px}
 .rpts .pt{display:grid;grid-template-columns:38px minmax(0,1fr);gap:6px} .rpts .pt b{text-align:right}
 .rlist{margin:8px 0 0;padding:0;list-style:none} .rlist li{padding:2px 0} .rlist.veto li{color:#fca5a5} .rlist.veto li::before{content:"✗ ";font-weight:800}
 .rlist.wait li{color:#fde68a} .rlist.wait li::before{content:"… "}
+.rlist.careful li{color:#fdba74} .rlist.careful li::before{content:"careful: ";font-weight:700}
 .rbuzz{margin-top:8px;color:#c6cfdf} .rbuzz a{color:#93c5fd;text-decoration:none;margin-right:10px;display:inline-block}
 .racts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px} .racts .btn,.racts a.btn{min-height:36px;padding:6px 12px;font-size:12px;text-decoration:none;display:inline-flex;align-items:center}
 .sgrid{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px;margin-top:14px}
@@ -303,6 +304,53 @@ details.pc .inner{padding:4px 8px 8px}
 .sbox{border:1px solid #161c2a;border-radius:6px;padding:10px 12px;background:#080a11;min-width:0}
 .sbox h3{margin:0 0 8px;font:700 11px var(--mono);letter-spacing:.14em;color:#9aa6bd;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .modes{display:flex;gap:6px;flex-wrap:wrap} .modes .btn{min-height:36px;padding:6px 12px;font-size:12px}
+.tabs{display:flex;gap:8px;margin-top:12px}
+.tabs button{flex:1;font:700 14px var(--mono);letter-spacing:.14em;padding:12px;border-radius:6px;border:1px solid #05060a;background:#0b0d14;color:var(--muted);min-height:48px}
+.tabs button.on{color:#0b0d14;background:#ff5fd2;border-color:#ff5fd2}
+.pbal{display:flex;gap:16px;flex-wrap:wrap;font:12px var(--mono);color:var(--muted);margin:12px 0 4px}
+.pbal b{color:var(--ink);font-size:16px;margin-left:4px} .pbal b.pos{color:var(--green)} .pbal b.neg{color:var(--red)}
+.ppos{border:1px solid var(--line);border-radius:6px;padding:12px;margin:10px 0;background:var(--panel2)}
+.ppos .hd{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font:700 15px var(--mono);margin-bottom:6px}
+.ppos td:first-child{color:var(--muted);width:34%}
+.pcoins{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin-top:10px}
+.pcoin{border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--panel2);font:12px var(--mono)}
+.pcoin .t{display:flex;justify-content:space-between;font:700 14px var(--mono);margin-bottom:4px}
+.pcoin .tr.up{color:var(--green)} .pcoin .tr.down{color:var(--red)} .pcoin .tr.flat,.pcoin .tr.unknown{color:var(--muted)}
+.pcoin .w{color:#fde68a;margin-top:6px} .pcoin .s{color:var(--green);margin-top:6px}
+.pnews{border:1px solid var(--line);border-radius:6px;padding:12px;margin:10px 0;background:var(--panel2);font:12px var(--mono)}
+.pnews h3{margin:0 0 6px;font:700 12px var(--mono);letter-spacing:.12em;color:var(--ink)}
+.pnews .nb{display:flex;gap:8px;padding:5px 0;border-top:1px solid var(--line);align-items:baseline}
+.pnews .nb b{min-width:36px} .pnews .nb .dir{min-width:96px;font-weight:700}
+.pnews .dir.up{color:var(--green)} .pnews .dir.down{color:var(--red)} .pnews .dir.neutral{color:var(--muted)}
+.pnews .major{color:#0b0d14;background:#fde68a;border-radius:3px;padding:0 4px;font-weight:800;margin-left:4px}
+.pnews .out{color:#0b0d14;background:#fca5a5;border-radius:4px;padding:6px 8px;margin:6px 0;font-weight:700}
+.pnews .hl{padding:4px 0;border-top:1px solid var(--line);overflow-wrap:anywhere} .pnews .hl a{color:var(--ink);text-decoration:none}
+.pnews summary{cursor:pointer;color:var(--muted);margin-top:6px}
+.pcoin .nw{margin-top:4px} .pcoin .nw.up{color:var(--green)} .pcoin .nw.down{color:var(--red)}
+.ktag{font:800 10px var(--mono);color:#0b0d14;background:#fde68a;border-radius:3px;padding:0 4px;margin-left:4px}
+.preplay{border:1px solid var(--line);border-radius:6px;padding:12px;margin:10px 0;background:var(--panel2)}
+.preplay h3{margin:0 0 6px;font:700 12px var(--mono);letter-spacing:.12em;color:var(--ink)}
+.preplay .pbal{margin:6px 0}
+.preplay summary{cursor:pointer;font:12px var(--mono);color:var(--muted);margin-top:6px}
+.preplay .xrow{padding:6px 0;border-top:1px solid var(--line);font:12px var(--mono)}
+.preplay .xrow div{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.preplay .xrow .muted{font-size:11px}
+.side.long{color:var(--green)} .side.short{color:var(--red)}
+.pfeed div{padding:5px 0;border-top:1px solid var(--line);font:12px var(--mono)} .pfeed div:first-child{border-top:0}
+.pchart{margin:12px 0 4px}
+.pctl{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.chips{display:flex;gap:6px}
+.chips button{font:700 12px var(--mono);border:1px solid #3a4560;background:#141c31;color:var(--muted);border-radius:6px;padding:6px 12px;min-height:36px}
+.chips button.on{border-color:#ff5fd2;color:#ffd6f6}
+.plegend{display:flex;gap:14px;flex-wrap:wrap;font:11px var(--mono);color:var(--muted);margin-bottom:6px}
+.plegend i{display:inline-block;width:14px;height:0;border-top:2px solid;vertical-align:middle;margin-right:5px}
+.plegend b{display:inline-block;width:8px;height:12px;vertical-align:middle;margin-right:5px;border:1.5px solid var(--green);border-radius:1px}
+.plegend b.dn{background:var(--red);border-color:var(--red)}
+.pcwrap{position:relative;background:#080b12;border:1px solid var(--line);border-radius:6px;touch-action:pan-y}
+.pcwrap svg{display:block;width:100%;height:320px}
+.pctip{position:absolute;top:6px;left:6px;background:rgba(11,13,20,.94);border:1px solid #3a4560;border-radius:6px;padding:6px 8px;
+  font:11px var(--mono);color:var(--muted);pointer-events:none;max-width:70%}
+.pctip b{color:var(--ink);font-weight:700}
 .modes .btn.on.off{border-color:#6b7489;color:#e8edf6} .modes .btn.on.watch{border-color:#fbbf24;color:#fde68a;background:#2a1f05}
 .modes .btn.on.auto{border-color:#34d399;color:#bbf7d0;background:#06281a}
 .gates{font:11px/1.6 var(--mono);color:#8b97b0;margin:8px 0}
@@ -354,6 +402,44 @@ details.pc .inner{padding:4px 8px 8px}
     and what the bots learned over from zero. In Railway: open the project, add a <b>Volume</b>, connect it to this service with mount path
     <b>/data</b>, and redeploy.</div>
 
+  <nav class="tabs" role="tablist" aria-label="Which bot">
+    <button type="button" role="tab" id="tabMemes" class="on">MEMECOINS</button>
+    <button type="button" role="tab" id="tabPerps">PERPS</button>
+  </nav>
+
+  <div id="perpsView" hidden>
+  <section class="panel" id="perpsPanel">
+    <h2>PERPS · SOL ETH BTC · JUPITER <span id="perpsNote"></span></h2>
+    <div class="modes" id="perpsModes"></div>
+    <div class="pbal" id="perpsBal"></div>
+    <div class="pchart">
+      <div class="pctl"><div class="chips" id="pcCoins" role="group" aria-label="coin"></div><div class="chips" id="pcTf" role="group" aria-label="timeframe"></div></div>
+      <div class="plegend" id="pcLegend"><span><b></b>up candle</span><span><b class="dn"></b>down candle</span>
+        <span><i style="border-color:#d55181"></i>20 EMA</span><span><i style="border-color:#3987e5"></i>50 EMA</span></div>
+      <div class="pcwrap" id="pcWrap"><svg id="pcSvg" role="img" aria-label="Live price chart with the trade's entry, stop and liquidation"></svg>
+        <div class="pctip" id="pcTip" hidden></div></div>
+      <div class="muted small" id="pcNote" style="margin-top:4px"></div>
+    </div>
+    <div id="perpsPos"></div>
+    <div class="pcoins" id="perpsCoins"></div>
+    <div class="pnews" id="perpsNews"></div>
+    <div class="preplay" id="perpsReplay"></div>
+    <div class="msg" id="perpsMsg" role="status"></div>
+    <p class="muted" style="font-size:12px" id="perpsRules"></p>
+    <button class="btn" type="button" id="perpsReset">Reset the fake balance</button>
+    <p class="muted" style="font-size:12px" id="perpsHow"></p>
+  </section>
+  <section class="panel">
+    <h2>PERPS TRADES <span id="perpsCount"></span></h2>
+    <table><thead><tr><th>time</th><th>trade</th><th>entry → exit</th><th>P&amp;L</th><th>why</th></tr></thead><tbody id="perpsTrades"></tbody></table>
+  </section>
+  <section class="panel">
+    <h2>PERPS FEED <span>signals · entries · exits</span></h2>
+    <div class="feed pfeed" id="perpsFeed"></div>
+  </section>
+  </div>
+
+  <div id="memeView">
   <section class="panel" id="moneyPanel" aria-label="Money">
     <h2>MONEY <span id="moneyNote"></span></h2>
     <div class="moneyseg" role="group" aria-label="fake or real money">
@@ -507,6 +593,7 @@ details.pc .inner{padding:4px 8px 8px}
       Pause stops new buys; an open position stays with RISK, which alone sells it.
       All four need the ADMIN_TOKEN you set on the server. It's kept only on this phone.</p>
   </section>
+  </div>
 </div>
 
 <script>
@@ -1775,8 +1862,295 @@ function thresholdsRender(d){
     (c && c.why ? "  ·  last scan: " + c.why : "") : "no coin under the lens yet";
 }
 
+// ---------- PERPS: its own tab ----------
+function setTab(t){
+  t = t === "perps" ? "perps" : "memes"; store.set("tab", t);
+  $("memeView").hidden = t === "perps"; $("perpsView").hidden = t !== "perps";
+  $("tabMemes").classList.toggle("on", t !== "perps"); $("tabPerps").classList.toggle("on", t === "perps");
+  $("tabMemes").setAttribute("aria-selected", String(t !== "perps")); $("tabPerps").setAttribute("aria-selected", String(t === "perps"));
+  if (t === "perps" && typeof loadPerpsChart === "function" && typeof PC !== "undefined") loadPerpsChart();
+}
+$("tabMemes").addEventListener("click", () => setTab("memes"));
+$("tabPerps").addEventListener("click", () => setTab("perps"));
+$("perpsReset").addEventListener("click", () => { if (confirm("Start the fake perps balance over from the beginning?")) admin("/api/perps-reset", null, "perpsMsg"); });
+setTab(store.get("tab"));
+const fmtPx = v => num(v) === null ? "—" : v >= 100 ? "$" + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})
+  : v >= 1 ? "$" + v.toFixed(3) : "$" + v.toFixed(5);
+const TFS = {m15: "15m", h1: "1h", h4: "4h"}, TFN = {m15: "15-minute", h1: "1-hour", h4: "4-hour"};
+function renderNews(N){
+  const box = $("perpsNews");
+  if (!N){ box.hidden = true; return; }
+  const key = JSON.stringify([N.read_at, N.fetched_at, N.ai, N.sitting_out, N.errors, (N.headlines || []).length, Math.floor(Date.now() / 60000)]);
+  if (box.dataset.key === key) return;
+  box.hidden = false; box.dataset.key = key; box.textContent = "";
+  box.appendChild(el("h3", "", "NEWS · READ BY AI"));
+  box.appendChild(el("div", "muted", N.ai !== "on" ? N.ai : N.read_at ? `last read ${ago(N.read_at)} ago · ${N.reads_last_hour} of ${N.per_hour} reads this hour (only when there are new headlines)`
+    : "waiting for the first headlines (a minute or two)"));
+  if (N.sitting_out) box.appendChild(el("div", "out", `SITTING OUT: ${N.sitting_out.title} at ${new Date(N.sitting_out.time).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}: no new trades`));
+  for (const c of Object.keys(N.bias || {})){ const b = N.bias[c] || {}, row = el("div", "nb");
+    const dir = el("span", "dir " + (b.strength > 0 ? b.bias : "neutral"), b.strength > 0 ? `${b.bias === "up" ? "▲ bullish" : "▼ bearish"} ${b.strength}/3` : "– neutral");
+    const why = el("span", "muted", b.why || (N.ai === "on" ? "nothing that moves it" : "—"));
+    if (b.major) why.prepend(el("span", "major", "MAJOR"), document.createTextNode(" "));
+    row.append(el("b", "", c), dir, why); box.appendChild(row); }
+  const ev = N.events || [];
+  if (ev.length) box.appendChild(el("div", "muted", "big US releases ahead: " + ev.slice(0, 3).map(e => `${new Date(e.time).toLocaleString([], {weekday: "short", hour: "2-digit", minute: "2-digit"})} ${e.title}`
+    + (e.forecast ? ` (forecast ${e.forecast}${e.previous ? `, last ${e.previous}` : ""})` : "")).join(" · ")));
+  const hs = N.headlines || [];
+  if (hs.length){ const d = el("details"); d.appendChild(el("summary", "", `the latest ${hs.length} headlines`));
+    for (const h of hs){ const row = el("div", "hl"); row.appendChild(el("span", "muted", `${ago(h.time)} · ${h.source} · `));
+      if (/^https:\/\//.test(h.link || "")){ const a = el("a", "", h.title); a.href = h.link; a.target = "_blank"; a.rel = "noopener noreferrer"; row.appendChild(a); }
+      else row.appendChild(el("span", "", h.title));
+      d.appendChild(row); }
+    box.appendChild(d); }
+  const errs = Object.entries(N.errors || {});
+  if (errs.length) box.appendChild(el("div", "muted", "not answering: " + errs.map(([k, v]) => `${k} (${String(v).split(":")[0]})`).join(" · ")));
+}
+function renderReplay(R, running, S){
+  const box = $("perpsReplay"), key = JSON.stringify([R && R.at, R && R.error, !!running]);
+  if (box.dataset.key === key) return;
+  box.dataset.key = key; box.textContent = "";
+  box.appendChild(el("h3", "", "REPLAY · THESE RULES ON THE PAST WEEK OF REAL PRICES"));
+  if (!R){ box.appendChild(el("div", "muted small", running ? "replaying the past week of prices…" : "waits for the first prices (a minute or two), then replays them")); return; }
+  if (R.error){ box.appendChild(el("div", "muted small", "the replay failed: " + R.error)); return; }
+  const pn = num(R.end) !== null && num(R.start) !== null ? R.end - R.start : null, row = el("div", "pbal");
+  [["trades", `${R.trades} (${R.won}W ${R.lost}L)`, ""], ["$" + (R.start ?? "?") + " →", usd(num(R.end)), pn === null ? "" : pn >= 0 ? "pos" : "neg"],
+   ["", pcTxt(num(R.pnl_pct)), pn === null ? "" : pn >= 0 ? "pos" : "neg"], ["worst drop", "−" + (R.max_drawdown_pct ?? 0) + "%", ""],
+   ["a day", String(R.per_day ?? 0), ""], ["held", R.avg_hold_min === null || R.avg_hold_min === undefined ? "—" : `~${Math.round(R.avg_hold_min)} min`, ""]]
+    .forEach(([k, v, c]) => { const sp = el("span", "", k); sp.appendChild(el("b", c, v)); row.appendChild(sp); });
+  box.appendChild(row);
+  const when = R.from && R.to ? `${new Date(R.from).toLocaleDateString([], {month: "short", day: "numeric"})} – ${new Date(R.to).toLocaleString([], {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})}` : "";
+  box.appendChild(el("div", "muted small", `${R.days} days (${when}) of ${TFN[R.entry_tf] || ""} candles on ${(R.coins || []).join(", ")}, starting from $${R.start}, the whole balance in each trade. `
+    + (R.stopped ? `The balance fell under Jupiter's $${S.min_collateral ?? 10} minimum, so it would have stopped trading. ` : "")
+    + (R.liquidated ? `${R.liquidated} liquidated. ` : "")
+    + `Not a promise: the fills are guessed from candles, and when one candle touched both the stop and the target it counts the stop. `
+    + `The replay can't include the news (there's no record of when old headlines came out): it's the chart rules only.`));
+  if ((R.list || []).length){
+    const d = el("details");
+    d.appendChild(el("summary", "", `the ${R.list.length === R.trades ? "" : "last "}${R.list.length} replayed exits`));
+    for (const x of R.list){ const row = el("div", "xrow"), a = el("div"), b = el("div"), p = num(x.pnl);
+      const lead = el("span"); lead.append(el("span", "muted", (x.time || "").slice(5, 16).replace("T", " ") + "  "), el("span", "side " + x.side, `${x.coin} ${x.side} ${x.leverage}x`));
+      a.append(lead, el("span", p === null ? "" : p >= 0 ? "pos" : "neg", signed(p) + (num(x.pct) !== null ? ` (${pcTxt(x.pct)})` : "")));
+      b.append(el("span", "muted", `${fmtPx(x.entry)} → ${fmtPx(x.exit)}`), el("span", "muted", (x.why || "") + (x.final ? "" : " (part)")));
+      row.append(a, b); d.appendChild(row); }
+    box.appendChild(d); }
+}
+function renderPerps(P){
+  if (!P) return;
+  const mode = P.mode, mb = $("perpsModes");
+  if (mb.dataset.key !== mode){ mb.dataset.key = mode; mb.textContent = "";
+    [["off", "OFF", "no new trades"], ["watch", "WATCH", "reads the charts and says what it would do, no trades"], ["auto", "AUTO", "trades the setups"]].forEach(([m, label, tip]) => {
+      const b = el("button", "btn " + m + (mode === m ? " on" : ""), label); b.type = "button"; b.title = tip;
+      b.addEventListener("click", () => { if (m !== mode) admin("/api/perps-mode", {mode: m}, "perpsMsg"); });
+      mb.appendChild(b); });
+    mb.appendChild(el("span", "muted small", {off: "OFF: no new trades (an open one is still managed)", watch: "WATCH: reads the charts, no trades",
+      auto: "AUTO: trades the setups, on fake money"}[mode] || "")); }
+  $("perpsNote").textContent = (P.money || "fake").toUpperCase() + " MONEY";
+  const R = P.record || {}, eq = num(P.equity), start = num(P.start_bank), pnl = eq !== null && start !== null ? eq - start : null;
+  const bal = $("perpsBal"); bal.textContent = "";
+  [["balance", usd(eq), ""], ["started", usd(start), ""], ["P&L", signed(pnl), pnl === null ? "" : pnl >= 0 ? "pos" : "neg"],
+   ["trades", `${R.won || 0}W ${R.lost || 0}L`, ""]].forEach(([k, v, c]) => { const sp = el("span", "", k); sp.appendChild(el("b", c, v)); bal.appendChild(sp); });
+  const pp = $("perpsPos"), p = P.position, S0 = P.settings || {}; pp.textContent = "";
+  if (!p) pp.appendChild(el("div", "empty", P.cooldown_until ? `no trade open · resting after a loss until ${P.cooldown_until.slice(11, 16)} UTC` : "no trade open"));
+  else {
+    const box = el("div", "ppos"), hd = el("div", "hd");
+    const ph = el("span", "side " + p.side, `${p.coin} ${String(p.side).toUpperCase()} ${p.leverage}x`);
+    if (p.kind === "news") ph.appendChild(el("span", "ktag", "NEWS"));
+    hd.append(ph,
+      el("span", num(p.pnl) === null ? "" : p.pnl >= 0 ? "pos" : "neg", `${signed(num(p.pnl))} (${pcTxt(num(p.pnl_pct))})`));
+    box.appendChild(hd);
+    const t = el("table"), sl = num(p.stop_loss_usd);
+    [["in the trade", `${usd(num(p.stake_left))} · position ${usd(num(p.size))}`], ["entry → now", `${fmtPx(p.entry)} → ${fmtPx(p.mark)}`],
+     ["stop", fmtPx(p.stop) + (p.tp1 ? " (trailing)" : p.be ? " (break-even)" : "") + (sl === null ? "" : sl > 0 ? ` · a stop-out costs ${usd(sl)}` : ` · a stop-out keeps ${usd(-sl)}`)],
+     ["liquidation", fmtPx(p.liq)],
+     ["plan", p.target ? `stop to break-even at +${S0.be_r ?? 1}R; all out at the target ${fmtPx(p.target)}${p.tp1 ? " (hit)" : ""}; out after ${S0.max_hold_hours ?? 3}h at most`
+       : `stop to break-even at +${S0.be_r ?? 1}R, ${S0.tp1_pct ?? 50}% out at +${S0.tp1_r ?? 2}R, the rest trails ${S0.trail_atr ?? 1.5} ATR behind`],
+     ["opened", p.opened_at ? ago(p.opened_at) + " ago" : "—"], ["why", (p.why || []).join(" · ") || "—"]].forEach(([k, v]) => {
+      const tr = el("tr"); tr.append(el("td", "", k), el("td", "", v)); t.appendChild(tr); });
+    box.appendChild(t);
+    const cb = el("button", "btn warn", "Close now"); cb.type = "button";
+    cb.addEventListener("click", () => { if (confirm(`Close the ${p.coin} ${p.side} now?`)) admin("/api/perps-close", null, "perpsMsg"); });
+    box.appendChild(cb); pp.appendChild(box);
+  }
+  const pc = $("perpsCoins"), S = P.settings || {}; pc.textContent = "";
+  for (const c of S.coins || Object.keys(P.reads || {})){
+    const r = (P.reads || {})[c] || {}, a = (P.armed || {})[c], box = el("div", "pcoin"), t = el("div", "t");
+    t.append(el("span", "", c), el("span", "", fmtPx(num((P.prices || {})[c]) ?? num(r.price)))); box.appendChild(t);
+    box.appendChild(el("div", "tr " + (r.trend || "unknown"), `${TFS[S.trend_tf] || "4h"} trend: ${r.trend || "—"}` + (num(r.rsi) !== null ? ` · ${TFS[S.entry_tf] || "1h"} RSI ${r.rsi}` : "")
+      + (num(r.atr_pct) !== null ? ` · moves ~${r.atr_pct}% ${S.entry_tf === "m15" ? "per 15 min" : "an hour"}` : "")));
+    const nw = r.news || {};
+    if (nw.strength > 0) box.appendChild(el("div", "nw " + nw.bias, `news: ${nw.bias === "up" ? "▲ bullish" : "▼ bearish"} ${nw.strength}/3` + (nw.why ? ` · ${nw.why}` : "")));
+    if (a) box.appendChild(el("div", "s", (a.kind === "news" ? "NEWS " : "") + `${String(a.side).toUpperCase()} setup: ${a.side === "long" ? "buys" : "shorts"} a break of ${fmtPx(a.trigger)}, stop ${fmtPx(a.stop)}`
+      + (a.target ? `, target ${fmtPx(a.target)}` : "") + (a.note ? ` (${a.note})` : "")));
+    else if ((r.wait || []).length) box.appendChild(el("div", "w", r.wait[0]));
+    else box.appendChild(el("div", "w", mode === "off" ? "off" : "reading the charts…"));
+    pc.appendChild(box); }
+  $("perpsRules").textContent = `All of the balance in each trade (${S.stake_pct ?? "?"}%), up to ${S.max_leverage ?? "?"}x: the stop sets the leverage, so a stop-out `
+    + `costs about ${S.max_loss_pct ?? "?"}% at most and the liquidation price stays at least ${S.liq_buffer ?? "?"}x further away than the stop. Jupiter's fees: `
+    + `${(S.open_fee_bps ?? 6) / 100}% to open and to close on the full size, plus an hourly borrow fee. ${P.real || ""}`
+    + (P.data_error ? ` · prices: ${P.data_error}` : P.price_source ? ` · prices from ${P.price_source}` : "");
+  const swing = S.style !== "trend", E = TFN[S.entry_tf] || "1-hour", TT = TFN[S.trend_tf] || "4-hour";
+  $("perpsHow").textContent = `How it trades (${swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
+    + `On the ${E} chart it waits for a dip into the 20 EMA with the RSI cooling off, then a green candle closing back over it, and buys when the price `
+    + `breaks that candle's high (shorts: the mirror image). It never enters after a big candle, when the price is stretched over its average, or at the recent high. `
+    + `Every trade has a stop under the dip; at +${S.be_r ?? 1}R the stop goes to break-even. `
+    + (swing ? `The whole trade closes at the last swing high (low for a short), between ${S.tp1_r ?? 1.5}R and ${S.tp_max_r ?? 3}R away, and it's out after ${S.max_hold_hours ?? 3} hours at most. `
+             : `At +${S.tp1_r ?? 2}R ${S.tp1_pct ?? 50}% is closed and the rest trails; out after ${S.max_hold_hours ?? 48} hours at most. `)
+    + `It stands aside after a violent candle, and rests ${S.cooldown_minutes ?? 30} minutes after a loss. `
+    + `NEWS: an AI reads the latest crypto headlines. Strong news against a setup blocks it; major news plus the price breaking out the same way `
+    + `is a news trade (stop under the breakout candle, target 2R); major news against an open trade closes it; it sits out big US releases `
+    + `(CPI, the Fed, jobs) from 30 minutes before to 15 after.`;
+  renderNews(P.news);
+  renderReplay(P.replay, P.replay_running, S);
+  const tb = $("perpsTrades"), T = P.trades || []; tb.textContent = "";
+  $("perpsCount").textContent = R.closed ? `${R.closed} closed` : "";
+  for (const x of T){ const tr = el("tr"), pn = num(x.pnl);
+    const tc = el("td", "side " + x.side, `${x.coin} ${x.side} ${x.leverage}x`); if (x.kind === "news") tc.appendChild(el("span", "ktag", "NEWS"));
+    tr.append(el("td", "muted", (x.time || "").slice(5, 16).replace("T", " ")), tc,
+      el("td", "", `${fmtPx(x.entry)} → ${fmtPx(x.exit)}`), el("td", pn === null ? "" : pn >= 0 ? "pos" : "neg", signed(pn) + (num(x.pct) !== null ? ` (${pcTxt(x.pct)})` : "")),
+      el("td", "muted", (x.why || "") + (x.final ? "" : " (part)"))); tb.appendChild(tr); }
+  if (!T.length){ const tr = el("tr"), td = el("td", "muted", "no perps trades yet"); td.colSpan = 5; tr.appendChild(td); tb.appendChild(tr); }
+  const fd = $("perpsFeed"); fd.textContent = "";
+  for (const e of P.events || []){ const row = el("div"); row.append(el("span", "muted", (e.time || "").slice(11, 19) + "  "),
+    el("span", e.kind === "open" ? "pos" : e.kind === "signal" ? "" : "", e.text || "")); fd.appendChild(row); }
+  if (!(P.events || []).length) fd.appendChild(el("div", "empty", "nothing yet: the first look at the charts fills this in"));
+}
+// ---------- PERPS: the live chart ----------
+var PC = {coin: null, pinned: false, tf: ["15m", "1h", "4h"].includes(store.get("pcTf")) ? store.get("pcTf") : null, data: null, busy: false, hover: null, last: null};
+const PCOL = {up: "#34d399", down: "#f87171", ema20: "#d55181", ema50: "#3987e5", entry: "#e8edf6", stop: "#e66767", liq: "#e66767",
+  be: "#7f8aa3", tp: "#34d399", trigger: "#c98500", grid: "#141a28", axis: "#4b5569"};
+function pcDefaultCoin(){
+  const P = (lastStatus || {}).perps || {};
+  if (P.position) return P.position.coin;
+  const armed = Object.keys(P.armed || {}); if (armed.length) return armed[0];
+  return ((P.settings || {}).coins || ["SOL"])[0];
+}
+function pcControls(){
+  const P = (lastStatus || {}).perps || {}, coins = (P.settings || {}).coins || ["SOL", "ETH", "BTC"], coin = PC.coin || pcDefaultCoin();
+  const cb = $("pcCoins"), key = coins.join() + coin + (P.position ? P.position.coin : "");
+  if (cb.dataset.key !== key){ cb.dataset.key = key; cb.textContent = "";
+    for (const c of coins){ const b = el("button", c === coin ? "on" : "", c + (P.position && P.position.coin === c ? " •" : "")); b.type = "button";
+      b.addEventListener("click", () => { PC.coin = c; PC.pinned = true; PC.data = null; PC.hover = null; pcControls(); loadPerpsChart(); }); cb.appendChild(b); } }
+  if (!PC.tf) PC.tf = {m15: "15m", h1: "1h", h4: "4h"}[(P.settings || {}).entry_tf] || "15m";
+  const tb = $("pcTf");
+  if (tb.dataset.key !== PC.tf){ tb.dataset.key = PC.tf; tb.textContent = "";
+    for (const [tf, label] of [["15m", "15M"], ["1h", "1H"], ["4h", "4H"]]){ const b = el("button", tf === PC.tf ? "on" : "", label); b.type = "button";
+      b.addEventListener("click", () => { PC.tf = tf; store.set("pcTf", tf); PC.data = null; PC.hover = null; pcControls(); loadPerpsChart(); }); tb.appendChild(b); } }
+}
+async function loadPerpsChart(){
+  if ($("perpsView").hidden || PC.busy) return;
+  if (!PC.pinned) PC.coin = pcDefaultCoin();
+  pcControls();
+  PC.busy = true;
+  try {
+    const r = await fetch(`/api/perps-chart?coin=${encodeURIComponent(PC.coin)}&tf=${PC.tf}`, {cache: "no-store"});
+    if (r.ok){ PC.data = await r.json(); drawPerpsChart(); }
+    else $("pcNote").textContent = "chart: HTTP " + r.status;
+  } catch (e) { $("pcNote").textContent = "chart: can't reach the desk"; }
+  finally { PC.busy = false; }
+}
+setInterval(loadPerpsChart, 5000);
+window.addEventListener("resize", () => { if (PC.data) drawPerpsChart(); });
+function svgEl(tag, attrs){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+function drawPerpsChart(){
+  const D = PC.data, svg = $("pcSvg"); if (!D) return;
+  svg.textContent = "";
+  const W = Math.max(280, Math.round(svg.getBoundingClientRect().width) || 360), H = 320, padR = 74, padT = 10, padB = 22, padL = 4;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const keep = W < 560 ? (D.tf === "4h" ? 45 : 48) : 96, cut = Math.max(0, (D.candles || []).length - keep);
+  const C = (D.candles || []).slice(cut), E20 = (D.ema20 || []).slice(cut), E50 = (D.ema50 || []).slice(cut);
+  const upd = D.updated ? new Date(D.updated) : null;
+  $("pcNote").textContent = C.length ? `${D.coin} · ${{"15m": "15-minute", "4h": "4-hour"}[D.tf] || "1-hour"} candles` + (D.source ? ` from ${D.source}` : "")
+    + (upd && !isNaN(upd) ? ` · updated ${upd.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"})}` : "")
+    + " · tap the chart to read a candle" : (D.note || "no candles yet");
+  if (!C.length) return;
+  const levels = D.levels || [], lows = C.map(c => c[3]), highs = C.map(c => c[2]);
+  let lo = Math.min(...lows), hi = Math.max(...highs);
+  const span0 = hi - lo || hi * 0.01;
+  const near = levels.filter(l => l.price >= lo - 3 * span0 && l.price <= hi + 3 * span0);   // a far liquidation price gets an arrow instead
+  for (const l of near){ lo = Math.min(lo, l.price); hi = Math.max(hi, l.price); }
+  const pad = (hi - lo) * 0.06 || hi * 0.005; lo -= pad; hi += pad;
+  const pw = W - padL - padR, ph = H - padT - padB, n = C.length, step = pw / n;
+  const x = i => padL + step * (i + 0.5), y = v => padT + (hi - v) / (hi - lo) * ph;
+  // grid and price ticks
+  const raw = (hi - lo) / 5, mag = Math.pow(10, Math.floor(Math.log10(raw))), nice = [1, 2, 2.5, 5, 10].map(m => m * mag).find(m => m >= raw) || raw;
+  const lastPx = C[C.length - 1][4];
+  for (let v = Math.ceil(lo / nice) * nice; v <= hi; v += nice){
+    if (Math.abs(y(v) - y(lastPx)) < 13){ svg.appendChild(svgEl("line", {x1: padL, x2: W - padR, y1: y(v), y2: y(v), stroke: PCOL.grid, "stroke-width": 1})); continue; }
+    svg.appendChild(svgEl("line", {x1: padL, x2: W - padR, y1: y(v), y2: y(v), stroke: PCOL.grid, "stroke-width": 1}));
+    const t = svgEl("text", {x: W - padR + 6, y: y(v) + 3, fill: PCOL.axis, "font-size": 10, "font-family": "ui-monospace,Menlo,monospace"}); t.textContent = fmtPx(v); svg.appendChild(t); }
+  // time labels
+  const every = Math.max(1, Math.round(n / (W < 560 ? 3 : 5)));
+  for (let i = n - 1; i >= 0; i -= every){ const d = new Date(C[i][0] * 1000);
+    if (x(i) < (D.tf === "4h" ? 18 : 36) || x(i) > W - padR + 20) continue;
+    const t = svgEl("text", {x: x(i), y: H - 6, fill: PCOL.axis, "font-size": 10, "text-anchor": "middle", "font-family": "ui-monospace,Menlo,monospace"});
+    t.textContent = `${d.getMonth() + 1}/${d.getDate()}` + (D.tf === "4h" ? "" : ` ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`); svg.appendChild(t); }
+  // EMAs (2px lines)
+  for (const [e, col] of [[E50, PCOL.ema50], [E20, PCOL.ema20]]){
+    if (e.length === n) svg.appendChild(svgEl("polyline", {points: e.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" "), fill: "none", stroke: col, "stroke-width": 2,
+      "stroke-linejoin": "round", opacity: 0.9})); }
+  // candles: up hollow, down filled (direction is never color alone)
+  const bw = Math.max(1, Math.min(10, step * 0.62));
+  C.forEach((c, i) => { const up = c[4] >= c[1], col = up ? PCOL.up : PCOL.down, cx = x(i);
+    svg.appendChild(svgEl("line", {x1: cx, x2: cx, y1: y(c[2]), y2: y(c[3]), stroke: col, "stroke-width": 1}));
+    const top = y(Math.max(c[1], c[4])), h = Math.max(1, Math.abs(y(c[1]) - y(c[4])));
+    svg.appendChild(svgEl("rect", {x: cx - bw / 2, y: top, width: bw, height: h, rx: Math.min(1.5, bw / 3), fill: up ? "#080b12" : col, stroke: col, "stroke-width": up ? 1.2 : 0})); });
+  // levels: dashed lines, labelled at the right (text in ink, a colored edge for the key)
+  const tags = [];
+  for (const l of levels){
+    const inView = l.price >= lo && l.price <= hi, yy = inView ? y(l.price) : (l.price < lo ? H - padB - 8 : padT + 8), col = PCOL[l.kind] || PCOL.entry;
+    if (inView) svg.appendChild(svgEl("line", {x1: padL, x2: W - padR, y1: yy, y2: yy, stroke: col, "stroke-width": l.kind === "entry" ? 1.5 : 1.2,
+      "stroke-dasharray": l.kind === "entry" ? "" : l.kind === "liq" ? "2 3" : "6 4", opacity: 0.95}));
+    tags.push({y: yy, col, text: (inView ? "" : l.price < lo ? "↓ " : "↑ ") + l.label + " " + fmtPx(l.price)}); }
+  tags.sort((a, b) => a.y - b.y);
+  for (let i = 0; i < tags.length; i++) tags[i].ly = Math.max(tags[i].y, i ? tags[i - 1].ly + 16 : padT + 7);
+  const over = tags.length ? tags[tags.length - 1].ly - (H - padB - 7) : 0;
+  if (over > 0) for (const t of tags) t.ly = Math.max(padT + 7, t.ly - over);
+  for (const tg of tags){
+    const g = svgEl("g", {}), txt = svgEl("text", {x: padL + 8, y: tg.ly + 3.5, fill: "#e8edf6", "font-size": 10, "font-family": "ui-monospace,Menlo,monospace", "font-weight": 700});
+    txt.textContent = tg.text; g.appendChild(txt); svg.appendChild(g);
+    const bb = txt.getBBox ? txt.getBBox() : {x: padL + 8, y: tg.ly - 6, width: tg.text.length * 6.2, height: 12};
+    g.insertBefore(svgEl("rect", {x: bb.x - 4, y: tg.ly - 7, width: bb.width + 8, height: 14, rx: 3, fill: "#0b0d14", stroke: tg.col, "stroke-width": 1}), txt);
+    if (Math.abs(tg.ly - tg.y) > 2) g.insertBefore(svgEl("line", {x1: bb.x + bb.width + 4, x2: bb.x + bb.width + 14, y1: tg.ly, y2: tg.y, stroke: tg.col, "stroke-width": 1}), txt); }
+  // the live price
+  const last = C[n - 1][4], lup = last >= C[n - 1][1];
+  svg.appendChild(svgEl("line", {x1: padL, x2: W - padR, y1: y(last), y2: y(last), stroke: "#7f8aa3", "stroke-width": 1, "stroke-dasharray": "1 3"}));
+  const pr = svgEl("rect", {x: W - padR + 2, y: y(last) - 8, width: padR - 4, height: 16, rx: 3, fill: lup ? "#06281a" : "#2a0d10", stroke: lup ? PCOL.up : PCOL.down, "stroke-width": 1});
+  const pt = svgEl("text", {x: W - padR + 6, y: y(last) + 4, fill: "#e8edf6", "font-size": 10, "font-weight": 700, "font-family": "ui-monospace,Menlo,monospace"});
+  pt.textContent = fmtPx(last); svg.append(pr, pt);
+  // entries and exits
+  const t0 = C[0][0], dt = n > 1 ? (C[n - 1][0] - C[0][0]) / (n - 1) : 3600;
+  for (const m of D.markers || []){
+    const i = Math.min(n - 1, Math.floor((m.t - t0) / dt)), mx = x(i), my = y(m.price);
+    if (i < 0 || m.price < lo || m.price > hi) continue;
+    if (m.kind === "open"){ const s = m.side === "long" ? 1 : -1, sz = 8;
+      svg.appendChild(svgEl("path", {d: `M${mx},${my + s * 3} l${-sz},${s * sz * 1.4} h${2 * sz} z`, fill: "#e8edf6", stroke: "#080b12", "stroke-width": 2})); }
+    else svg.appendChild(svgEl("circle", {cx: mx, cy: my, r: 6, fill: (m.pnl || 0) >= 0 ? PCOL.up : PCOL.down, stroke: "#080b12", "stroke-width": 2})); }
+  // crosshair + readout
+  const hair = svgEl("line", {x1: 0, x2: 0, y1: padT, y2: H - padB, stroke: "#7f8aa3", "stroke-width": 1, visibility: "hidden"}); svg.appendChild(hair);
+  const hit = svgEl("rect", {x: padL, y: 0, width: pw, height: H, fill: "transparent"}); svg.appendChild(hit);
+  const tip = $("pcTip");
+  const show = frac => { const rect = svg.getBoundingClientRect(), px = frac * W;
+    const i = Math.max(0, Math.min(n - 1, Math.floor((px - padL) / step))), c = C[i], d = new Date(c[0] * 1000);
+    PC.hover = frac;
+    hair.setAttribute("x1", x(i)); hair.setAttribute("x2", x(i)); hair.setAttribute("visibility", "visible");
+    tip.textContent = ""; tip.hidden = false;
+    const line = (k, v) => { const r = el("div"); r.appendChild(el("b", "", v)); r.appendChild(document.createTextNode(" " + k)); tip.appendChild(r); };
+    tip.appendChild(el("div", "", d.toLocaleString(undefined, {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"})));
+    line("open", fmtPx(c[1])); line("high", fmtPx(c[2])); line("low", fmtPx(c[3])); line("close", fmtPx(c[4]));
+    if (E20[i]) line("20 EMA", fmtPx(E20[i])); if (E50[i]) line("50 EMA", fmtPx(E50[i]));
+    const hx = x(i) / W * rect.width;
+    tip.style.left = Math.max(4, hx > rect.width / 2 ? hx - tip.offsetWidth - 10 : Math.min(hx + 10, rect.width - tip.offsetWidth - 4)) + "px"; };
+  const hide = () => { PC.hover = null; hair.setAttribute("visibility", "hidden"); tip.hidden = true; };
+  const at = ev => { const rect = svg.getBoundingClientRect(); return (ev.clientX - rect.left) / rect.width; };
+  hit.addEventListener("pointermove", ev => { if (ev.pointerType === "mouse") show(at(ev)); });
+  hit.addEventListener("pointerdown", ev => { const f = at(ev);
+    if (ev.pointerType !== "mouse" && PC.hover !== null && Math.abs(f - PC.hover) * W < step) hide(); else show(f); });
+  hit.addEventListener("pointerleave", ev => { if (ev.pointerType === "mouse") hide(); });
+  if (PC.hover !== null) show(PC.hover); else tip.hidden = true;
+}
 function render(d){
   lastStatus = d;
+  try { renderPerps(d.perps); if (!$("perpsView").hidden && !PC.data) loadPerpsChart(); } catch (e) { console.error("perps", e); }
   const srv = Date.parse(d.server_now); if (Number.isFinite(srv)) clockOffset = srv - Date.now();
   if (d.title) $("title").textContent = d.title;
   if (typeof d.tagline === "string") $("tagline").textContent = d.tagline;
@@ -1938,6 +2312,8 @@ function reportCard(rep, full){
   if (facts.length) body.appendChild(el("div", "rfacts", facts.join(" · ")));
   if ((rep.veto || []).length){ const ul = el("ul", "rlist veto"); rep.veto.forEach(v => ul.appendChild(el("li", "", v))); body.appendChild(ul); }
   if ((rep.wait || []).length){ const ul = el("ul", "rlist wait"); rep.wait.forEach(v => ul.appendChild(el("li", "", v))); body.appendChild(ul); }
+  if ((rep.cautions || []).length){ const ul = el("ul", "rlist careful"); rep.cautions.forEach(v => ul.appendChild(el("li", "", v)));   // learn mode: a BUY
+    body.appendChild(ul); if (rep.verdict === "BUY") body.appendChild(el("div", "rline", "so it buys small: half the ticket, on the fast plan")); }   // bought small
   const groups = el("div", "rgroups");
   for (const [g, title] of GROUPS){
     const rows = (rep.checks || []).filter(c => c.group === g); if (!rows.length) continue;
