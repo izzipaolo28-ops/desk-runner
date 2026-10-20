@@ -57,64 +57,6 @@ Let it run a day or two. Watch the **trades** panel and the balance chart. Paper
 both ways, so price impact and Jupiter's route fees are counted. Network fees, and any slippage between the quote
 and a real fill, aren't. Real results will be a little worse.
 
-## PERPS: SOL, ETH and BTC with leverage (its own tab)
-
-The **PERPS** tab at the top of the page is a separate bot: it swing-trades SOL, ETH and BTC perpetuals the way Jupiter
-Perps does, with the trend, in and out within hours. The memecoin bots keep running on the **MEMECOINS** tab, untouched.
-On the server it runs on its own clock (every 2 seconds), so a long memecoin scan never delays a stop.
-
-- **Two styles** (`PERP_STYLE`): **swing** (the default) takes the direction from the 1-hour chart and the entry from the
-  15-minute chart, and is out within 3 hours. **trend** (the first version) takes the direction from the 4-hour chart and
-  the entry from the 1-hour chart, and can hold for 2 days. Below, "trend chart" / "entry chart" are 1-hour / 15-minute in
-  the swing style.
-- **Direction from the trend chart.** It only trades with a clear trend (the 20 EMA over the 50 and rising, by at least
-  0.3 of that chart's ATR, `PERP_MIN_TREND`); a flat market is no trade.
-- **Precise entries, never at the top.** On the entry chart it waits for a dip into the 20 EMA (not past the 50), the RSI
-  cooling under 45, then a green candle closing back over the 20 EMA with the RSI turning; it buys when the price breaks
-  that candle's high, within the next 30 minutes (an hour in the trend style), and not if it rockets 0.3 ATR past it (no
-  chasing). No entry right after a big candle (2.5 ATR), when the price is stretched more than 1 ATR over the 20 EMA, or at
-  the recent high (the last 6 hours on 15-minute candles). A setup is traded once, never twice. Shorts are the mirror image.
-- **All of the balance in each trade, up to 50x** (`PERP_STAKE_PCT`, `PERP_MAX_LEVERAGE`). The stop goes under the dip; the
-  leverage is whatever that stop allows, so that a stop-out costs about half of the balance at most (`PERP_MAX_LOSS_PCT`)
-  and the liquidation price stays at least 1.5x further away than the stop (`PERP_LIQ_BUFFER`). 15-minute stops are tight,
-  so swing trades are usually 50x. A crash straight through the stop can still reach the liquidation price: then the whole
-  stake is gone.
-- **Exits (swing):** at +1R (the price has moved as far as the stop is away) the stop moves to break-even, with the fees
-  and slippage covered. The whole trade closes at the **target**: the last swing high (low for a short), but never closer
-  than 1.5R or further than 3R (`PERP_TP1_R`, `PERP_TP_MAX_R`). Out when the 1-hour trend turns, or after 3 hours
-  (`PERP_MAX_HOLD_HOURS`). **Exits (trend):** break-even at +1R, half out at +2R, the rest trails 1.5 ATR behind; out when
-  the 4-hour trend turns, or after 48 hours.
-- **What 50x costs:** Jupiter's fees are about 0.14% of the position to open and close, which at 50x is about 7% of the
-  balance on every trade, win or lose (a little more with slippage). A 1.5R win is about +30%, a stop-out about −30% to −50%: it has to win about half its
-  trades just to stay even.
-- **It stands aside** after a violent candle (3.5 ATR), around news times you give it (`PERP_NEWS_TIMES`, UTC, e.g.
-  `2026-10-29T18:00Z`: an hour either side), and for 30 minutes after a loss (2 hours in the trend style).
-- **Buttons:** OFF (no new trades; an open one is still managed), WATCH (reads the charts and shows what it would do),
-  AUTO (trades). Each coin's card says the trend and what it's waiting for; a setup shows its trigger, stop and target.
-  **Close now** closes the open trade.
-- **REPLAY:** every new 15-minute candle, the bot replays its own rules on the candles it has (about the last week from
-  Kraken), as if it had been trading them: trades, wins and losses, where $50 would be now, the worst drop, trades a day,
-  and each replayed exit. It's the live bot itself fed the old candles; inside each candle it takes the worse guess (when
-  one candle touched both the stop and the target, the stop counts). A replay isn't a promise, but rules that lost money
-  on the last week shouldn't get real money.
-- **Live chart** at the top of the tab: 15-minute, 1-hour or 4-hour candles (15M / 1H / 4H) for SOL, ETH or BTC, with the
-  20 EMA (pink) and 50 EMA (blue). It opens on the coin being traded (marked •), or the coin with a setup, on the chart it
-  enters on. An open trade draws its ENTRY, STOP (it moves up to break-even), TARGET, LIQUIDATION and the break-even point;
-  a setup draws its trigger (BUYS ABOVE / SHORTS BELOW), its stop and its target. ▲ / ▼ mark entries and dots mark exits
-  (green won, red lost). The last candle moves with the price; it refreshes every 5 seconds while the tab is open. Tap a
-  candle to read it, tap it again to hide that. `GET /api/perps-chart?coin=SOL&tf=15m` is the data behind it.
-
-**Fake money only in this version.** It trades a fake balance of $50 (`PERP_PAPER_BANK_USD`), the size of a small real
-wallet, with Jupiter's costs: 0.06% of the position to open and to close, a price-impact estimate, an hourly borrow fee on
-the full size (an estimate: Jupiter's moves with the pool) and Jupiter's liquidation rule. The FAKE / REAL switch doesn't
-touch perps yet. Real orders on Jupiter Perps come next: Jupiter has no official trading API, so they are built against its
-on-chain program, and the first real trade will be the $10 minimum to prove they work.
-
-**Prices** come from Kraken's public candles and ticker (no key needed), and from Coinbase when Kraken doesn't answer.
-These weren't reachable from where this was built, so their formats were checked against Kraken's and Coinbase's own docs and
-tested on recorded answers; the first minutes on Railway are the first live read (the coin cards say "reading the charts…"
-until then, and the price source shows under the rules).
-
 ## How it picks its trades: LEARN (the default) or STRICT
 
 `ENTRY_MODE=learn` (the default): **the entry rules don't stop trades any more.** A coin that trips one of them (buyers
@@ -484,16 +426,6 @@ only); the safety checks now run on every pick either way.
 
 ## Several coins at once
 
-**How much each coin gets: `SPLIT_COINS` (default 2, half and half).** All the money (the free cash plus what's in
-coins, minus the 0.02 SOL kept for fees on real money) is split into that many equal parts, one part per coin, and it
-holds at most that many coins at once. With $48 and 2: about $24 a coin. A coin scoring under 85 takes 70% of its part,
-a careful buy, an early bet or a hot entry half of that, and a bad day's dial less again; never under $5
-(`MIN_TICKET_USD`), never over 2% of the coin's pool, never more than the free cash, and on real money never over
-`REAL_MAX_TICKET_USD` ($25) a buy: raise that one when the parts grow past $25. The sniper may use every slot, the desk
-half of them (at least one). As the money grows the parts grow with it. `SPLIT_COINS=5` = a fifth each, five coins at
-once. `SPLIT_COINS=off` = the old sizing below (6% of the cash a ticket, 25% in coins at most): on $48 that's $2.88,
-under the $5 floor, so it bought nothing (in the simulation: no trades at all on $48, against 56 split in two).
-
 The desk holds up to `MAX_POSITIONS` coins (default **5**) and keeps scanning while it has a free slot. Each coin
 gets its own plan below. All coins together stay under `MAX_EXPOSURE_PCT` (default **25**%) of everything (cash +
 what's in coins): a ticket that would go over is cut to the room left, or skipped. A coin it already holds is
@@ -652,23 +584,8 @@ stays paused until you tap **Resume**.
 | `DESK_METAS` | `60` | coins from DexScreener's trending narratives the desk reads too (0 = none) |
 | `TRENDING_WINDOW` | `1h` | what "trending" means: `5m`, `1h`, `6h` or `24h` |
 | `PAUSED` | none | `true` starts the desk paused |
-| `PERP_MODE` | `auto` | PERPS: `off`, `watch` or `auto` (the buttons on the PERPS tab win once pressed) |
-| `PERP_STYLE` | `swing` | `swing`: 1-hour trend, 15-minute entries, out within hours. `trend`: 4-hour trend, 1-hour entries |
-| `PERP_COINS` | `SOL,ETH,BTC` | the perps it trades |
-| `PERP_PAPER_BANK_USD` | `50` | the fake perps balance it starts with (the Reset button goes back to it) |
-| `PERP_STAKE_PCT` / `PERP_MAX_LEVERAGE` | `100` / `50` | the share of the balance in each trade, and the most leverage (up to 250, Jupiter's cap) |
-| `PERP_MAX_LOSS_PCT` / `PERP_LIQ_BUFFER` | `50` / `1.5` | what one stop-out may cost (% of the stake), and how much further than the stop the liquidation price must be |
-| `PERP_MIN_STOP_PCT` / `PERP_MAX_STOP_PCT` | `0.35` / `3` | the closest and furthest stop it uses (a setup needing a wider stop is skipped) |
-| `PERP_BREAKEVEN_R` / `PERP_TP1_R` / `PERP_TP_MAX_R` | `1` / `1.5` / `3` | break-even at +1R; swing: the target is the last swing, between 1.5R and 3R away (trend: `PERP_TP1_R` 2) |
-| `PERP_TP1_PCT` / `PERP_TRAIL_ATR` | `100` / `1.5` | how much closes at the target (swing: all of it; trend: 50, the rest trails 1.5 ATR behind) |
-| `PERP_MAX_HOLD_HOURS` / `PERP_COOLDOWN_MINUTES` | `3` / `30` | the longest hold (can be 0.25 to 720); the rest after a loss (trend: 48 / 120) |
-| `PERP_CANDLE_SECONDS` | `60` | how often it reads the candles (trend: 120) |
-| `PERP_MIN_TREND` / `PERP_STRETCH_ATR` / `PERP_SPIKE_ATR` / `PERP_SHOCK_ATR` | `0.3` / `1` / `2.5` / `3.5` | the trend it needs; no entry stretched over the 20 EMA, after a big candle; stands aside after a violent candle |
-| `PERP_NEWS_TIMES` / `PERP_NEWS_MINUTES` | none / `60` | UTC times to sit out (comma separated), and how long either side |
-| `PERP_OPEN_FEE_BPS` / `PERP_CLOSE_FEE_BPS` / `PERP_IMPACT_BPS` / `PERP_BORROW_PCT_HOUR` / `PERP_MAINT_PCT` | `6` / `6` / `1` / `0.003` / `0.4` | Jupiter's costs as the fake trades count them |
-| `SPLIT_COINS` | `2` | all the money split into this many equal parts, one per coin, at most this many coins at once (`off`: the old sizing, `MAX_POSITIONS` and `MAX_EXPOSURE_PCT`) |
-| `MAX_POSITIONS` | `5` | coins held at once (1 to 10), when `SPLIT_COINS=off` |
-| `MAX_EXPOSURE_PCT` | `25` | all coins together, as % of cash + coins, when `SPLIT_COINS=off` |
+| `MAX_POSITIONS` | `5` | coins held at once (1 to 10) |
+| `MAX_EXPOSURE_PCT` | `25` | all coins together, as % of cash + coins |
 | `TEST_SWAP_USD` | `1` | size of the Test swap round trip, $0.50 to $20 |
 | `DESK_TITLE` / `DESK_TAGLINE` | `GROKBOT + JEV` / `JEV PICKS, CODE TRADES` | the page's name and tagline |
 | `HARD_<NAME>` | thresholds.py | override one HARD number, e.g. `HARD_MAX_AGE_HOURS=168` |

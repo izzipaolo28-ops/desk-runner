@@ -18,7 +18,6 @@ import secrets
 import statistics
 import threading
 import time
-import urllib.parse
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -46,7 +45,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-19 perps swing (fake money)"          # which build is running: the summary page says it
+VERSION = "2026-10-17 learn mode"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -60,7 +59,6 @@ import collect  # noqa: E402
 import filter as desk_filter  # noqa: E402  (the desk's filter.py, not the builtin)
 import main  # noqa: E402
 import pick as desk_pick  # noqa: E402
-import perps  # noqa: E402
 import snipe  # noqa: E402
 import thresholds  # noqa: E402
 from jupiter import Jupiter  # noqa: E402
@@ -223,11 +221,8 @@ def _coin(t):
 
 
 class Runner:
-    def __init__(self, cfg, seats, state, judge, lister, clock=time.time, perps_env=None):
+    def __init__(self, cfg, seats, state, judge, lister, clock=time.time):
         self.cfg, self.seats, self.state, self._judge, self.lister, self.clock = cfg, seats, state, judge, lister, clock
-        # PERPS: SOL, ETH and BTC on Jupiter Perps, its own section on the page (fake money in this version)
-        self.perps = perps.Perps(perps.PerpConfig(os.environ if perps_env is None else perps_env), state, clock=clock)
-        self.perps_own_thread = False
         self.last_cycle = self.last_risk = self.last_watch = None
         self.last_bank = None
         self.test_requested = False
@@ -446,12 +441,7 @@ class Runner:
             return True, "gate off"
         # Normal coins: the safety checks only (rugs, copycats, can't sell, already ran and cooling, sellers ahead).
         # Not the sniper's early-coin rules (its age and size window, narrative, hype, 2x room): those are the sniper's.
-        try:
-            rep = self.sniper.check(tok["address"], "desk pick", purpose="desk")
-        except Exception as exc:                          # a check that crashes is a no for this pick, not a dead cycle
-            why = f"the safety check failed ({snipe.where(exc)})"
-            self.state.error(f"desk pick ${tok.get('ticker') or tok['address'][:6]}: {why}")
-            return False, why[:160]
+        rep = self.sniper.check(tok["address"], "desk pick", purpose="desk")
         ratio = (rep.get("flow") or {}).get("ratio15")
         m5 = ((rep.get("facts") or {}).get("chg") or {}).get("m5")
         h1 = ((rep.get("facts") or {}).get("chg") or {}).get("h1")
@@ -1048,11 +1038,6 @@ class Runner:
         """One step of the loop: WATCH and RISK manage every open coin on their clocks, and while a slot is free
         (MAX_POSITIONS) the desk keeps scanning for the next one. Returns the most important thing it did."""
         now = self.clock()
-        if not self.perps_own_thread:             # on the server PERPS has its own thread (perps_loop); here in tests
-            try:
-                self.perps.tick(now)
-            except Exception as exc:              # a perps problem never stops the memecoin bots (or the other way round)
-                self.state.error(f"perps: {snipe.where(exc)}")
         if self.money_request:                    # FAKE / REAL from the page: switched here, between two steps
             done = self.apply_money()
             if done:
@@ -1166,17 +1151,7 @@ class Runner:
         quotes right now, the rule RISK would sell on. Never a made-up figure: unknown stays unknown."""
         bank = self.last_bank
         if True:
-            if _f(bank) is not None and self.cfg.split_coins:
-                mode = self.seats.money()
-                in_coins = sum(_f(p.get("cost_usd")) or 0.0 for p in self.state.positions() if p.get("mode", mode) == mode)
-                part = (bank + in_coins) / self.cfg.split_coins
-                if self.cfg.live:
-                    part = min(part, self.cfg.real_max_ticket_usd)
-                self.state.agent("size", f"split {self.cfg.split_coins} ways: ${part:,.2f} a coin (${bank + in_coins:,.2f} / "
-                                         f"{self.cfg.split_coins}); careful or early: half; score under 85: x0.7"
-                                 + (f"; max ${self.cfg.real_max_ticket_usd:g} a buy" if self.cfg.live else ""),
-                                 part, "a coin")
-            elif _f(bank) is not None:
+            if _f(bank) is not None:
                 top = bank * main.TICKET_SHARE * thresholds.NO_SOCIAL_CUT
                 self.state.agent("size", f"ready: next ticket up to ${top:,.2f} = 6% of ${bank:,.0f} x {thresholds.NO_SOCIAL_CUT} "
                                          f"(no X read); never under ${self.cfg.min_ticket_usd:g} or over 2% of the pool",
@@ -1295,7 +1270,7 @@ class Runner:
             d = self.state.data
             trades = list(d.get("trades") or [])[:40]
             positions = [dict(p) for p in self.state.positions()]
-            errors = [{"time": e.get("time"), "text": e.get("text", "")[:240]} for e in (d.get("errors") or [])[:8]]
+            errors = [e.get("text", "")[:160] for e in (d.get("errors") or [])[:5]]
             daily = dict(d.get("daily") or {})
         ctx_keys = ("mcap", "age_min", "h1", "m5", "liq", "score", "buyers_x", "source", "fresh_share")
         def short(t):
@@ -1315,22 +1290,12 @@ class Runner:
         for c in coins.values():
             if c["final"]:
                 wins, losses = wins + (c["pnl"] > 0), losses + (c["pnl"] <= 0)
-        return {"now": _now(), "version": VERSION, "entry_mode": self.cfg.entry_mode, "split_coins": self.cfg.split_coins,
-                "money": self.money_mode(),
+        return {"now": _now(), "version": VERSION, "entry_mode": self.cfg.entry_mode, "money": self.money_mode(),
                 "paused": bool(self.state.data.get("paused")),
                 "pause_reason": self.state.data.get("pause_reason"), "bank_usd": self.last_bank,
                 "today": daily, "last40": {"coins_closed": wins + losses, "won": wins, "lost": losses,
                                            "pnl": round(sum(c["pnl"] for c in coins.values()), 2)},
                 "dial": self.dial(), "lessons": self.sniper.lessons(), "sniper_mode": self.sniper.mode(),
-                "sniper_why_no_buy_last_hour": self.sniper._why_hour(), "sniper_rounds": self.sniper.rounds,
-                "sniper_last_round": self.sniper.last_round and _iso(self.sniper.last_round),
-                "sniper_confirming": [p["rep"].get("ticker") for p in self.sniper.pending.values()],
-                "slots": dict(zip(("held", "desk", "sniper"), self.held_counts()),
-                              desk_slots=self.cfg.desk_slots, sniper_slots=self.cfg.snipe_slots),
-                "last_checks": [{"ticker": c.get("ticker"), "time": c.get("time"), "verdict": c.get("verdict"), "score": c.get("score"),
-                                 "wait": (c.get("wait") or [])[:2], "cautions": (c.get("cautions") or [])[:3],
-                                 "veto": (c.get("veto") or [])[:1], "action": (c.get("action") or "")[:140]}
-                                for c in (self.state.data.get("checks") or [])[:12]],
                 "sniper_resting": self.sniper.cooling(),
                 "desk_resting": self.sniper.cooling(plan="desk", streak=DESK_LOSS_STREAK, minutes=DESK_COOLDOWN_MINUTES),
                 "desk_waiting": [{"ticker": p.get("ticker"), "last": p.get("last")} for p in self.pending_desk.values()],
@@ -1339,20 +1304,7 @@ class Runner:
                                "fast": p.get("fast_why"), "runner": bool(p.get("runner")), "ride": bool(p.get("ride")),
                                "cautions": (p.get("cautions") or [])[:3],
                                "why_bought": (p.get("why_bought") or [])[:3]} for p in positions],
-                "trades": [short(t) for t in trades], "errors": errors, "perps": self._perps_summary()}
-
-    def _perps_summary(self):
-        p = self.perps.status()
-        return {k: p.get(k) for k in ("mode", "money", "bank", "start_bank", "equity", "position", "record", "data_error",
-                                      "cooldown_until", "price_source")} | {
-            "trades": [{k: t.get(k) for k in ("time", "coin", "side", "leverage", "entry", "exit", "stake", "pnl", "pct", "why",
-                                              "final", "total")} for t in (p.get("trades") or [])[:15]],
-            "reads": {c: {k: r.get(k) for k in ("trend", "price", "rsi", "atr_pct", "wait", "setup")} for c, r in (p.get("reads") or {}).items()},
-            "armed": p.get("armed"), "events": [e.get("time", "")[11:19] + " " + e.get("text", "") for e in (p.get("events") or [])[:10]],
-            "style": (p.get("settings") or {}).get("style"),
-            "replay": {k: v for k, v in (p.get("replay") or {}).items() if k != "list"} | {
-                "exits": [{k: t.get(k) for k in ("time", "coin", "side", "leverage", "entry", "exit", "pnl", "why")}
-                          for t in ((p.get("replay") or {}).get("list") or [])[:20]]} if p.get("replay") else None}
+                "trades": [short(t) for t in trades], "errors": errors}
 
     def status(self):
         with self.state.lock:
@@ -1370,11 +1322,9 @@ class Runner:
         d.update(slots={"desk": self.cfg.desk_slots, "sniper": self.cfg.snipe_slots, "desk_held": desk_n, "sniper_held": snipe_n,
                         "desk_free": self.desk_slots_free(), "sniper_free": self.snipe_slots_free()},
                  desk_gate={"on": DESK_GATE == "on", "score": DESK_GATE_SCORE, "floor": DESK_GATE_FLOOR},
-                 entry_mode=self.cfg.entry_mode, caution={"size": self.cfg.caution_size, "max": self.cfg.caution_max},
-                 split_coins=self.cfg.split_coins)
+                 entry_mode=self.cfg.entry_mode, caution={"size": self.cfg.caution_size, "max": self.cfg.caution_max})
         d["dial"] = self.dial()
         d["money"] = self.money_status()
-        d["perps"] = self.perps.status()
         d.update(max_positions=self.cfg.max_positions, max_exposure_pct=self.cfg.max_exposure_pct,
                  next_cycle_at=None if full or d.get("paused") else
                  _iso(self.clock() if self.last_cycle is None else self.last_cycle + CYCLE_SECONDS),
@@ -1396,16 +1346,6 @@ class Runner:
         d.pop("shadow", None)
         d.pop("wallet_sigs", None)
         return d
-
-    # ---------- PERPS, from the page (admin token checked by the handler) ----------
-    def perps_action(self, what, value=None):
-        if what == "mode":
-            return self.perps.set_mode(value)
-        if what == "close":
-            return self.perps.request_close()
-        if what == "reset":
-            return self.perps.reset_bank()
-        return 404, "not found"
 
     # ---------- the sniper, from the page (admin token checked by the handler) ----------
     def request_check(self, text, buy):
@@ -1492,17 +1432,7 @@ def make_handler(runner, admin_token):
             self.wfile.write(data)
 
         def do_GET(self):
-            query = urllib.parse.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
             self.path = self.path.split("?", 1)[0]          # ?anything is ignored (cache-busting links still work)
-            if self.path == "/api/perps-chart":
-                desk = getattr(runner, "perps", None)
-                if desk is None:
-                    return self._send(409, {"detail": "the desk isn't running"})
-                try:
-                    code, body = desk.chart((query.get("coin") or [""])[0], (query.get("tf") or ["1h"])[0])
-                except Exception as exc:                    # a bad chart never takes the page down
-                    code, body = 500, {"detail": f"chart: {snipe.where(exc)}"[:300]}
-                return self._send(code, body)
             if self.path in ("/", "/index.html"):
                 return self._send(200, page, "text/html; charset=utf-8")
             if self.path == "/api/status":
@@ -1519,8 +1449,7 @@ def make_handler(runner, admin_token):
         def do_POST(self):
             if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap", "/api/goal",
                                  "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets", "/api/sell",
-                                 "/api/money", "/api/owner", "/api/fund", "/api/withdraw", "/api/perps-mode",
-                                 "/api/perps-close", "/api/perps-reset"):
+                                 "/api/money", "/api/owner", "/api/fund", "/api/withdraw"):
                 return self._send(404, {"detail": "not found"})
             given = self.headers.get("X-Admin-Token", "")
             if len(admin_token) < MIN_ADMIN_TOKEN or not hmac.compare_digest(given.encode(), admin_token.encode()):
@@ -1531,12 +1460,9 @@ def make_handler(runner, admin_token):
             if self.path == "/api/test-swap":
                 code, msg = runner.request_test()
                 return self._send(code, {"detail": msg})
-            if self.path in ("/api/perps-close", "/api/perps-reset"):
-                code, msg = runner.perps_action(self.path.rsplit("-", 1)[1])
-                return self._send(code, {"detail": msg})
             body = None
             if self.path in ("/api/goal", "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets", "/api/sell",
-                             "/api/money", "/api/owner", "/api/fund", "/api/withdraw", "/api/perps-mode"):
+                             "/api/money", "/api/owner", "/api/fund", "/api/withdraw"):
                 try:
                     n = min(int(self.headers.get("Content-Length") or 0), 2000)
                     body = json.loads(self.rfile.read(n) or b"{}")
@@ -1555,9 +1481,6 @@ def make_handler(runner, admin_token):
                 return self._send(code, {"detail": msg})
             if self.path == "/api/snipe-mode":
                 code, msg = runner.set_snipe_mode(body.get("mode"))
-                return self._send(code, {"detail": msg})
-            if self.path == "/api/perps-mode":
-                code, msg = runner.perps_action("mode", body.get("mode"))
                 return self._send(code, {"detail": msg})
             if self.path == "/api/wallets":
                 code, msg = runner.edit_wallets(body)
@@ -1744,9 +1667,6 @@ class Stopped:
     def withdraw(self, sol):
         return 409, self.reason
 
-    def perps_action(self, what, value=None):
-        return 409, self.reason
-
     def tick(self):
         return "stopped"
 
@@ -1781,22 +1701,6 @@ def safe_build(env=os.environ):
         return Stopped(str(exc))
 
 
-def perps_loop(runner, sleep=time.sleep, rounds=None):
-    """PERPS on its own clock, every 2 seconds, whatever the memecoin bots are doing: a memecoin scan can take a minute,
-    and a 50x trade can't wait that long for its stop. The same error is logged once every 5 minutes at most."""
-    last, last_at, n = None, 0.0, 0
-    while rounds is None or n < rounds:
-        n += 1
-        try:
-            runner.perps.tick(runner.clock())
-        except Exception as exc:                  # a perps problem never stops the memecoin bots (or the other way round)
-            msg, now = f"perps: {snipe.where(exc)}", time.time()
-            if msg != last or now - last_at > 300:
-                runner.state.error(msg)
-                last, last_at = msg, now
-        sleep(2)
-
-
 def serve():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     runner = safe_build()
@@ -1821,15 +1725,13 @@ def serve():
     if isinstance(runner, Stopped):
         while True:
             time.sleep(3600)
-    runner.perps_own_thread = True
-    threading.Thread(target=perps_loop, args=(runner,), daemon=True, name="perps").start()
     log.info("dashboard on port %s, %s mode, wallet %s", httpd.server_address[1], "LIVE" if runner.cfg.live else "paper",
              runner.seats.kp.address if runner.seats.kp else "none")
     while True:
         try:
             runner.tick()
         except Exception as exc:                  # a bad cycle never stops the desk
-            runner.state.error(f"loop: {snipe.where(exc)}")
+            runner.state.error(f"loop: {type(exc).__name__}: {exc}")
         time.sleep(5)
 
 
