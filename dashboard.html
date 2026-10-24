@@ -437,6 +437,28 @@ details.pc .inner{padding:4px 8px 8px}
     <h2>PERPS FEED <span>signals · entries · exits</span></h2>
     <div class="feed pfeed" id="perpsFeed"></div>
   </section>
+  <section class="panel" id="fastPanel">
+    <h2>FAST DESK · 5-MINUTE ENTRIES · UP TO 70X <span id="fastNote"></span></h2>
+    <div class="muted small" style="margin-bottom:6px">A second desk next to the main one, with its own fake balance: the same rules one timeframe down
+      (the 15-minute chart sets the direction, the 5-minute chart the entry), shorter trades, more of them.</div>
+    <div class="modes" id="fastModes"></div>
+    <div class="pbal" id="fastBal"></div>
+    <div id="fastPos"></div>
+    <div class="pcoins" id="fastCoins"></div>
+    <div class="preplay" id="fastReplay"></div>
+    <div class="msg" id="fastMsg" role="status"></div>
+    <p class="muted" style="font-size:12px" id="fastRules"></p>
+    <button class="btn" type="button" id="fastReset">Reset the fast desk's fake balance</button>
+    <p class="muted" style="font-size:12px" id="fastHow"></p>
+  </section>
+  <section class="panel">
+    <h2>FAST DESK TRADES <span id="fastCount"></span></h2>
+    <table><thead><tr><th>time</th><th>trade</th><th>entry → exit</th><th>P&amp;L</th><th>why</th></tr></thead><tbody id="fastTrades"></tbody></table>
+  </section>
+  <section class="panel">
+    <h2>FAST DESK FEED <span>signals · entries · exits</span></h2>
+    <div class="feed pfeed" id="fastFeed"></div>
+  </section>
   </div>
 
   <div id="memeView">
@@ -1873,10 +1895,11 @@ function setTab(t){
 $("tabMemes").addEventListener("click", () => setTab("memes"));
 $("tabPerps").addEventListener("click", () => setTab("perps"));
 $("perpsReset").addEventListener("click", () => { if (confirm("Start the fake perps balance over from the beginning?")) admin("/api/perps-reset", null, "perpsMsg"); });
+$("fastReset").addEventListener("click", () => { if (confirm("Start the fast desk's fake balance over from the beginning?")) admin("/api/perps-fast-reset", null, "fastMsg"); });
 setTab(store.get("tab"));
 const fmtPx = v => num(v) === null ? "—" : v >= 100 ? "$" + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})
   : v >= 1 ? "$" + v.toFixed(3) : "$" + v.toFixed(5);
-const TFS = {m15: "15m", h1: "1h", h4: "4h"}, TFN = {m15: "15-minute", h1: "1-hour", h4: "4-hour"};
+const TFS = {m5: "5m", m15: "15m", h1: "1h", h4: "4h"}, TFN = {m5: "5-minute", m15: "15-minute", h1: "1-hour", h4: "4-hour"};
 function renderNews(N){
   const box = $("perpsNews");
   if (!N){ box.hidden = true; return; }
@@ -1905,12 +1928,12 @@ function renderNews(N){
   const errs = Object.entries(N.errors || {});
   if (errs.length) box.appendChild(el("div", "muted", "not answering: " + errs.map(([k, v]) => `${k} (${String(v).split(":")[0]})`).join(" · ")));
 }
-function renderReplay(R, running, S){
-  const box = $("perpsReplay"), key = JSON.stringify([R && R.at, R && R.error, !!running]);
+function renderReplay(R, running, S, pre = "perps"){
+  const box = $(pre + "Replay"), key = JSON.stringify([R && R.at, R && R.error, !!running]);
   if (box.dataset.key === key) return;
   box.dataset.key = key; box.textContent = "";
-  box.appendChild(el("h3", "", "REPLAY · THESE RULES ON THE PAST WEEK OF REAL PRICES"));
-  if (!R){ box.appendChild(el("div", "muted small", running ? "replaying the past week of prices…" : "waits for the first prices (a minute or two), then replays them")); return; }
+  box.appendChild(el("h3", "", R && num(R.days) !== null && R.days < 5 ? `REPLAY · THESE RULES ON THE PAST ${R.days} DAYS OF REAL PRICES` : "REPLAY · THESE RULES ON THE PAST WEEK OF REAL PRICES"));
+  if (!R){ box.appendChild(el("div", "muted small", running ? "replaying the recent prices…" : "waits for the first prices (a minute or two), then replays them")); return; }
   if (R.error){ box.appendChild(el("div", "muted small", "the replay failed: " + R.error)); return; }
   const pn = num(R.end) !== null && num(R.start) !== null ? R.end - R.start : null, row = el("div", "pbal");
   [["trades", `${R.trades} (${R.won}W ${R.lost}L)`, ""], ["$" + (R.start ?? "?") + " →", usd(num(R.end)), pn === null ? "" : pn >= 0 ? "pos" : "neg"],
@@ -1934,22 +1957,22 @@ function renderReplay(R, running, S){
       row.append(a, b); d.appendChild(row); }
     box.appendChild(d); }
 }
-function renderPerps(P){
+function renderPerps(P, pre = "perps", api = "/api/perps"){
   if (!P) return;
-  const mode = P.mode, mb = $("perpsModes");
+  const mode = P.mode, mb = $(pre + "Modes");
   if (mb.dataset.key !== mode){ mb.dataset.key = mode; mb.textContent = "";
     [["off", "OFF", "no new trades"], ["watch", "WATCH", "reads the charts and says what it would do, no trades"], ["auto", "AUTO", "trades the setups"]].forEach(([m, label, tip]) => {
       const b = el("button", "btn " + m + (mode === m ? " on" : ""), label); b.type = "button"; b.title = tip;
-      b.addEventListener("click", () => { if (m !== mode) admin("/api/perps-mode", {mode: m}, "perpsMsg"); });
+      b.addEventListener("click", () => { if (m !== mode) admin(api + "-mode", {mode: m}, pre + "Msg"); });
       mb.appendChild(b); });
     mb.appendChild(el("span", "muted small", {off: "OFF: no new trades (an open one is still managed)", watch: "WATCH: reads the charts, no trades",
       auto: "AUTO: trades the setups, on fake money"}[mode] || "")); }
-  $("perpsNote").textContent = (P.money || "fake").toUpperCase() + " MONEY";
+  $(pre + "Note").textContent = (P.money || "fake").toUpperCase() + " MONEY";
   const R = P.record || {}, eq = num(P.equity), start = num(P.start_bank), pnl = eq !== null && start !== null ? eq - start : null;
-  const bal = $("perpsBal"); bal.textContent = "";
+  const bal = $(pre + "Bal"); bal.textContent = "";
   [["balance", usd(eq), ""], ["started", usd(start), ""], ["P&L", signed(pnl), pnl === null ? "" : pnl >= 0 ? "pos" : "neg"],
    ["trades", `${R.won || 0}W ${R.lost || 0}L`, ""]].forEach(([k, v, c]) => { const sp = el("span", "", k); sp.appendChild(el("b", c, v)); bal.appendChild(sp); });
-  const pp = $("perpsPos"), p = P.position, S0 = P.settings || {}; pp.textContent = "";
+  const pp = $(pre + "Pos"), p = P.position, S0 = P.settings || {}; pp.textContent = "";
   if (!p) pp.appendChild(el("div", "empty", P.cooldown_until ? `no trade open · resting after a loss until ${P.cooldown_until.slice(11, 16)} UTC` : "no trade open"));
   else {
     const box = el("div", "ppos"), hd = el("div", "hd");
@@ -1968,15 +1991,15 @@ function renderPerps(P){
       const tr = el("tr"); tr.append(el("td", "", k), el("td", "", v)); t.appendChild(tr); });
     box.appendChild(t);
     const cb = el("button", "btn warn", "Close now"); cb.type = "button";
-    cb.addEventListener("click", () => { if (confirm(`Close the ${p.coin} ${p.side} now?`)) admin("/api/perps-close", null, "perpsMsg"); });
+    cb.addEventListener("click", () => { if (confirm(`Close the ${p.coin} ${p.side} now?`)) admin(api + "-close", null, pre + "Msg"); });
     box.appendChild(cb); pp.appendChild(box);
   }
-  const pc = $("perpsCoins"), S = P.settings || {}; pc.textContent = "";
+  const pc = $(pre + "Coins"), S = P.settings || {}; pc.textContent = "";
   for (const c of S.coins || Object.keys(P.reads || {})){
     const r = (P.reads || {})[c] || {}, a = (P.armed || {})[c], box = el("div", "pcoin"), t = el("div", "t");
     t.append(el("span", "", c), el("span", "", fmtPx(num((P.prices || {})[c]) ?? num(r.price)))); box.appendChild(t);
     box.appendChild(el("div", "tr " + (r.trend || "unknown"), `${TFS[S.trend_tf] || "4h"} trend: ${r.trend || "—"}` + (num(r.rsi) !== null ? ` · ${TFS[S.entry_tf] || "1h"} RSI ${r.rsi}` : "")
-      + (num(r.atr_pct) !== null ? ` · moves ~${r.atr_pct}% ${S.entry_tf === "m15" ? "per 15 min" : "an hour"}` : "")));
+      + (num(r.atr_pct) !== null ? ` · moves ~${r.atr_pct}% ${S.entry_tf === "m5" ? "per 5 min" : S.entry_tf === "m15" ? "per 15 min" : "an hour"}` : "")));
     const nw = r.news || {};
     if (nw.strength > 0) box.appendChild(el("div", "nw " + nw.bias, `news: ${nw.bias === "up" ? "▲ bullish" : "▼ bearish"} ${nw.strength}/3` + (nw.why ? ` · ${nw.why}` : "")));
     if (a) box.appendChild(el("div", "s", (a.kind === "news" ? "NEWS " : "") + `${String(a.side).toUpperCase()} setup: ${a.side === "long" ? "buys" : "shorts"} a break of ${fmtPx(a.trigger)}, stop ${fmtPx(a.stop)}`
@@ -1984,13 +2007,13 @@ function renderPerps(P){
     else if ((r.wait || []).length) box.appendChild(el("div", "w", r.wait[0]));
     else box.appendChild(el("div", "w", mode === "off" ? "off" : "reading the charts…"));
     pc.appendChild(box); }
-  $("perpsRules").textContent = `All of the balance in each trade (${S.stake_pct ?? "?"}%), up to ${S.max_leverage ?? "?"}x: the stop sets the leverage, so a stop-out `
+  $(pre + "Rules").textContent = `All of the balance in each trade (${S.stake_pct ?? "?"}%), up to ${S.max_leverage ?? "?"}x: the stop sets the leverage, so a stop-out `
     + `costs about ${S.max_loss_pct ?? "?"}% at most and the liquidation price stays at least ${S.liq_buffer ?? "?"}x further away than the stop. Jupiter's fees: `
     + `${(S.open_fee_bps ?? 6) / 100}% to open and to close on the full size, plus an hourly borrow fee. ${P.real || ""}`
     + (P.data_error ? ` · prices: ${P.data_error}` : P.price_source ? ` · prices from ${P.price_source}` : "");
-  const swing = S.style !== "trend", E = TFN[S.entry_tf] || "1-hour", TT = TFN[S.trend_tf] || "4-hour";
-  $("perpsHow").textContent = `How it trades (${swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
-    + `On the ${E} chart it waits for a dip into the 20 EMA with the RSI cooling off, then a green candle closing back over it, and buys when the price `
+  const swing = S.style !== "trend", fast = S.style === "fast", E = TFN[S.entry_tf] || "1-hour", TT = TFN[S.trend_tf] || "4-hour";
+  $(pre + "How").textContent = `How it trades (${fast ? "FAST" : swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
+    + `On the ${E} chart it waits for a dip into the 20 EMA with the RSI cooling off (under ${S.rsi_long ?? 45}), then a green candle closing back over it, and buys when the price `
     + `breaks that candle's high (shorts: the mirror image). It never enters after a big candle, when the price is stretched over its average, or at the recent high. `
     + `Every trade has a stop under the dip; at +${S.be_r ?? 1}R the stop goes to break-even. `
     + (swing ? `The whole trade closes at the last swing high (low for a short), between ${S.tp1_r ?? 1.5}R and ${S.tp_max_r ?? 3}R away, and it's out after ${S.max_hold_hours ?? 3} hours at most. `
@@ -1999,17 +2022,17 @@ function renderPerps(P){
     + `NEWS: an AI reads the latest crypto headlines. Strong news against a setup blocks it; major news plus the price breaking out the same way `
     + `is a news trade (stop under the breakout candle, target 2R); major news against an open trade closes it; it sits out big US releases `
     + `(CPI, the Fed, jobs) from 30 minutes before to 15 after.`;
-  renderNews(P.news);
-  renderReplay(P.replay, P.replay_running, S);
-  const tb = $("perpsTrades"), T = P.trades || []; tb.textContent = "";
-  $("perpsCount").textContent = R.closed ? `${R.closed} closed` : "";
+  if (pre === "perps") renderNews(P.news);
+  renderReplay(P.replay, P.replay_running, S, pre);
+  const tb = $(pre + "Trades"), T = P.trades || []; tb.textContent = "";
+  $(pre + "Count").textContent = R.closed ? `${R.closed} closed` : "";
   for (const x of T){ const tr = el("tr"), pn = num(x.pnl);
     const tc = el("td", "side " + x.side, `${x.coin} ${x.side} ${x.leverage}x`); if (x.kind === "news") tc.appendChild(el("span", "ktag", "NEWS"));
     tr.append(el("td", "muted", (x.time || "").slice(5, 16).replace("T", " ")), tc,
       el("td", "", `${fmtPx(x.entry)} → ${fmtPx(x.exit)}`), el("td", pn === null ? "" : pn >= 0 ? "pos" : "neg", signed(pn) + (num(x.pct) !== null ? ` (${pcTxt(x.pct)})` : "")),
       el("td", "muted", (x.why || "") + (x.final ? "" : " (part)"))); tb.appendChild(tr); }
   if (!T.length){ const tr = el("tr"), td = el("td", "muted", "no perps trades yet"); td.colSpan = 5; tr.appendChild(td); tb.appendChild(tr); }
-  const fd = $("perpsFeed"); fd.textContent = "";
+  const fd = $(pre + "Feed"); fd.textContent = "";
   for (const e of P.events || []){ const row = el("div"); row.append(el("span", "muted", (e.time || "").slice(11, 19) + "  "),
     el("span", e.kind === "open" ? "pos" : e.kind === "signal" ? "" : "", e.text || "")); fd.appendChild(row); }
   if (!(P.events || []).length) fd.appendChild(el("div", "empty", "nothing yet: the first look at the charts fills this in"));
@@ -2150,7 +2173,7 @@ function drawPerpsChart(){
 }
 function render(d){
   lastStatus = d;
-  try { renderPerps(d.perps); if (!$("perpsView").hidden && !PC.data) loadPerpsChart(); } catch (e) { console.error("perps", e); }
+  try { renderPerps(d.perps); renderPerps(d.perps_fast, "fast", "/api/perps-fast"); if (!$("perpsView").hidden && !PC.data) loadPerpsChart(); } catch (e) { console.error("perps", e); }
   const srv = Date.parse(d.server_now); if (Number.isFinite(srv)) clockOffset = srv - Date.now();
   if (d.title) $("title").textContent = d.title;
   if (typeof d.tagline === "string") $("tagline").textContent = d.tagline;

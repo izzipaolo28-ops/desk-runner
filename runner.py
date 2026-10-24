@@ -46,7 +46,7 @@ def _storage():
 
 
 STORAGE = _storage()
-VERSION = "2026-10-19 perps swing + news (fake money)"          # which build is running: the summary page says it
+VERSION = "2026-10-24 perps swing + fast desk + news (fake money)"          # which build is running: the summary page says it
 MIN_ADMIN_TOKEN = 16
 os.makedirs(DATA_DIR, exist_ok=True)
 os.environ.setdefault("DESK_DB", os.path.join(DATA_DIR, "desk.db"))
@@ -229,6 +229,9 @@ class Runner:
         # PERPS: SOL, ETH and BTC on Jupiter Perps, its own section on the page (fake money in this version)
         env = os.environ if perps_env is None else perps_env
         self.perps = perps.Perps(perps.PerpConfig(env), state, clock=clock, news=news.News(news.NewsConfig(env), clock=clock))
+        # the FAST desk: the same rules one timeframe down (5-minute entries, the 15-minute trend), up to 70x, its own fake
+        # balance and its own section on the PERPS tab. PERP_FAST_MODE=off turns it off; PERP_FAST_... variables tune it
+        self.perps_fast = perps.Perps(perps.PerpConfig.fast_from(env), state, clock=clock, news=self.perps.news, key="perps_fast")
         self.perps_own_thread = False
         self.last_cycle = self.last_risk = self.last_watch = None
         self.last_bank = None
@@ -1051,10 +1054,11 @@ class Runner:
         (MAX_POSITIONS) the desk keeps scanning for the next one. Returns the most important thing it did."""
         now = self.clock()
         if not self.perps_own_thread:             # on the server PERPS has its own thread (perps_loop); here in tests
-            try:
-                self.perps.tick(now)
-            except Exception as exc:              # a perps problem never stops the memecoin bots (or the other way round)
-                self.state.error(f"perps: {snipe.where(exc)}")
+            for desk in (self.perps, self.perps_fast):
+                try:
+                    desk.tick(now)
+                except Exception as exc:          # a perps problem never stops the memecoin bots (or the other way round)
+                    self.state.error(f"perps: {snipe.where(exc)}")
         if self.money_request:                    # FAKE / REAL from the page: switched here, between two steps
             done = self.apply_money()
             if done:
@@ -1341,10 +1345,11 @@ class Runner:
                                "fast": p.get("fast_why"), "runner": bool(p.get("runner")), "ride": bool(p.get("ride")),
                                "cautions": (p.get("cautions") or [])[:3],
                                "why_bought": (p.get("why_bought") or [])[:3]} for p in positions],
-                "trades": [short(t) for t in trades], "errors": errors, "perps": self._perps_summary()}
+                "trades": [short(t) for t in trades], "errors": errors, "perps": self._perps_summary(),
+                "perps_fast": self._perps_summary(self.perps_fast)}
 
-    def _perps_summary(self):
-        p = self.perps.status()
+    def _perps_summary(self, desk=None):
+        p = (desk or self.perps).status()
         return {k: p.get(k) for k in ("mode", "money", "bank", "start_bank", "equity", "position", "record", "data_error",
                                       "cooldown_until", "price_source")} | {
             "trades": [{k: t.get(k) for k in ("time", "coin", "side", "leverage", "entry", "exit", "stake", "pnl", "pct", "why",
@@ -1381,6 +1386,7 @@ class Runner:
         d["dial"] = self.dial()
         d["money"] = self.money_status()
         d["perps"] = self.perps.status()
+        d["perps_fast"] = self.perps_fast.status()
         d.update(max_positions=self.cfg.max_positions, max_exposure_pct=self.cfg.max_exposure_pct,
                  next_cycle_at=None if full or d.get("paused") else
                  _iso(self.clock() if self.last_cycle is None else self.last_cycle + CYCLE_SECONDS),
@@ -1404,13 +1410,14 @@ class Runner:
         return d
 
     # ---------- PERPS, from the page (admin token checked by the handler) ----------
-    def perps_action(self, what, value=None):
+    def perps_action(self, what, value=None, fast=False):
+        desk = self.perps_fast if fast else self.perps
         if what == "mode":
-            return self.perps.set_mode(value)
+            return desk.set_mode(value)
         if what == "close":
-            return self.perps.request_close()
+            return desk.request_close()
         if what == "reset":
-            return self.perps.reset_bank()
+            return desk.reset_bank()
         return 404, "not found"
 
     # ---------- the sniper, from the page (admin token checked by the handler) ----------
@@ -1526,7 +1533,8 @@ def make_handler(runner, admin_token):
             if self.path not in ("/api/pause", "/api/resume", "/api/scan-now", "/api/test-swap", "/api/goal",
                                  "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets", "/api/sell",
                                  "/api/money", "/api/owner", "/api/fund", "/api/withdraw", "/api/perps-mode",
-                                 "/api/perps-close", "/api/perps-reset"):
+                                 "/api/perps-close", "/api/perps-reset", "/api/perps-fast-mode", "/api/perps-fast-close",
+                                 "/api/perps-fast-reset"):
                 return self._send(404, {"detail": "not found"})
             given = self.headers.get("X-Admin-Token", "")
             if len(admin_token) < MIN_ADMIN_TOKEN or not hmac.compare_digest(given.encode(), admin_token.encode()):
@@ -1537,12 +1545,12 @@ def make_handler(runner, admin_token):
             if self.path == "/api/test-swap":
                 code, msg = runner.request_test()
                 return self._send(code, {"detail": msg})
-            if self.path in ("/api/perps-close", "/api/perps-reset"):
-                code, msg = runner.perps_action(self.path.rsplit("-", 1)[1])
+            if self.path in ("/api/perps-close", "/api/perps-reset", "/api/perps-fast-close", "/api/perps-fast-reset"):
+                code, msg = runner.perps_action(self.path.rsplit("-", 1)[1], fast="-fast-" in self.path)
                 return self._send(code, {"detail": msg})
             body = None
             if self.path in ("/api/goal", "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets", "/api/sell",
-                             "/api/money", "/api/owner", "/api/fund", "/api/withdraw", "/api/perps-mode"):
+                             "/api/money", "/api/owner", "/api/fund", "/api/withdraw", "/api/perps-mode", "/api/perps-fast-mode"):
                 try:
                     n = min(int(self.headers.get("Content-Length") or 0), 2000)
                     body = json.loads(self.rfile.read(n) or b"{}")
@@ -1562,8 +1570,8 @@ def make_handler(runner, admin_token):
             if self.path == "/api/snipe-mode":
                 code, msg = runner.set_snipe_mode(body.get("mode"))
                 return self._send(code, {"detail": msg})
-            if self.path == "/api/perps-mode":
-                code, msg = runner.perps_action("mode", body.get("mode"))
+            if self.path in ("/api/perps-mode", "/api/perps-fast-mode"):
+                code, msg = runner.perps_action("mode", body.get("mode"), fast=self.path == "/api/perps-fast-mode")
                 return self._send(code, {"detail": msg})
             if self.path == "/api/wallets":
                 code, msg = runner.edit_wallets(body)
@@ -1750,7 +1758,7 @@ class Stopped:
     def withdraw(self, sol):
         return 409, self.reason
 
-    def perps_action(self, what, value=None):
+    def perps_action(self, what, value=None, fast=False):
         return 409, self.reason
 
     def tick(self):
@@ -1797,6 +1805,13 @@ def perps_loop(runner, sleep=time.sleep, rounds=None):
             runner.perps.tick(runner.clock())
         except Exception as exc:                  # a perps problem never stops the memecoin bots (or the other way round)
             msg, now = f"perps: {snipe.where(exc)}", time.time()
+            if msg != last or now - last_at > 300:
+                runner.state.error(msg)
+                last, last_at = msg, now
+        try:                                      # the FAST desk, right after: one failing never stops the other
+            runner.perps_fast.tick(runner.clock())
+        except Exception as exc:
+            msg, now = f"perps fast: {snipe.where(exc)}", time.time()
             if msg != last or now - last_at > 300:
                 runner.state.error(msg)
                 last, last_at = msg, now
