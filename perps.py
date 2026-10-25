@@ -133,20 +133,22 @@ class PerpConfig:
         # swing: the whole trade closes at the last swing high / low, but never under 1.5R or over 3R away (PERP_TP1_R,
         # PERP_TP_MAX_R). trend: half closes at +2R and the rest trails PERP_TRAIL_ATR behind the best price
         self.tp1_r = _env_num(env, "PERP_TP1_R", 1.5 if swing else 2, low=0.1, high=20)
-        self.tp_max_r = _env_num(env, "PERP_TP_MAX_R", 2.5 if fast else 3, low=0.1, high=50)
+        self.tp_max_r = _env_num(env, "PERP_TP_MAX_R", 2 if fast else 4 if swing else 3, low=0.1, high=50)
         if self.tp_max_r < self.tp1_r:
             raise ValueError("PERP_TP_MAX_R must be at least PERP_TP1_R")
         self.tp1_pct = _env_num(env, "PERP_TP1_PCT", 100 if swing else 50, high=100)
         self.trail_atr = _env_num(env, "PERP_TRAIL_ATR", 1.5, low=0.1, high=20)
-        self.max_hold_hours = _env_num(env, "PERP_MAX_HOLD_HOURS", 1.5 if fast else 3 if swing else 48, low=0.25, high=24 * 30)
+        self.max_hold_hours = _env_num(env, "PERP_MAX_HOLD_HOURS", 1 if fast else 6 if swing else 48, low=0.25, high=24 * 30)
         self.stretch_atr = _env_num(env, "PERP_STRETCH_ATR", 1, low=0.1, high=10)
         self.spike_atr = _env_num(env, "PERP_SPIKE_ATR", 2.5, low=0.5, high=20)
         self.shock_atr = _env_num(env, "PERP_SHOCK_ATR", 3.5, low=0.5, high=20)
-        self.cooldown_minutes = _env_num(env, "PERP_COOLDOWN_MINUTES", 20 if fast else 30 if swing else 120, high=24 * 60)
-        self.min_trend = _env_num(env, "PERP_MIN_TREND", 0.25 if fast else 0.3, high=20)  # trend chart 20/50 EMA gap, in its ATRs
+        self.cooldown_minutes = _env_num(env, "PERP_COOLDOWN_MINUTES", 10 if fast else 30 if swing else 120, high=24 * 60)
+        self.min_trend = _env_num(env, "PERP_MIN_TREND", 0.15 if fast else 0.3, high=20)  # trend chart 20/50 EMA gap, in its ATRs
         # how far the RSI must cool on the dip before a long (heat on the bounce before a short). Higher / lower = more trades
-        self.rsi_long = _env_num(env, "PERP_RSI_LONG", 48 if fast else 45, low=20, high=60)
-        self.rsi_short = _env_num(env, "PERP_RSI_SHORT", 52 if fast else 55, low=40, high=80)
+        self.rsi_long = _env_num(env, "PERP_RSI_LONG", 50 if fast else 45, low=20, high=60)
+        self.rsi_short = _env_num(env, "PERP_RSI_SHORT", 50 if fast else 55, low=40, high=80)
+        # how close to the 20 EMA the dip must come, in ATRs (more = it counts shallower dips, so more trades)
+        self.pull_atr = _env_num(env, "PERP_PULL_ATR", 0.5 if fast else 0.25, high=3)
         self.candle_seconds = _env_num(env, "PERP_CANDLE_SECONDS", 30 if fast else 60 if swing else 120, low=30)
         self.news = []
         for part in str(env.get("PERP_NEWS_TIMES", "")).split(","):
@@ -175,7 +177,7 @@ class PerpConfig:
                                                "open_fee_bps", "close_fee_bps", "impact_bps", "borrow_pct_hour", "maint_pct",
                                                "liq_buffer", "max_loss_pct", "min_stop_pct", "max_stop_pct", "be_r", "tp1_r", "tp1_pct",
                                                "trail_atr", "max_hold_hours", "stretch_atr", "spike_atr", "shock_atr",
-                                               "cooldown_minutes", "min_trend")}
+                                               "cooldown_minutes", "min_trend", "pull_atr")}
 
 
 # ---------- prices ----------
@@ -332,7 +334,7 @@ def read_coin(coin, h1, h4, cfg, now=None):
     long = trend == "up"
     if long:
         dip = min(c["l"] for c in last6)
-        pulled = dip <= e20[-1] + 0.25 * a
+        pulled = dip <= e20[-1] + cfg.pull_atr * a
         too_deep = dip < e50[-1] - 1.0 * a
         cooled = min(r[-6:]) < cfg.rsi_long
         turned = b["c"] > b["o"] and b["c"] > e20[-1] and r[-1] > r[-2]
@@ -340,7 +342,7 @@ def read_coin(coin, h1, h4, cfg, now=None):
         at_top = b["c"] >= max(c["h"] for c in h1[-24:]) - 0.25 * a
     else:
         dip = max(c["h"] for c in last6)
-        pulled = dip >= e20[-1] - 0.25 * a
+        pulled = dip >= e20[-1] - cfg.pull_atr * a
         too_deep = dip > e50[-1] + 1.0 * a
         cooled = max(r[-6:]) > cfg.rsi_short
         turned = b["c"] < b["o"] and b["c"] < e20[-1] and r[-1] < r[-2]
