@@ -128,17 +128,17 @@ class PerpConfig:
         # 1% away would cost 50%+fees; a wider stop gets less leverage so it still costs about half, never more
         self.max_loss_pct = _env_num(env, "PERP_MAX_LOSS_PCT", 50, low=1, high=100)
         self.min_stop_pct = _env_num(env, "PERP_MIN_STOP_PCT", 0.3 if fast else 0.35, low=0.05, high=10)
-        self.max_stop_pct = _env_num(env, "PERP_MAX_STOP_PCT", 1.5 if fast else 3, low=0.1, high=20)
+        self.max_stop_pct = _env_num(env, "PERP_MAX_STOP_PCT", 1 if fast else 3, low=0.1, high=20)
         self.be_r = _env_num(env, "PERP_BREAKEVEN_R", 1, high=10)
         # swing: the whole trade closes at the last swing high / low, but never under 1.5R or over 3R away (PERP_TP1_R,
         # PERP_TP_MAX_R). trend: half closes at +2R and the rest trails PERP_TRAIL_ATR behind the best price
         self.tp1_r = _env_num(env, "PERP_TP1_R", 1.5 if swing else 2, low=0.1, high=20)
-        self.tp_max_r = _env_num(env, "PERP_TP_MAX_R", 2 if fast else 4 if swing else 3, low=0.1, high=50)
+        self.tp_max_r = _env_num(env, "PERP_TP_MAX_R", 4 if swing else 3, low=0.1, high=50)
         if self.tp_max_r < self.tp1_r:
             raise ValueError("PERP_TP_MAX_R must be at least PERP_TP1_R")
         self.tp1_pct = _env_num(env, "PERP_TP1_PCT", 100 if swing else 50, high=100)
         self.trail_atr = _env_num(env, "PERP_TRAIL_ATR", 1.5, low=0.1, high=20)
-        self.max_hold_hours = _env_num(env, "PERP_MAX_HOLD_HOURS", 1 if fast else 6 if swing else 48, low=0.25, high=24 * 30)
+        self.max_hold_hours = _env_num(env, "PERP_MAX_HOLD_HOURS", 2 if fast else 6 if swing else 48, low=0.25, high=24 * 30)
         self.stretch_atr = _env_num(env, "PERP_STRETCH_ATR", 1, low=0.1, high=10)
         self.spike_atr = _env_num(env, "PERP_SPIKE_ATR", 2.5, low=0.5, high=20)
         self.shock_atr = _env_num(env, "PERP_SHOCK_ATR", 3.5, low=0.5, high=20)
@@ -149,6 +149,14 @@ class PerpConfig:
         self.rsi_short = _env_num(env, "PERP_RSI_SHORT", 50 if fast else 55, low=40, high=80)
         # how close to the 20 EMA the dip must come, in ATRs (more = it counts shallower dips, so more trades)
         self.pull_atr = _env_num(env, "PERP_PULL_ATR", 0.5 if fast else 0.25, high=3)
+        # FAST style (reversals): the low (high) must be the lowest of the last PERP_REV_LOOKBACK entry candles, after a
+        # drop of at least PERP_REV_DROP_ATR ATRs; the break of structure must come within PERP_REV_BOS_BARS candles of it;
+        # no long when the trend chart is falling harder than PERP_REV_MAX_AGAINST (its ATRs), shorts the same
+        self.rev_lookback = int(_env_num(env, "PERP_REV_LOOKBACK", 48, low=12, high=60))
+        self.rev_drop_atr = _env_num(env, "PERP_REV_DROP_ATR", 3, low=0.5, high=30)
+        self.rev_bos_bars = int(_env_num(env, "PERP_REV_BOS_BARS", 12, low=2, high=48))
+        self.rev_max_against = _env_num(env, "PERP_REV_MAX_AGAINST", 3, low=0.1, high=50)
+        self.lvl_move_atr = _env_num(env, "PERP_LVL_MOVE_ATR", 1.5, low=0.2, high=30)     # how big the pullback into a level
         self.candle_seconds = _env_num(env, "PERP_CANDLE_SECONDS", 30 if fast else 60 if swing else 120, low=30)
         self.news = []
         for part in str(env.get("PERP_NEWS_TIMES", "")).split(","):
@@ -177,7 +185,8 @@ class PerpConfig:
                                                "open_fee_bps", "close_fee_bps", "impact_bps", "borrow_pct_hour", "maint_pct",
                                                "liq_buffer", "max_loss_pct", "min_stop_pct", "max_stop_pct", "be_r", "tp1_r", "tp1_pct",
                                                "trail_atr", "max_hold_hours", "stretch_atr", "spike_atr", "shock_atr",
-                                               "cooldown_minutes", "min_trend", "pull_atr")}
+                                               "cooldown_minutes", "min_trend", "pull_atr", "rev_lookback", "rev_drop_atr",
+                                               "rev_bos_bars", "rev_max_against", "lvl_move_atr")}
 
 
 # ---------- prices ----------
@@ -320,6 +329,8 @@ def read_coin(coin, h1, h4, cfg, now=None):
     if now - b["t"] > 3 * step:
         out["wait"].append("the price data is stale")
         return out
+    if cfg.style == "fast":
+        return read_reversal(out, h1, a, trend, strength, cfg, now)
     if trend == "flat":
         out["wait"].append(f"no clear {T} trend: it only trades with one")
         return out
@@ -383,6 +394,246 @@ def read_coin(coin, h1, h4, cfg, now=None):
         swing_px = max(c["h"] for c in h1[-24:]) if long else min(c["l"] for c in h1[-24:])
         out["setup"]["swing"] = swing_px
         out["setup"]["target"] = target_for(trigger, stop, swing_px, long, cfg)
+    return out
+
+
+def _pivot_level(c, lo, hi, long, k=2):
+    """The last break-of-structure level before a low (high): the most recent pivot high (low) in c[lo:hi], a candle
+    whose high is the highest of the k candles on each side. None: none there."""
+    for j in range(hi - 1, lo - 1, -1):
+        a, z = max(lo, j - k), min(hi, j + k + 1)
+        if z - j - 1 < 1:                         # needs at least one candle after it
+            continue
+        if long and c[j]["h"] >= max(x["h"] for x in c[a:z]):
+            return c[j]["h"], j
+        if not long and c[j]["l"] <= min(x["l"] for x in c[a:z]):
+            return c[j]["l"], j
+    return None
+
+
+def _reversal_side(c, a, long, cfg):
+    """One direction of the FAST reversal read. Long: the lowest low of the last PERP_REV_LOOKBACK candles, after a real
+    drop into it; then the break of structure: a green candle closing over the last lower high before that low, for the
+    first time, within PERP_REV_BOS_BARS candles of the low. Shorts: the mirror image. Returns (setup or None, why it
+    waits, how recent its low / high is)."""
+    n, W = len(c), cfg.rev_lookback
+    win = range(n - W, n)
+    i0 = min(win, key=lambda i: c[i]["l"]) if long else max(win, key=lambda i: c[i]["h"])
+    ext = c[i0]["l"] if long else c[i0]["h"]
+    word, E = ("low", "5-minute") if long else ("high", "5-minute")
+    age = n - 1 - i0
+    hours = W * TF_MIN[cfg.entry_tf] / 60
+    if age == 0:
+        return None, f"a new {hours:g}-hour {word} right now ({_px(ext)}): watching for the turn", age
+    if age > cfg.rev_bos_bars:
+        return None, f"no fresh {word} to trade from (the {hours:g}-hour {word} {_px(ext)} was {age} candles ago)", age
+    before = c[max(0, i0 - 36):i0]
+    if len(before) < 6:
+        return None, "not enough price history yet", age
+    top = max(x["h"] for x in before) if long else min(x["l"] for x in before)
+    move = (top - ext) if long else (ext - top)
+    if move < cfg.rev_drop_atr * a:
+        return None, (f"the {word} at {_px(ext)} came after a small move ({move / a:.1f} ATR, needs {cfg.rev_drop_atr:g}): "
+                      f"not a real {word}"), age
+    lv = _pivot_level(c, max(0, i0 - 24), i0, long)
+    level = lv[0] if lv else (max(x["h"] for x in c[max(0, i0 - 6):i0]) if long else min(x["l"] for x in c[max(0, i0 - 6):i0]))
+    b = c[-1]
+    after = c[i0 + 1:n - 1]
+    if long:
+        broke = b["c"] > level and b["c"] > b["o"] and all(x["c"] <= level for x in after)
+        already = any(x["c"] > level for x in after)
+    else:
+        broke = b["c"] < level and b["c"] < b["o"] and all(x["c"] >= level for x in after)
+        already = any(x["c"] < level for x in after)
+    if already:
+        return None, f"the turn off the {word} at {_px(ext)} already happened: not chasing it", age
+    if not broke:
+        return None, (f"{word} at {_px(ext)}: waiting for the break of structure, a {E} candle closing "
+                      f"{'over' if long else 'under'} {_px(level)}"), age
+    trigger = b["c"] + 0.02 * a if long else b["c"] - 0.02 * a
+    stop = ext - 0.1 * a if long else ext + 0.1 * a
+    r = max(abs(trigger - stop), trigger * cfg.min_stop_pct / 100)
+    stop_pct = 100 * abs(trigger - stop) / trigger
+    if stop_pct > cfg.max_stop_pct:
+        return None, f"broke structure, but the stop under the {word} would be {stop_pct:.2f}% away (max {cfg.max_stop_pct:g}%)", age
+    room = (top - trigger) if long else (trigger - top)
+    fees = cfg.fee_frac("open") + cfg.fee_frac("close")
+    if room < cfg.tp1_r * r:
+        return None, (f"broke structure, but only {room / r:.1f}R of room back to {_px(top)} (needs {cfg.tp1_r:g}R)"), age
+    if room / trigger < 3 * fees:
+        return None, "broke structure, but the move back is too small to pay the fees", age
+    return {"side": "long" if long else "short", "kind": "reversal", "trigger": trigger, "stop": stop,
+            "bar": b["t"], "expires": b["t"] + 3 * TF_MIN[cfg.entry_tf] * 60,
+            "chase_limit": trigger + 0.3 * a if long else trigger - 0.3 * a, "atr": a,
+            "score": round(move / a + room / r, 2), "swing": top,
+            "why": [f"{E} {word} at {_px(ext)} after a {move / a:.1f} ATR {'drop' if long else 'rise'} (the lowest of {hours:g} hours)"
+                    if long else f"{E} high at {_px(ext)} after a {move / a:.1f} ATR rise (the highest of {hours:g} hours)",
+                    f"break of structure: a {'green' if long else 'red'} candle closed {'over' if long else 'under'} "
+                    f"{_px(level)}, the last {'lower high' if long else 'higher low'}",
+                    f"stop {'under' if long else 'over'} the {word}, target back toward {_px(top)} ({room / r:.1f}R of room)"]}, "", age
+
+
+# ---------- key levels: the session highs and lows (New York time), like the boxes on a TradingView chart ----------
+SESSIONS = (("Asia", 20 * 60, 24 * 60), ("London", 2 * 60, 5 * 60), ("NY AM", 9 * 60 + 30, 12 * 60),
+            ("NY lunch", 12 * 60, 13 * 60 + 30), ("NY PM", 13 * 60 + 30, 16 * 60))
+
+
+def _nth_sunday_utc(year, month, nth, hour_utc):
+    d = datetime(year, month, 1, tzinfo=timezone.utc)
+    first = (6 - d.weekday()) % 7 + 1                     # the day of the month of the first Sunday
+    return datetime(year, month, first + 7 * (nth - 1), hour_utc, tzinfo=timezone.utc).timestamp()
+
+
+def ny_offset(ts):
+    """New York's offset from UTC in seconds at ts: -4h in daylight time (2nd Sunday of March to the 1st of November)."""
+    y = datetime.fromtimestamp(ts, timezone.utc).year
+    return -4 * 3600 if _nth_sunday_utc(y, 3, 2, 7) <= ts < _nth_sunday_utc(y, 11, 1, 6) else -5 * 3600
+
+
+def key_levels(c, now):
+    """The last finished Asia, London, NY AM, NY lunch and NY PM sessions' highs and lows, and yesterday's (New York
+    day), from the entry chart's candles. Returns [(price, name), ...]. A session needs most of its candles to count."""
+    if not c:
+        return []
+    step = max(60, c[1]["t"] - c[0]["t"]) if len(c) > 1 else 300
+    now_l = now + ny_offset(now)
+    today = int(now_l // 86400)
+    got = {}
+    for x in c:
+        loc = x["t"] + ny_offset(x["t"])
+        day, mins = int(loc // 86400), int(loc % 86400) // 60
+        for name, s, e in SESSIONS:
+            if s <= mins < e and now_l >= day * 86400 + e * 60:
+                g = got.setdefault((name, day), [x["h"], x["l"], 0])
+                g[0], g[1], g[2] = max(g[0], x["h"]), min(g[1], x["l"]), g[2] + 1
+        if day < today:
+            g = got.setdefault(("yesterday", day), [x["h"], x["l"], 0])
+            g[0], g[1], g[2] = max(g[0], x["h"]), min(g[1], x["l"]), g[2] + 1
+    out, latest = [], {}
+    for (name, day), g in got.items():
+        span = 24 * 60 if name == "yesterday" else next(e - s for n, s, e in SESSIONS if n == name)
+        if g[2] >= 0.6 * span * 60 / step and day > latest.get(name, (-1,))[0]:
+            latest[name] = (day, g)
+    for name, (day, g) in latest.items():
+        if name == "yesterday" and day != today - 1:
+            continue
+        out += [(g[0], f"{name} high"), (g[1], f"{name} low")]
+    return out
+
+
+def _level_side(c, a, long, levels, cfg, trend=None):
+    """The FAST desk's pullback setup (the one on your chart). Long: the price pulls back into a key level (a session
+    high or low, yesterday's high or low) and holds it: a swing low at the level, or a quick dip under it that comes back.
+    Then the break of structure: a green candle closing over the pullback's last lower high, for the first time. That's
+    the long: the stop under the swing low, the target the next level up or the top the pullback came from. A broken
+    high that's retested from above (your second circle) is the same thing: the old high is now the level under it.
+    Shorts: the mirror image. Returns (setup or None, why it waits, how recent the swing is)."""
+    n, a_ = len(c), a
+    look = cfg.rev_bos_bars
+    if n < 40:
+        return None, "not enough price history yet", 999
+    rng = range(max(3, n - 1 - look), n - 1)
+    j = min(rng, key=lambda i: c[i]["l"]) if long else max(rng, key=lambda i: c[i]["h"])
+    ext = c[j]["l"] if long else c[j]["h"]
+    age = n - 1 - j
+    prior = c[max(0, j - 3):j]
+    if long and any(x["l"] < ext for x in prior) or not long and any(x["h"] > ext for x in prior):
+        return None, "no swing " + ("low" if long else "high") + " in the last hour", age
+    tol = max(0.35 * a_, ext * 0.0005)
+    if long:      # at the level, or dipped up to 1 ATR under it (a sweep) and came back
+        near = [(lv, nm) for lv, nm in levels if lv - 1.0 * a_ <= ext <= lv + tol]
+    else:
+        near = [(lv, nm) for lv, nm in levels if lv - tol <= ext <= lv + 1.0 * a_]
+    word = "low" if long else "high"
+    with_trend = trend == ("up" if long else "down")
+    if near:
+        lv, name = min(near, key=lambda x: abs(x[0] - ext))
+    elif with_trend:              # no level there, but a pullback with the 15-minute trend (a higher low in an uptrend)
+        lv, name = ext, f"15-minute {'uptrend' if long else 'downtrend'}"
+    else:
+        return None, f"swing {word} at {_px(ext)}: not at a key level and not with the 15-minute trend", age
+    before = c[max(0, j - 24):j]
+    top = max(x["h"] for x in before) if long else min(x["l"] for x in before)
+    move = (top - ext) if long else (ext - top)
+    if move < cfg.lvl_move_atr * a_:
+        return None, f"at the {name} ({_px(lv)}) but no real pullback into it", age
+    pv = _pivot_level(c, max(0, j - 24), j, long)
+    bos = pv[0] if pv else (max(x["h"] for x in c[max(0, j - 4):j]) if long else min(x["l"] for x in c[max(0, j - 4):j]))
+    b, after = c[-1], c[j + 1:n - 1]
+    if long:
+        broke = b["c"] > bos and b["c"] > b["o"] and all(x["c"] <= bos for x in after)
+        already = any(x["c"] > bos for x in after)
+    else:
+        broke = b["c"] < bos and b["c"] < b["o"] and all(x["c"] >= bos for x in after)
+        already = any(x["c"] < bos for x in after)
+    if not near:
+        held = "made a higher low in" if long else "made a lower high in"
+    else:
+        held = "held" if (ext >= lv if long else ext <= lv) else "swept under and reclaimed" if long else "swept over and lost"
+    if already:
+        return None, f"it {held} the {name} ({_px(lv)}) and already turned: not chasing it", age
+    if not broke:
+        return None, (f"{held} the {name} ({_px(lv)}): waiting for the break of structure, a 5-minute close "
+                      f"{'over' if long else 'under'} {_px(bos)}"), age
+    trigger = b["c"] + 0.02 * a_ if long else b["c"] - 0.02 * a_
+    stop = ext - 0.1 * a_ if long else ext + 0.1 * a_
+    stop_pct = 100 * abs(trigger - stop) / trigger
+    if stop_pct > cfg.max_stop_pct:
+        return None, f"broke structure, but the stop would be {stop_pct:.2f}% away (max {cfg.max_stop_pct:g}%)", age
+    r = max(abs(trigger - stop), trigger * cfg.min_stop_pct / 100)
+    sgn = 1 if long else -1
+    goals = sorted({top, *[x for x, _ in levels if sgn * (x - trigger) > 0]}, key=lambda x: sgn * (x - trigger))
+    goal = next((g for g in goals if sgn * (g - trigger) >= cfg.tp1_r * r), None)
+    fees = cfg.fee_frac("open") + cfg.fee_frac("close")
+    if goal is None:
+        return None, f"broke structure, but no level {cfg.tp1_r:g}R away to aim for", age
+    if abs(goal - trigger) / trigger < 3 * fees:
+        return None, "broke structure, but the move to the next level is too small to pay the fees", age
+    gname = next((nm for x, nm in levels if x == goal), "the top of the pullback" if long else "the bottom of the bounce")
+    return {"side": "long" if long else "short", "kind": "reversal", "trigger": trigger, "stop": stop, "bar": b["t"],
+            "expires": b["t"] + 3 * TF_MIN[cfg.entry_tf] * 60,
+            "chase_limit": trigger + 0.3 * a_ if long else trigger - 0.3 * a_, "atr": a_,
+            "score": round(5 + abs(goal - trigger) / r, 2), "swing": goal,
+            "why": [(f"pulled back into the {name} ({_px(lv)}) and {held} it (swing {word} {_px(ext)})" if near
+                     else f"{held} the {name} (swing {word} {_px(ext)})"),
+                    f"break of structure: a {'green' if long else 'red'} 5-minute candle closed {'over' if long else 'under'} {_px(bos)}",
+                    f"stop {'under' if long else 'over'} the swing {word}; target {gname} {_px(goal)}"]}, "", age
+
+
+def read_reversal(out, c, a, trend, strength, cfg, now):
+    """The FAST desk's read: reversals off a low or a high on the entry chart (see _reversal_side). The trend chart is
+    only a guard: no long while it falls harder than PERP_REV_MAX_AGAINST, no short while it rises that hard."""
+    if len(c) < cfg.rev_lookback + 40:
+        out["wait"].append("not enough price history yet")
+        return out
+    b = c[-1]
+    if (b["h"] - b["l"]) > cfg.shock_atr * a:
+        out["wait"].append(f"a violent {TF_NAME[cfg.entry_tf]} candle ({(b['h'] - b['l']) / a:.1f}x the usual range): standing aside")
+        return out
+    near = [t for t in cfg.news if abs(now - t) <= cfg.news_minutes * 60]
+    if near:
+        out["wait"].append("news time: standing aside " + datetime.fromtimestamp(near[0], timezone.utc).strftime("%b %d %H:%M UTC"))
+        return out
+    levels = key_levels(c, now)
+    out["levels"] = [{"name": nm, "price": round(lv, 6)} for lv, nm in levels]
+    picks = []
+    for long in (True, False):
+        s, why, age = _level_side(c, a, long, levels, cfg, trend)   # a pullback into a key level (or with the trend), then the turn
+        if not s:
+            s2, why2, age2 = _reversal_side(c, a, long, cfg)        # or: a big 4-hour low / high, then the turn
+            pending, pending2 = "waiting for the break" in why, "waiting for the break" in why2
+            if s2 or (pending2 and not pending) or (not pending and not pending2 and age2 < age):
+                s, why, age = s2, why2, age2
+        against = trend == ("down" if long else "up") and strength >= cfg.rev_max_against
+        if s and against:
+            s, why = None, (f"broke structure, but the {TF_NAME[cfg.trend_tf]} trend is {'falling' if long else 'rising'} too hard "
+                            f"(strength {strength:.1f}): not catching it")
+        picks.append((s, why, age))
+    ready = [p for p in picks if p[0]]
+    if ready:
+        out["setup"] = max(ready, key=lambda p: p[0]["score"])[0]
+        return out
+    out["wait"].append(min(picks, key=lambda p: p[2])[1])   # the side with the fresher low / high says why it waits
     return out
 
 
@@ -482,6 +733,7 @@ class _MemState:
 
 
 REPLAY_WINDOW = 130                              # candles of history each step reads (enough for the 50 EMA)
+REPLAY_WINDOW_FAST = 330                         # the fast desk also needs the last day's sessions (27 hours of 5-minute)
 
 
 def replay(data, cfg, bank=None):
@@ -553,7 +805,8 @@ def replay(data, cfg, bank=None):
             if j < 60:
                 continue
             p.prices[c] = bars[c]["c"]
-            p.reads[c] = read_coin(c, ent[c][max(0, i + 1 - REPLAY_WINDOW): i + 1], trd[c][max(0, j - REPLAY_WINDOW): j], cfg, t + step)
+            w = REPLAY_WINDOW_FAST if cfg.style == "fast" else REPLAY_WINDOW
+            p.reads[c] = read_coin(c, ent[c][max(0, i + 1 - w): i + 1], trd[c][max(0, j - REPLAY_WINDOW): j], cfg, t + step)
         p.tick(t + step)
     if p.d.get("position"):
         p.close(1.0, p.prices[p.d["position"]["coin"]], "the replay ended (still open)", clock[0])
@@ -810,7 +1063,8 @@ class Perps:
             for c in list(armed):
                 a = armed[c]
                 tr = (self.reads.get(c) or {}).get("trend")
-                if now > a["expires"] or (tr and tr != ("up" if a["side"] == "long" else "down")):
+                against = tr and tr != ("up" if a["side"] == "long" else "down") and a.get("kind") != "reversal"
+                if now > a["expires"] or against:
                     armed.pop(c)
 
     def enter(self, now):
@@ -866,7 +1120,7 @@ class Perps:
             return "perps: stop too far"
         lev = choose_leverage(stop_pct, cfg)
         target = (target_for(entry, stop, a.get("swing"), side == "long", cfg)
-                  if cfg.style in ("swing", "fast") or a.get("kind") == "news" else None)
+                  if cfg.style in ("swing", "fast") or a.get("kind") in ("news", "reversal") else None)
         size = stake * lev
         fee = size * cfg.fee_frac("open")
         pos = {"coin": coin, "side": side, "entry": entry, "size": size, "size0": size, "stake": stake, "stake_left": stake,
@@ -941,7 +1195,7 @@ class Perps:
                 with self.state.lock:
                     pos["stop"] = max(pos["stop"], trail) if long else min(pos["stop"], trail)
         trend = (self.reads.get(pos["coin"]) or {}).get("trend")
-        if trend in ("up", "down") and trend != ("up" if long else "down"):
+        if trend in ("up", "down") and trend != ("up" if long else "down") and pos.get("kind") != "reversal":
             return self.close(1.0, price, f"the {TF_NAME[cfg.trend_tf]} trend turned {trend}", now)
         if now - pos["opened_ts"] >= cfg.max_hold_hours * 3600:
             return self.close(1.0, price, f"held {cfg.max_hold_hours:g}h, the limit: out", now)

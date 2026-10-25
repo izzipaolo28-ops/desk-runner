@@ -438,9 +438,9 @@ details.pc .inner{padding:4px 8px 8px}
     <div class="feed pfeed" id="perpsFeed"></div>
   </section>
   <section class="panel" id="fastPanel">
-    <h2>FAST DESK · 5-MINUTE ENTRIES · UP TO 70X <span id="fastNote"></span></h2>
-    <div class="muted small" style="margin-bottom:6px">A second desk next to the main one, with its own fake balance: the same rules one timeframe down
-      (the 15-minute chart sets the direction, the 5-minute chart the entry), shorter trades, more of them.</div>
+    <h2>FAST DESK · 5-MINUTE REVERSALS · UP TO 70X <span id="fastNote"></span></h2>
+    <div class="muted small" style="margin-bottom:6px">A second desk next to the main one, with its own fake balance. On the 5-minute chart it marks the
+      session highs and lows, waits for a swing that holds (or sweeps) one, then the break of structure, and trades the turn.</div>
     <div class="modes" id="fastModes"></div>
     <div class="pbal" id="fastBal"></div>
     <div id="fastPos"></div>
@@ -2012,7 +2012,14 @@ function renderPerps(P, pre = "perps", api = "/api/perps"){
     + `${(S.open_fee_bps ?? 6) / 100}% to open and to close on the full size, plus an hourly borrow fee. ${P.real || ""}`
     + (P.data_error ? ` · prices: ${P.data_error}` : P.price_source ? ` · prices from ${P.price_source}` : "");
   const swing = S.style !== "trend", fast = S.style === "fast", E = TFN[S.entry_tf] || "1-hour", TT = TFN[S.trend_tf] || "4-hour";
-  $(pre + "How").textContent = `How it trades (${fast ? "FAST" : swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
+  if (fast){ $(pre + "How").textContent = `How it trades (FAST · 5-MINUTE TURNS): it marks the key levels like your TradingView boxes: the last Asia, `
+    + `London, NY AM, NY lunch and NY PM session highs and lows (New York time) and yesterday's high and low. It waits for a swing low (or high) that `
+    + `holds a level, or sweeps just past it and comes back, or is a higher low in the 15-minute uptrend (lower high in a downtrend), or is a real `
+    + `${Math.round((S.rev_lookback ?? 48) * 5 / 60)}-hour low after a big drop. Then the break of structure: a 5-minute candle closing over the last lower high `
+    + `(under the last higher low for a short), within ${S.rev_bos_bars ?? 12} candles. In on that, stop just past the swing, target the next level or where `
+    + `the pullback came from (at least ${S.tp1_r ?? 1.5}R, at most ${S.tp_max_r ?? 4}R). Up to ${S.max_leverage ?? 70}x, set by the stop; stop to break-even `
+    + `at +${S.be_r ?? 1}R; out after ${S.max_hold_hours ?? 2} hours at most; rests ${S.cooldown_minutes ?? 10} minutes after a loss.`; }
+  else $(pre + "How").textContent = `How it trades (${fast ? "FAST" : swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
     + `On the ${E} chart it waits for a dip into the 20 EMA with the RSI cooling off (under ${S.rsi_long ?? 45}), then a green candle closing back over it, and buys when the price `
     + `breaks that candle's high (shorts: the mirror image). It never enters after a big candle, when the price is stretched over its average, or at the recent high. `
     + `Every trade has a stop under the dip; at +${S.be_r ?? 1}R the stop goes to break-even. `
