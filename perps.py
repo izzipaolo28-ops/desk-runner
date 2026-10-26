@@ -132,7 +132,7 @@ class PerpConfig:
         self.be_r = _env_num(env, "PERP_BREAKEVEN_R", 1, high=10)
         # swing: the whole trade closes at the last swing high / low, but never under 1.5R or over 3R away (PERP_TP1_R,
         # PERP_TP_MAX_R). trend: half closes at +2R and the rest trails PERP_TRAIL_ATR behind the best price
-        self.tp1_r = _env_num(env, "PERP_TP1_R", 1.5 if swing else 2, low=0.1, high=20)
+        self.tp1_r = _env_num(env, "PERP_TP1_R", 2 if fast else 1.5 if swing else 2, low=0.1, high=20)
         self.tp_max_r = _env_num(env, "PERP_TP_MAX_R", 4 if swing else 3, low=0.1, high=50)
         if self.tp_max_r < self.tp1_r:
             raise ValueError("PERP_TP_MAX_R must be at least PERP_TP1_R")
@@ -155,7 +155,12 @@ class PerpConfig:
         self.rev_lookback = int(_env_num(env, "PERP_REV_LOOKBACK", 48, low=12, high=60))
         self.rev_drop_atr = _env_num(env, "PERP_REV_DROP_ATR", 3, low=0.5, high=30)
         self.rev_bos_bars = int(_env_num(env, "PERP_REV_BOS_BARS", 12, low=2, high=48))
-        self.rev_max_against = _env_num(env, "PERP_REV_MAX_AGAINST", 3, low=0.1, high=50)
+        self.rev_max_against = _env_num(env, "PERP_REV_MAX_AGAINST", 1.5, low=0.1, high=50)
+        # FAST: at 70x a trade that goes nowhere costs ~13% in fees and slippage, so the target must be at least
+        # PERP_MIN_TARGET_PCT away, and the swing it trades must be real: its own stop at least PERP_MIN_SWING_PCT away
+        # (a smaller one gets stretched to PERP_MIN_STOP_PCT and is then far too many candles from its target)
+        self.min_target_pct = _env_num(env, "PERP_MIN_TARGET_PCT", 0.6 if fast else 0, high=10)
+        self.min_swing_pct = _env_num(env, "PERP_MIN_SWING_PCT", 0.15 if fast else 0, high=5)
         self.lvl_move_atr = _env_num(env, "PERP_LVL_MOVE_ATR", 1.5, low=0.2, high=30)     # how big the pullback into a level
         self.candle_seconds = _env_num(env, "PERP_CANDLE_SECONDS", 30 if fast else 60 if swing else 120, low=30)
         self.news = []
@@ -186,7 +191,8 @@ class PerpConfig:
                                                "liq_buffer", "max_loss_pct", "min_stop_pct", "max_stop_pct", "be_r", "tp1_r", "tp1_pct",
                                                "trail_atr", "max_hold_hours", "stretch_atr", "spike_atr", "shock_atr",
                                                "cooldown_minutes", "min_trend", "pull_atr", "rev_lookback", "rev_drop_atr",
-                                               "rev_bos_bars", "rev_max_against", "lvl_move_atr")}
+                                               "rev_bos_bars", "rev_max_against", "lvl_move_atr",
+                                               "min_target_pct", "min_swing_pct")}
 
 
 # ---------- prices ----------
@@ -454,14 +460,17 @@ def _reversal_side(c, a, long, cfg):
     stop = ext - 0.1 * a if long else ext + 0.1 * a
     r = max(abs(trigger - stop), trigger * cfg.min_stop_pct / 100)
     stop_pct = 100 * abs(trigger - stop) / trigger
+    if stop_pct < cfg.min_swing_pct:
+        return None, (f"broke structure, but the swing is tiny ({stop_pct:.2f}% to the stop, needs {cfg.min_swing_pct:g}%): "
+                      "too small to pay 70x fees"), age
     if stop_pct > cfg.max_stop_pct:
         return None, f"broke structure, but the stop under the {word} would be {stop_pct:.2f}% away (max {cfg.max_stop_pct:g}%)", age
     room = (top - trigger) if long else (trigger - top)
     fees = cfg.fee_frac("open") + cfg.fee_frac("close")
     if room < cfg.tp1_r * r:
         return None, (f"broke structure, but only {room / r:.1f}R of room back to {_px(top)} (needs {cfg.tp1_r:g}R)"), age
-    if room / trigger < 3 * fees:
-        return None, "broke structure, but the move back is too small to pay the fees", age
+    if room / trigger < max(3 * fees, cfg.min_target_pct / 100):
+        return None, f"broke structure, but only {100 * room / trigger:.2f}% of room (needs {cfg.min_target_pct:g}%): too small to pay the fees", age
     return {"side": "long" if long else "short", "kind": "reversal", "trigger": trigger, "stop": stop,
             "bar": b["t"], "expires": b["t"] + 3 * TF_MIN[cfg.entry_tf] * 60,
             "chase_limit": trigger + 0.3 * a if long else trigger - 0.3 * a, "atr": a,
@@ -578,15 +587,19 @@ def _level_side(c, a, long, levels, cfg, trend=None):
     trigger = b["c"] + 0.02 * a_ if long else b["c"] - 0.02 * a_
     stop = ext - 0.1 * a_ if long else ext + 0.1 * a_
     stop_pct = 100 * abs(trigger - stop) / trigger
+    if stop_pct < cfg.min_swing_pct:
+        return None, (f"broke structure, but the swing is tiny ({stop_pct:.2f}% to the stop, needs {cfg.min_swing_pct:g}%): "
+                      "too small to pay 70x fees"), age
     if stop_pct > cfg.max_stop_pct:
         return None, f"broke structure, but the stop would be {stop_pct:.2f}% away (max {cfg.max_stop_pct:g}%)", age
     r = max(abs(trigger - stop), trigger * cfg.min_stop_pct / 100)
     sgn = 1 if long else -1
     goals = sorted({top, *[x for x, _ in levels if sgn * (x - trigger) > 0]}, key=lambda x: sgn * (x - trigger))
-    goal = next((g for g in goals if sgn * (g - trigger) >= cfg.tp1_r * r), None)
+    need = max(cfg.tp1_r * r, trigger * cfg.min_target_pct / 100, trigger * 3 * (cfg.fee_frac("open") + cfg.fee_frac("close")))
+    goal = next((g for g in goals if sgn * (g - trigger) >= need), None)
     fees = cfg.fee_frac("open") + cfg.fee_frac("close")
     if goal is None:
-        return None, f"broke structure, but no level {cfg.tp1_r:g}R away to aim for", age
+        return None, (f"broke structure, but no level {cfg.tp1_r:g}R and {cfg.min_target_pct:g}% away to aim for"), age
     if abs(goal - trigger) / trigger < 3 * fees:
         return None, "broke structure, but the move to the next level is too small to pay the fees", age
     gname = next((nm for x, nm in levels if x == goal), "the top of the pullback" if long else "the bottom of the bounce")
