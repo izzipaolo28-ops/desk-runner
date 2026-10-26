@@ -51,7 +51,7 @@ CHART_TFS = ("m15", "h1", "h4")                  # the timeframes the page's cha
 # variables (shared costs, coins, news times); everything else it takes from PERP_FAST_... or its own defaults
 FAST_SHARED = ("PERP_COINS", "PERP_PAPER_BANK_USD", "PERP_STAKE_PCT", "PERP_MIN_COLLATERAL_USD", "PERP_OPEN_FEE_BPS",
                "PERP_CLOSE_FEE_BPS", "PERP_IMPACT_BPS", "PERP_BORROW_PCT_HOUR", "PERP_MAINT_PCT", "PERP_SLIPPAGE_BPS",
-               "PERP_LIQ_BUFFER", "PERP_MAX_LOSS_PCT", "PERP_NEWS_TIMES", "PERP_NEWS_MINUTES")
+               "PERP_LIQ_BUFFER", "PERP_NEWS_TIMES", "PERP_NEWS_MINUTES")
 
 
 def _num(v):
@@ -126,7 +126,7 @@ class PerpConfig:
         self.liq_buffer = _env_num(env, "PERP_LIQ_BUFFER", 1.5, low=1, high=10)      # liquidation >= 1.5x the stop away
         # what one stop-out may cost, as a share of the money in the trade: "about half" (what you picked). At 50x a stop
         # 1% away would cost 50%+fees; a wider stop gets less leverage so it still costs about half, never more
-        self.max_loss_pct = _env_num(env, "PERP_MAX_LOSS_PCT", 50, low=1, high=100)
+        self.max_loss_pct = _env_num(env, "PERP_MAX_LOSS_PCT", 35 if fast else 50, low=1, high=100)
         self.min_stop_pct = _env_num(env, "PERP_MIN_STOP_PCT", 0.3 if fast else 0.35, low=0.05, high=10)
         self.max_stop_pct = _env_num(env, "PERP_MAX_STOP_PCT", 1 if fast else 3, low=0.1, high=20)
         self.be_r = _env_num(env, "PERP_BREAKEVEN_R", 1, high=10)
@@ -159,6 +159,9 @@ class PerpConfig:
         # FAST: at 70x a trade that goes nowhere costs ~13% in fees and slippage, so the target must be at least
         # PERP_MIN_TARGET_PCT away, and the swing it trades must be real: its own stop at least PERP_MIN_SWING_PCT away
         # (a smaller one gets stretched to PERP_MIN_STOP_PCT and is then far too many candles from its target)
+        # FAST: when the break-of-structure candle closed far from the swing (a late entry), it waits for the price to come
+        # back to the broken level instead and buys there (the retest): a closer stop, the same target
+        self.retest_pct = _env_num(env, "PERP_RETEST_PCT", 0.35 if fast else 100, low=0.05, high=100)
         self.min_target_pct = _env_num(env, "PERP_MIN_TARGET_PCT", 0.6 if fast else 0, high=10)
         self.min_swing_pct = _env_num(env, "PERP_MIN_SWING_PCT", 0.15 if fast else 0, high=5)
         self.lvl_move_atr = _env_num(env, "PERP_LVL_MOVE_ATR", 1.5, low=0.2, high=30)     # how big the pullback into a level
@@ -192,7 +195,7 @@ class PerpConfig:
                                                "trail_atr", "max_hold_hours", "stretch_atr", "spike_atr", "shock_atr",
                                                "cooldown_minutes", "min_trend", "pull_atr", "rev_lookback", "rev_drop_atr",
                                                "rev_bos_bars", "rev_max_against", "lvl_move_atr",
-                                               "min_target_pct", "min_swing_pct")}
+                                               "min_target_pct", "min_swing_pct", "retest_pct")}
 
 
 # ---------- prices ----------
@@ -417,6 +420,17 @@ def _pivot_level(c, lo, hi, long, k=2):
     return None
 
 
+def _retest(trigger, stop, level, a, long, cfg):
+    """A late entry (the break-of-structure candle closed more than PERP_RETEST_PCT from the stop) becomes a retest: wait
+    for the price to come back to the broken level and buy there. Returns (trigger, "retest" or "break")."""
+    if 100 * abs(trigger - stop) / trigger <= cfg.retest_pct:
+        return trigger, "break"
+    rt = level + 0.1 * a if long else level - 0.1 * a
+    if (long and not stop < rt < trigger) or (not long and not trigger < rt < stop):
+        return trigger, "break"
+    return rt, "retest"
+
+
 def _reversal_side(c, a, long, cfg):
     """One direction of the FAST reversal read. Long: the lowest low of the last PERP_REV_LOOKBACK candles, after a real
     drop into it; then the break of structure: a green candle closing over the last lower high before that low, for the
@@ -458,6 +472,7 @@ def _reversal_side(c, a, long, cfg):
                       f"{'over' if long else 'under'} {_px(level)}"), age
     trigger = b["c"] + 0.02 * a if long else b["c"] - 0.02 * a
     stop = ext - 0.1 * a if long else ext + 0.1 * a
+    trigger, how = _retest(trigger, stop, level, a, long, cfg)
     r = max(abs(trigger - stop), trigger * cfg.min_stop_pct / 100)
     stop_pct = 100 * abs(trigger - stop) / trigger
     if stop_pct < cfg.min_swing_pct:
@@ -471,8 +486,8 @@ def _reversal_side(c, a, long, cfg):
         return None, (f"broke structure, but only {room / r:.1f}R of room back to {_px(top)} (needs {cfg.tp1_r:g}R)"), age
     if room / trigger < max(3 * fees, cfg.min_target_pct / 100):
         return None, f"broke structure, but only {100 * room / trigger:.2f}% of room (needs {cfg.min_target_pct:g}%): too small to pay the fees", age
-    return {"side": "long" if long else "short", "kind": "reversal", "trigger": trigger, "stop": stop,
-            "bar": b["t"], "expires": b["t"] + 3 * TF_MIN[cfg.entry_tf] * 60,
+    return {"side": "long" if long else "short", "kind": "reversal", "trigger": trigger, "stop": stop, "entry": how,
+            "bar": b["t"], "expires": b["t"] + (7 if how == "retest" else 3) * TF_MIN[cfg.entry_tf] * 60,
             "chase_limit": trigger + 0.3 * a if long else trigger - 0.3 * a, "atr": a,
             "score": round(move / a + room / r, 2), "swing": top,
             "why": [f"{E} {word} at {_px(ext)} after a {move / a:.1f} ATR {'drop' if long else 'rise'} (the lowest of {hours:g} hours)"
@@ -586,6 +601,7 @@ def _level_side(c, a, long, levels, cfg, trend=None):
                       f"{'over' if long else 'under'} {_px(bos)}"), age
     trigger = b["c"] + 0.02 * a_ if long else b["c"] - 0.02 * a_
     stop = ext - 0.1 * a_ if long else ext + 0.1 * a_
+    trigger, how = _retest(trigger, stop, bos, a_, long, cfg)
     stop_pct = 100 * abs(trigger - stop) / trigger
     if stop_pct < cfg.min_swing_pct:
         return None, (f"broke structure, but the swing is tiny ({stop_pct:.2f}% to the stop, needs {cfg.min_swing_pct:g}%): "
@@ -604,12 +620,13 @@ def _level_side(c, a, long, levels, cfg, trend=None):
         return None, "broke structure, but the move to the next level is too small to pay the fees", age
     gname = next((nm for x, nm in levels if x == goal), "the top of the pullback" if long else "the bottom of the bounce")
     return {"side": "long" if long else "short", "kind": "reversal", "trigger": trigger, "stop": stop, "bar": b["t"],
-            "expires": b["t"] + 3 * TF_MIN[cfg.entry_tf] * 60,
+            "entry": how, "expires": b["t"] + (7 if how == "retest" else 3) * TF_MIN[cfg.entry_tf] * 60,
             "chase_limit": trigger + 0.3 * a_ if long else trigger - 0.3 * a_, "atr": a_,
             "score": round(5 + abs(goal - trigger) / r, 2), "swing": goal,
             "why": [(f"pulled back into the {name} ({_px(lv)}) and {held} it (swing {word} {_px(ext)})" if near
                      else f"{held} the {name} (swing {word} {_px(ext)})"),
-                    f"break of structure: a {'green' if long else 'red'} 5-minute candle closed {'over' if long else 'under'} {_px(bos)}",
+                    f"break of structure: a {'green' if long else 'red'} 5-minute candle closed {'over' if long else 'under'} {_px(bos)}"
+                    + (f"; it closed far from the swing, so it waits for the retest of {_px(bos)}" if how == "retest" else ""),
                     f"stop {'under' if long else 'over'} the swing {word}; target {gname} {_px(goal)}"]}, "", age
 
 
@@ -719,7 +736,8 @@ def choose_leverage(stop_pct, cfg):
     fees = cfg.fee_frac("open") + cfg.fee_frac("close")
     need = cfg.liq_buffer * s + cfg.maint_pct / 100 + fees
     by_liq = 1 / need if need > 0 else cfg.max_leverage
-    by_loss = (cfg.max_loss_pct / 100) / (s + fees) if s + fees > 0 else cfg.max_leverage
+    cost = s + fees + (2 * cfg.slippage_bps / 1e4 if cfg.style == "fast" else 0)
+    by_loss = (cfg.max_loss_pct / 100) / cost if cost > 0 else cfg.max_leverage
     return max(1.1, min(cfg.max_leverage, by_liq, by_loss))
 
 
@@ -861,7 +879,7 @@ def _levels(p, coin):
             out.append(pos["entry"] + sgn * p.cfg.be_r * pos["r"])
     a = (p.d.get("armed") or {}).get(coin)
     if a and not pos:
-        out += [a["trigger"], a.get("chase_limit")]
+        out += [a["trigger"], a.get("stop") if a.get("entry") == "retest" else a.get("chase_limit")]
     return [v for v in out if v and math.isfinite(v)]
 
 
@@ -1069,9 +1087,10 @@ class Perps:
                 old = armed.get(c)
                 if s and (not old or old.get("bar") != s["bar"]) and taken.get(c) != s["bar"]:
                     armed[c] = {**s, "coin": c}
-                    self.event("signal", ("NEWS " if s.get("kind") == "news" else "") + f"{c} {s['side'].upper()} setup: "
-                               f"{'buys' if s['side'] == 'long' else 'shorts'} a break of "
-                               f"{_px(s['trigger'])}, stop {_px(s['stop'])}" + (f", target {_px(s['target'])}" if s.get("target") else "")
+                    how = (("buys a pullback to " if s["side"] == "long" else "shorts a bounce to ") if s.get("entry") == "retest"
+                           else ("buys a break of " if s["side"] == "long" else "shorts a break of "))
+                    self.event("signal", ("NEWS " if s.get("kind") == "news" else "") + f"{c} {s['side'].upper()} setup: " + how
+                               + f"{_px(s['trigger'])}, stop {_px(s['stop'])}" + (f", target {_px(s['target'])}" if s.get("target") else "")
                                + ". " + "; ".join(s["why"]), c)
             for c in list(armed):
                 a = armed[c]
@@ -1094,8 +1113,15 @@ class Perps:
             p = self.prices.get(c)
             if not p:
                 continue
-            hit = p >= a["trigger"] if a["side"] == "long" else p <= a["trigger"]
-            chased = p > a["chase_limit"] if a["side"] == "long" else p < a["chase_limit"]
+            long = a["side"] == "long"
+            if a.get("entry") == "retest":
+                if (long and p <= a["stop"]) or (not long and p >= a["stop"]):
+                    a["expires"] = 0                       # came all the way back: the setup failed, never entered
+                    continue
+                hit, chased = (p <= a["trigger"] if long else p >= a["trigger"]), False
+            else:
+                hit = p >= a["trigger"] if long else p <= a["trigger"]
+                chased = p > a["chase_limit"] if long else p < a["chase_limit"]
             if hit and not chased:
                 ready.append((a["score"], c, a, p))
             elif hit and chased:

@@ -2002,7 +2002,7 @@ function renderPerps(P, pre = "perps", api = "/api/perps"){
       + (num(r.atr_pct) !== null ? ` · moves ~${r.atr_pct}% ${S.entry_tf === "m5" ? "per 5 min" : S.entry_tf === "m15" ? "per 15 min" : "an hour"}` : "")));
     const nw = r.news || {};
     if (nw.strength > 0) box.appendChild(el("div", "nw " + nw.bias, `news: ${nw.bias === "up" ? "▲ bullish" : "▼ bearish"} ${nw.strength}/3` + (nw.why ? ` · ${nw.why}` : "")));
-    if (a) box.appendChild(el("div", "s", (a.kind === "news" ? "NEWS " : "") + `${String(a.side).toUpperCase()} setup: ${a.side === "long" ? "buys" : "shorts"} a break of ${fmtPx(a.trigger)}, stop ${fmtPx(a.stop)}`
+    if (a) box.appendChild(el("div", "s", (a.kind === "news" ? "NEWS " : "") + `${String(a.side).toUpperCase()} setup: ${a.entry === "retest" ? (a.side === "long" ? "buys a pullback to" : "shorts a bounce to") : (a.side === "long" ? "buys a break of" : "shorts a break of")} ${fmtPx(a.trigger)}, stop ${fmtPx(a.stop)}`
       + (a.target ? `, target ${fmtPx(a.target)}` : "") + (a.note ? ` (${a.note})` : "")));
     else if ((r.wait || []).length) box.appendChild(el("div", "w", r.wait[0]));
     else box.appendChild(el("div", "w", mode === "off" ? "off" : "reading the charts…"));
@@ -2016,8 +2016,8 @@ function renderPerps(P, pre = "perps", api = "/api/perps"){
     + `London, NY AM, NY lunch and NY PM session highs and lows (New York time) and yesterday's high and low. It waits for a swing low (or high) that `
     + `holds a level, or sweeps just past it and comes back, or is a higher low in the 15-minute uptrend (lower high in a downtrend), or is a real `
     + `${Math.round((S.rev_lookback ?? 48) * 5 / 60)}-hour low after a big drop. Then the break of structure: a 5-minute candle closing over the last lower high `
-    + `(under the last higher low for a short), within ${S.rev_bos_bars ?? 12} candles. In on that, stop just past the swing, target the next level or where `
-    + `the pullback came from (at least ${S.tp1_r ?? 1.5}R, at most ${S.tp_max_r ?? 4}R). Up to ${S.max_leverage ?? 70}x, set by the stop; stop to break-even `
+    + `(under the last higher low for a short), within ${S.rev_bos_bars ?? 12} candles. In on that (or, when that candle closed far from the swing, on the pullback to the broken level: the retest), stop just past the swing, target the next level or where `
+    + `the pullback came from (at least ${S.tp1_r ?? 1.5}R, at most ${S.tp_max_r ?? 4}R). Up to ${S.max_leverage ?? 70}x, set by the stop, so a stop-out costs about ${S.max_loss_pct ?? 35}% at most, fees and slippage included; stop to break-even `
     + `at +${S.be_r ?? 1}R; out after ${S.max_hold_hours ?? 2} hours at most; rests ${S.cooldown_minutes ?? 10} minutes after a loss.`; }
   else $(pre + "How").textContent = `How it trades (${fast ? "FAST" : swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
     + `On the ${E} chart it waits for a dip into the 20 EMA with the RSI cooling off (under ${S.rsi_long ?? 45}), then a green candle closing back over it, and buys when the price `
