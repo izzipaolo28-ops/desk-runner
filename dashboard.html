@@ -2018,7 +2018,8 @@ function renderPerps(P, pre = "perps", api = "/api/perps"){
     + `${Math.round((S.rev_lookback ?? 48) * 5 / 60)}-hour low after a big drop. Then the break of structure: a 5-minute candle closing over the last lower high `
     + `(under the last higher low for a short), within ${S.rev_bos_bars ?? 12} candles. In on that (or, when that candle closed far from the swing, on the pullback to the broken level: the retest), stop just past the swing, target the next level or where `
     + `the pullback came from (at least ${S.tp1_r ?? 1.5}R, at most ${S.tp_max_r ?? 4}R). Up to ${S.max_leverage ?? 70}x, set by the stop, so a stop-out costs about ${S.max_loss_pct ?? 35}% at most, fees and slippage included; stop to break-even `
-    + `at +${S.be_r ?? 1}R; out after ${S.max_hold_hours ?? 2} hours at most; rests ${S.cooldown_minutes ?? 10} minutes after a loss.`; }
+    + `at +${S.be_r ?? 1}R; out after ${S.max_hold_hours ?? 2} hours at most; rests ${S.cooldown_minutes ?? 10} minutes after a loss. `
+    + (S.hours_text && S.hours_text !== "all" ? `It only opens trades ${S.hours_text} New York time (Asia + London), when its trades have worked; an open trade is still managed after that.` : ""); }
   else $(pre + "How").textContent = `How it trades (${fast ? "FAST" : swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
     + `On the ${E} chart it waits for a dip into the 20 EMA with the RSI cooling off (under ${S.rsi_long ?? 45}), then a green candle closing back over it, and buys when the price `
     + `breaks that candle's high (shorts: the mirror image). It never enters after a big candle, when the price is stretched over its average, or at the recent high. `

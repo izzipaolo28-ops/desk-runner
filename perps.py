@@ -166,6 +166,19 @@ class PerpConfig:
         self.min_swing_pct = _env_num(env, "PERP_MIN_SWING_PCT", 0.15 if fast else 0, high=5)
         self.lvl_move_atr = _env_num(env, "PERP_LVL_MOVE_ATR", 1.5, low=0.2, high=30)     # how big the pullback into a level
         self.candle_seconds = _env_num(env, "PERP_CANDLE_SECONDS", 30 if fast else 60 if swing else 120, low=30)
+        # the hours it may open trades, New York time ("20:00-05:30"; "all" = any time). The fast desk's default is
+        # Asia + London: its first 19 trades won 5 of 8 there and 0 of 11 in New York hours and the evening
+        raw = str(env.get("PERP_HOURS", "20:00-05:30" if fast else "all")).strip().lower() or "all"
+        self.hours = None
+        if raw != "all":
+            try:
+                a_, b_ = [x.strip() for x in raw.split("-")]
+                self.hours = tuple(int(x.split(":")[0]) * 60 + int((x.split(":") + ["0"])[1]) for x in (a_, b_))
+                if not all(0 <= m < 24 * 60 for m in self.hours) or self.hours[0] == self.hours[1]:
+                    raise ValueError
+            except ValueError:
+                raise ValueError("PERP_HOURS must be New York times like 20:00-05:30, or all") from None
+        self.hours_text = raw
         self.news = []
         for part in str(env.get("PERP_NEWS_TIMES", "")).split(","):
             part = part.strip()
@@ -185,6 +198,14 @@ class PerpConfig:
         e["PERP_STYLE"] = "fast"
         return cls(e)
 
+    def in_hours(self, ts):
+        """True when ts is inside PERP_HOURS (New York time; the window may cross midnight)."""
+        if not self.hours:
+            return True
+        m = int((ts + ny_offset(ts)) % 86400) // 60
+        a, b = self.hours
+        return a <= m < b if a < b else (m >= a or m < b)
+
     def fee_frac(self, which):
         return ((self.open_fee_bps if which == "open" else self.close_fee_bps) + self.impact_bps) / 1e4
 
@@ -195,7 +216,7 @@ class PerpConfig:
                                                "trail_atr", "max_hold_hours", "stretch_atr", "spike_atr", "shock_atr",
                                                "cooldown_minutes", "min_trend", "pull_atr", "rev_lookback", "rev_drop_atr",
                                                "rev_bos_bars", "rev_max_against", "lvl_move_atr",
-                                               "min_target_pct", "min_swing_pct", "retest_pct")}
+                                               "min_target_pct", "min_swing_pct", "retest_pct", "hours_text")}
 
 
 # ---------- prices ----------
@@ -643,6 +664,9 @@ def read_reversal(out, c, a, trend, strength, cfg, now):
     near = [t for t in cfg.news if abs(now - t) <= cfg.news_minutes * 60]
     if near:
         out["wait"].append("news time: standing aside " + datetime.fromtimestamp(near[0], timezone.utc).strftime("%b %d %H:%M UTC"))
+        return out
+    if not cfg.in_hours(now):
+        out["wait"].append(f"outside its hours ({cfg.hours_text} New York time, Asia + London): not opening trades now")
         return out
     levels = key_levels(c, now)
     out["levels"] = [{"name": nm, "price": round(lv, 6)} for lv, nm in levels]
@@ -1104,6 +1128,8 @@ class Perps:
         if not armed:
             return None
         if self.news and self.news.event_now(now):          # no new trade into a big US release
+            return None
+        if not self.cfg.in_hours(now):                      # outside its hours (PERP_HOURS): open trades are still managed
             return None
         last_loss = self.d.get("last_loss_ts") or 0
         if now - last_loss < self.cfg.cooldown_minutes * 60:
