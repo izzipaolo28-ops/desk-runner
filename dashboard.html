@@ -430,6 +430,19 @@ details.pc .inner{padding:4px 8px 8px}
     <p class="muted" style="font-size:12px" id="perpsHow"></p>
   </section>
   <section class="panel">
+    <h2>PERPS LAB <span id="labWhen"></span></h2>
+    <div class="muted small" style="margin-bottom:8px">The bot run on a year of real 1-hour prices, every losing trade given a cause
+      (shakeout, gave back, wrong way, early exit, chop), and 22 one-change variants tested on both halves of the year.
+      It runs by itself a few minutes after each deploy, then daily. <b>Copy the report</b> and send it to Claude.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <button class="btn" type="button" id="labRun">Run the lab now</button>
+      <button class="btn" type="button" id="labCopy">Copy the report</button>
+      <a class="btn" href="/lab" target="_blank" rel="noopener">Open as text</a>
+    </div>
+    <div class="msg" id="labMsg" role="status"></div>
+    <pre class="mono" id="labText" style="white-space:pre-wrap;font-size:11px;max-height:420px;overflow:auto;margin:0">loading…</pre>
+  </section>
+  <section class="panel">
     <h2>PERPS TRADES <span id="perpsCount"></span></h2>
     <table><thead><tr><th>time</th><th>trade</th><th>entry → exit</th><th>P&amp;L</th><th>why</th></tr></thead><tbody id="perpsTrades"></tbody></table>
   </section>
@@ -2007,11 +2020,11 @@ function renderPerps(P, pre = "perps", api = "/api/perps"){
     else if ((r.wait || []).length) box.appendChild(el("div", "w", r.wait[0]));
     else box.appendChild(el("div", "w", mode === "off" ? "off" : "reading the charts…"));
     pc.appendChild(box); }
-  $(pre + "Rules").textContent = `All of the balance in each trade (${S.stake_pct ?? "?"}%), up to ${S.max_leverage ?? "?"}x: the stop sets the leverage, so a stop-out `
-    + `costs about ${S.max_loss_pct ?? "?"}% at most and the liquidation price stays at least ${S.liq_buffer ?? "?"}x further away than the stop. Jupiter's fees: `
+  $(pre + "Rules").textContent = `${S.stake_pct ?? "?"}% of the balance as collateral in each trade, up to ${S.max_leverage ?? "?"}x: the stop sets the leverage, so a stop-out `
+    + `costs about ${S.max_loss_pct ?? "?"}% of it at most and the liquidation price stays at least ${S.liq_buffer ?? "?"}x further away than the stop. Jupiter's fees: `
     + `${(S.open_fee_bps ?? 6) / 100}% to open and to close on the full size, plus an hourly borrow fee. ${P.real || ""}`
     + (P.data_error ? ` · prices: ${P.data_error}` : P.price_source ? ` · prices from ${P.price_source}` : "");
-  const swing = S.style !== "trend", fast = S.style === "fast", E = TFN[S.entry_tf] || "1-hour", TT = TFN[S.trend_tf] || "4-hour";
+  const swing = S.style === "intraday", fast = S.style === "fast", sw = S.style === "swing", E = TFN[S.entry_tf] || "1-hour", TT = TFN[S.trend_tf] || "4-hour";
   if (fast){ $(pre + "How").textContent = `How it trades (FAST · 5-MINUTE TURNS): it marks the key levels like your TradingView boxes: the last Asia, `
     + `London, NY AM, NY lunch and NY PM session highs and lows (New York time) and yesterday's high and low. It waits for a swing low (or high) that `
     + `holds a level, or sweeps just past it and comes back, or is a higher low in the 15-minute uptrend (lower high in a downtrend), or is a real `
@@ -2020,11 +2033,15 @@ function renderPerps(P, pre = "perps", api = "/api/perps"){
     + `the pullback came from (at least ${S.tp1_r ?? 1.5}R, at most ${S.tp_max_r ?? 4}R). Up to ${S.max_leverage ?? 70}x, set by the stop, so a stop-out costs about ${S.max_loss_pct ?? 35}% at most, fees and slippage included; stop to break-even `
     + `at +${S.be_r ?? 1}R; out after ${S.max_hold_hours ?? 2} hours at most; rests ${S.cooldown_minutes ?? 10} minutes after a loss. `
     + (S.hours_text && S.hours_text !== "all" ? `It only opens trades ${S.hours_text} New York time (Asia + London), when its trades have worked; an open trade is still managed after that.` : ""); }
-  else $(pre + "How").textContent = `How it trades (${fast ? "FAST" : swing ? "SWING" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
+  else $(pre + "How").textContent = `How it trades (${fast ? "FAST" : sw ? "SWING · DAYS, NOT MINUTES" : swing ? "INTRADAY" : "TREND"} style): the ${TT} chart sets the direction (it only trades with a clear trend). `
     + `On the ${E} chart it waits for a dip into the 20 EMA with the RSI cooling off (under ${S.rsi_long ?? 45}), then a green candle closing back over it, and buys when the price `
     + `breaks that candle's high (shorts: the mirror image). It never enters after a big candle, when the price is stretched over its average, or at the recent high. `
-    + `Every trade has a stop under the dip; at +${S.be_r ?? 1}R the stop goes to break-even. `
-    + (swing ? `The whole trade closes at the last swing high (low for a short), between ${S.tp1_r ?? 1.5}R and ${S.tp_max_r ?? 3}R away, and it's out after ${S.max_hold_hours ?? 3} hours at most. `
+    + (sw ? `Every trade has a stop under the dip and at least ${S.stop_atr ?? 1.2} ${E} ATRs away, out of the normal noise. The leverage is set so a stop-out `
+            + `costs about ${S.max_loss_pct ?? 5}% of the balance (up to ${S.max_leverage ?? 10}x). At +${S.tp1_r ?? 2}R it banks ${S.tp1_pct ?? 33}% and the stop goes to break-even; `
+            + `the rest trails ${S.trail_atr ?? 3} ${E} ATRs behind the best price, so a big trend can run for days (up to ${Math.round((S.max_hold_hours ?? 336) / 24)} days). `
+            + `It also closes if the ${TT} trend turns against it. `
+          : `Every trade has a stop under the dip; at +${S.be_r ?? 1}R the stop goes to break-even. `)
+    + (sw ? "" : swing ? `The whole trade closes at the last swing high (low for a short), between ${S.tp1_r ?? 1.5}R and ${S.tp_max_r ?? 3}R away, and it's out after ${S.max_hold_hours ?? 3} hours at most. `
              : `At +${S.tp1_r ?? 2}R ${S.tp1_pct ?? 50}% is closed and the rest trails; out after ${S.max_hold_hours ?? 48} hours at most. `)
     + `It stands aside after a violent candle, and rests ${S.cooldown_minutes ?? 30} minutes after a loss. `
     + `NEWS: an AI reads the latest crypto headlines. Strong news against a setup blocks it; major news plus the price breaking out the same way `
@@ -2080,6 +2097,21 @@ async function loadPerpsChart(){
   finally { PC.busy = false; }
 }
 setInterval(loadPerpsChart, 5000);
+// ---------- PERPS LAB ----------
+let labText = "";
+async function loadLab(){
+  try {
+    const r = await fetch("/api/perps-lab", {cache: "no-store"}); if (!r.ok) return;
+    const b = await r.json(); labText = b.text || "";
+    $("labText").textContent = (b.busy ? `RUNNING: ${b.step}\n\n` : "") + labText;
+    $("labWhen").textContent = b.busy ? "running…" : b.at ? "last run " + String(b.at).slice(0, 16).replace("T", " ") + " UTC" : "";
+  } catch (e) {}
+}
+$("labRun").addEventListener("click", async () => { await admin("/api/perps-lab", null, "labMsg"); loadLab(); });
+$("labCopy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(labText); $("labMsg").textContent = "copied: paste it to Claude"; }
+  catch (e) { $("labMsg").textContent = "couldn't copy here: tap 'Open as text', then select all and copy"; } });
+loadLab(); setInterval(loadLab, 15000);
 window.addEventListener("resize", () => { if (PC.data) drawPerpsChart(); });
 function svgEl(tag, attrs){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
 function drawPerpsChart(){

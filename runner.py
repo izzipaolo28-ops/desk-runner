@@ -62,6 +62,7 @@ import main  # noqa: E402
 import pick as desk_pick  # noqa: E402
 import news  # noqa: E402
 import perps  # noqa: E402
+import lab as desk_lab  # noqa: E402
 import snipe  # noqa: E402
 import thresholds  # noqa: E402
 from jupiter import Jupiter  # noqa: E402
@@ -1518,6 +1519,14 @@ def make_handler(runner, admin_token):
                 return self._send(code, body)
             if self.path in ("/", "/index.html"):
                 return self._send(200, page, "text/html; charset=utf-8")
+            if self.path in ("/api/perps-lab", "/lab"):         # the lab: the bot on a year of real prices, every loser explained
+                if LAB is None:
+                    return self._send(409, {"detail": "the lab isn't running"})
+                st = LAB.status()
+                if self.path == "/lab":
+                    head = (f"(running now: {st['step']})\n\n" if st["busy"] else "")
+                    return self._send(200, (head + st["text"]).encode(), "text/plain; charset=utf-8")
+                return self._send(200, {k: st[k] for k in ("busy", "step", "text")} | {"at": (st["result"] or {}).get("at")})
             if self.path == "/api/status":
                 return self._send(200, runner.status())
             if self.path == "/api/summary":
@@ -1534,11 +1543,16 @@ def make_handler(runner, admin_token):
                                  "/api/check", "/api/check-buy", "/api/snipe-mode", "/api/wallets", "/api/sell",
                                  "/api/money", "/api/owner", "/api/fund", "/api/withdraw", "/api/perps-mode",
                                  "/api/perps-close", "/api/perps-reset", "/api/perps-fast-mode", "/api/perps-fast-close",
-                                 "/api/perps-fast-reset"):
+                                 "/api/perps-fast-reset", "/api/perps-lab"):
                 return self._send(404, {"detail": "not found"})
             given = self.headers.get("X-Admin-Token", "")
             if len(admin_token) < MIN_ADMIN_TOKEN or not hmac.compare_digest(given.encode(), admin_token.encode()):
                 return self._send(401, {"detail": "wrong or missing admin token"})
+            if self.path == "/api/perps-lab":
+                if LAB is None:
+                    return self._send(409, {"detail": "the lab isn't running"})
+                code, msg = LAB.start("asked")
+                return self._send(code, {"detail": msg})
             if self.path == "/api/scan-now":
                 code, msg = runner.request_scan()
                 return self._send(code, {"detail": msg})
@@ -1818,8 +1832,17 @@ def perps_loop(runner, sleep=time.sleep, rounds=None):
         sleep(2)
 
 
+LAB = None                                        # the lab (lab.py): built in serve()
+
+
 def serve():
+    global LAB
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    try:
+        LAB = desk_lab.Lab(os.environ, DATA_DIR)
+        LAB.auto()                                # first run 3 minutes after the start, then daily
+    except Exception as exc:                      # the lab never stops the desk
+        log.error("lab: %s", exc)
     runner = safe_build()
     admin = os.environ.get("ADMIN_TOKEN", "").strip()
     if isinstance(runner, Stopped):

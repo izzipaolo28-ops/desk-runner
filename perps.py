@@ -1,9 +1,13 @@
 # perps.py
 """PERPS: SOL, ETH and BTC on Jupiter Perps, swing-traded with the trend.
 
-Two styles (PERP_STYLE):
-- swing (the default): the 1-hour chart decides the direction, the 15-minute chart the entry, and each trade is out within
-  a few hours: the whole position is closed at the last swing high (low for a short), at least 1.5R and at most 3R away.
+Styles (PERP_STYLE):
+- swing (the default): the 4-hour chart decides the direction, the 1-hour chart the entry, and a trade can run for days.
+  The stop sits past the dip AND at least PERP_STOP_ATR 1-hour ATRs away (out of the noise), the leverage is set so a
+  stop-out costs PERP_MAX_LOSS_PCT (5%) of the balance, a third is banked at +2R (the stop goes to break-even there),
+  and the rest trails PERP_TRAIL_ATR (3) 1-hour ATRs behind the best price until the trail or the 4-hour trend ends it.
+- intraday: the old swing rules: the 1-hour chart decides the direction, the 15-minute chart the entry, out within hours,
+  the whole position closed at the last swing high (low for a short).
 - trend: the 4-hour chart decides the direction and the 1-hour chart the entry; half is closed at +2R, the rest trails.
 
 The entry is the same in both: in an uptrend it waits for a dip into the entry chart's 20 EMA, the RSI to cool under 45
@@ -42,7 +46,7 @@ COINS = {
     "BTC": {"kraken": "XBTUSD", "keys": ("XXBTZUSD", "XBTUSD"), "coinbase": "BTC-USD"},
 }
 MODES = ("off", "watch", "auto")
-STYLES = ("swing", "trend", "fast")
+STYLES = ("swing", "intraday", "trend", "fast")
 TF_MIN = {"m5": 5, "m15": 15, "h1": 60, "h4": 240}
 TF_NAME = {"m5": "5-minute", "m15": "15-minute", "h1": "1-hour", "h4": "4-hour"}
 TF_SHORT = {"m5": "5m", "m15": "15m", "h1": "1h", "h4": "4h"}
@@ -98,11 +102,12 @@ class PerpConfig:
         self.mode = mode
         style = str(env.get("PERP_STYLE", "swing")).strip().lower() or "swing"
         if style not in STYLES:
-            raise ValueError("PERP_STYLE must be swing, trend or fast")
+            raise ValueError("PERP_STYLE must be swing, intraday, trend or fast")
         self.style = style
         fast = style == "fast"
-        swing = style == "swing" or fast          # fast is the swing rules one timeframe down
-        # swing: the 1-hour trend, entries on the 15-minute chart, out within hours. trend: the 4-hour trend, 1-hour entries
+        sw = style == "swing"                     # the multi-day swing desk
+        swing = style == "intraday" or fast       # the old in-and-out-within-hours rules (fast: one timeframe down)
+        # swing / trend: the 4-hour trend, 1-hour entries. intraday: the 1-hour trend, entries on the 15-minute chart.
         # fast: the 15-minute trend, entries on the 5-minute chart, out within the hour or so
         self.entry_tf, self.trend_tf = ("m5", "m15") if fast else ("m15", "h1") if swing else ("h1", "h4")
         self.label = "FAST" if fast else "MAIN"
@@ -112,7 +117,7 @@ class PerpConfig:
             raise ValueError("PERP_COINS must be a list of SOL, ETH and BTC")
         self.coins = list(dict.fromkeys(coins))
         self.paper_bank = _env_num(env, "PERP_PAPER_BANK_USD", 50, low=10)
-        self.max_leverage = _env_num(env, "PERP_MAX_LEVERAGE", 70 if fast else 50, low=1.1, high=250)
+        self.max_leverage = _env_num(env, "PERP_MAX_LEVERAGE", 70 if fast else 10 if sw else 50, low=1.1, high=250)
         self.stake_pct = _env_num(env, "PERP_STAKE_PCT", 100, low=1, high=100)       # of the balance, every trade
         self.min_collateral = _env_num(env, "PERP_MIN_COLLATERAL_USD", 10, low=0)     # Jupiter's minimum
         # Jupiter's costs (docs.jup.ag perps FAQ): 0.06% of the size to open and to close, a price-impact fee on big
@@ -126,19 +131,23 @@ class PerpConfig:
         self.liq_buffer = _env_num(env, "PERP_LIQ_BUFFER", 1.5, low=1, high=10)      # liquidation >= 1.5x the stop away
         # what one stop-out may cost, as a share of the money in the trade: "about half" (what you picked). At 50x a stop
         # 1% away would cost 50%+fees; a wider stop gets less leverage so it still costs about half, never more
-        self.max_loss_pct = _env_num(env, "PERP_MAX_LOSS_PCT", 35 if fast else 50, low=1, high=100)
-        self.min_stop_pct = _env_num(env, "PERP_MIN_STOP_PCT", 0.3 if fast else 0.35, low=0.05, high=10)
-        self.max_stop_pct = _env_num(env, "PERP_MAX_STOP_PCT", 1 if fast else 3, low=0.1, high=20)
-        self.be_r = _env_num(env, "PERP_BREAKEVEN_R", 1, high=10)
+        self.max_loss_pct = _env_num(env, "PERP_MAX_LOSS_PCT", 35 if fast else 5 if sw else 50, low=1, high=100)
+        self.min_stop_pct = _env_num(env, "PERP_MIN_STOP_PCT", 0.3 if fast else 0.6 if sw else 0.35, low=0.05, high=10)
+        self.max_stop_pct = _env_num(env, "PERP_MAX_STOP_PCT", 1 if fast else 6 if sw else 3, low=0.1, high=20)
+        # the stop goes to break-even at +PERP_BREAKEVEN_R. Swing: only at +2R, with the first profit (earlier, the normal
+        # wiggle of a winning trade knocks it out at break-even: what happened to most of the old desk's trades)
+        self.be_r = _env_num(env, "PERP_BREAKEVEN_R", 2 if sw else 1, high=10)
+        # swing: the stop is at least this many entry-chart ATRs from the entry, whatever the dip (out of the noise)
+        self.stop_atr = _env_num(env, "PERP_STOP_ATR", 1.2 if sw else 0, high=10)
         # swing: the whole trade closes at the last swing high / low, but never under 1.5R or over 3R away (PERP_TP1_R,
         # PERP_TP_MAX_R). trend: half closes at +2R and the rest trails PERP_TRAIL_ATR behind the best price
         self.tp1_r = _env_num(env, "PERP_TP1_R", 2 if fast else 1.5 if swing else 2, low=0.1, high=20)
-        self.tp_max_r = _env_num(env, "PERP_TP_MAX_R", 4 if swing else 3, low=0.1, high=50)
+        self.tp_max_r = _env_num(env, "PERP_TP_MAX_R", 4 if swing else 20 if sw else 3, low=0.1, high=50)
         if self.tp_max_r < self.tp1_r:
             raise ValueError("PERP_TP_MAX_R must be at least PERP_TP1_R")
-        self.tp1_pct = _env_num(env, "PERP_TP1_PCT", 100 if swing else 50, high=100)
-        self.trail_atr = _env_num(env, "PERP_TRAIL_ATR", 1.5, low=0.1, high=20)
-        self.max_hold_hours = _env_num(env, "PERP_MAX_HOLD_HOURS", 2 if fast else 6 if swing else 48, low=0.25, high=24 * 30)
+        self.tp1_pct = _env_num(env, "PERP_TP1_PCT", 100 if swing else 33 if sw else 50, high=100)
+        self.trail_atr = _env_num(env, "PERP_TRAIL_ATR", 3 if sw else 1.5, low=0.1, high=20)
+        self.max_hold_hours = _env_num(env, "PERP_MAX_HOLD_HOURS", 2 if fast else 6 if swing else 24 * 14 if sw else 48, low=0.25, high=24 * 30)
         self.stretch_atr = _env_num(env, "PERP_STRETCH_ATR", 1, low=0.1, high=10)
         self.spike_atr = _env_num(env, "PERP_SPIKE_ATR", 2.5, low=0.5, high=20)
         self.shock_atr = _env_num(env, "PERP_SHOCK_ATR", 3.5, low=0.5, high=20)
@@ -196,6 +205,9 @@ class PerpConfig:
         e = {k: env[k] for k in FAST_SHARED if k in env}
         e.update({"PERP_" + k[len("PERP_FAST_"):]: v for k, v in env.items() if k.startswith("PERP_FAST_")})
         e["PERP_STYLE"] = "fast"
+        # the fast desk is paused unless PERP_FAST_MODE says otherwise: its 5-minute, 50-70x trades lost money live and in
+        # every replay (fees and noise take most of each trade). Turn it back on with PERP_FAST_MODE=auto or from the page
+        e.setdefault("PERP_MODE", "off")
         return cls(e)
 
     def in_hours(self, ts):
@@ -213,7 +225,7 @@ class PerpConfig:
         return {k: getattr(self, k) for k in ("style", "label", "entry_tf", "trend_tf", "tp_max_r", "rsi_long", "rsi_short", "coins", "paper_bank", "max_leverage", "stake_pct", "min_collateral",
                                                "open_fee_bps", "close_fee_bps", "impact_bps", "borrow_pct_hour", "maint_pct",
                                                "liq_buffer", "max_loss_pct", "min_stop_pct", "max_stop_pct", "be_r", "tp1_r", "tp1_pct",
-                                               "trail_atr", "max_hold_hours", "stretch_atr", "spike_atr", "shock_atr",
+                                               "trail_atr", "max_hold_hours", "stop_atr", "stretch_atr", "spike_atr", "shock_atr",
                                                "cooldown_minutes", "min_trend", "pull_atr", "rev_lookback", "rev_drop_atr",
                                                "rev_bos_bars", "rev_max_against", "lvl_move_atr",
                                                "min_target_pct", "min_swing_pct", "retest_pct", "hours_text")}
@@ -412,6 +424,8 @@ def read_coin(coin, h1, h4, cfg, now=None):
         return out
     trigger = b["h"] + 0.05 * a if long else b["l"] - 0.05 * a
     stop = dip - 0.15 * a if long else dip + 0.15 * a
+    if cfg.stop_atr:                              # swing: never closer than PERP_STOP_ATR ATRs (the noise)
+        stop = min(stop, trigger - cfg.stop_atr * a) if long else max(stop, trigger + cfg.stop_atr * a)
     out["setup"] = {"side": "long" if long else "short", "trigger": trigger, "stop": stop, "bar": b["t"],
                     "expires": b["t"] + step + max(step, 1800),      # the trigger must break within 30 min (1 hour: trend)
                     "chase_limit": trigger + 0.3 * a if long else trigger - 0.3 * a,
@@ -420,7 +434,7 @@ def read_coin(coin, h1, h4, cfg, now=None):
                             f"{E} {word} to the 20 EMA, RSI {'cooled to' if long else 'heated to'} "
                             f"{min(r[-6:]) if long else max(r[-6:]):.0f} and turning",
                             f"{'green' if long else 'red'} candle closed {'over' if long else 'under'} the 20 EMA"]}
-    if cfg.style in ("swing", "fast"):           # the target: the last swing high (low), the top of the move it dipped from
+    if cfg.style in ("intraday", "fast"):        # the target: the last swing high (low), the top of the move it dipped from
         swing_px = max(c["h"] for c in h1[-24:]) if long else min(c["l"] for c in h1[-24:])
         out["setup"]["swing"] = swing_px
         out["setup"]["target"] = target_for(trigger, stop, swing_px, long, cfg)
@@ -791,7 +805,7 @@ REPLAY_WINDOW = 130                              # candles of history each step 
 REPLAY_WINDOW_FAST = 330                         # the fast desk also needs the last day's sessions (27 hours of 5-minute)
 
 
-def replay(data, cfg, bank=None):
+def replay(data, cfg, bank=None, full=False):
     """The rules, run over past candles. data: {coin: {"entry": [...], "trend": [...]}}, the CLOSED candles of the entry and
     trend charts, oldest first. It is the live bot itself (the same entries, stops, targets, fees, borrow, liquidation,
     cooldown: one trade at a time, the whole balance in each) fed the candles one at a time. Inside a candle the price is
@@ -804,6 +818,7 @@ def replay(data, cfg, bank=None):
     st = _MemState()
     p = Perps(cfg, st, clock=lambda: clock[0])
     p.refresh = lambda now: None
+    p.trade_cap = 100000 if full else 200
     with st.lock:
         p.d["mode"] = "auto"
         if bank is not None:
@@ -884,7 +899,8 @@ def replay(data, cfg, bank=None):
             "per_day": round(len(closed) / days, 2) if days else None,
             "stopped": end < cfg.min_collateral,
             "list": [{k: x.get(k) for k in ("time", "opened_at", "coin", "side", "leverage", "entry", "exit", "pnl", "pct", "why", "final",
-                                             "held_min", "total")} for x in (p.d.get("trades") or [])[:40]]}
+                                             "held_min", "total")} for x in (p.d.get("trades") or [])[:40]],
+            **({"all": list(p.d.get("trades") or [])} if full else {})}
 
 
 def _levels(p, coin):
@@ -922,6 +938,7 @@ class Perps:
         self.price_fail_at = 0.0
         self.down = {}                             # source -> until when it's left alone after failing
         self.replay_result, self.replay_busy, self.replay_key = None, False, None
+        self.trade_cap = 200                       # trades kept in the state (the lab's replays keep them all)
         with self.state.lock:
             p = self.state.data.setdefault(self.key, {})
             p.setdefault("bank", cfg.paper_bank)
@@ -930,6 +947,10 @@ class Perps:
             p.setdefault("trades", [])
             p.setdefault("events", [])
             p.setdefault("armed", {})
+            if p.get("style") != cfg.style:            # a new style: the old one's armed setups don't apply
+                p["armed"], p["taken"], p["style"] = {}, {}, cfg.style
+            if key == "perps_fast" and not p.get("paused_v2"):   # once: the fast desk starts paused (see fast_from)
+                p["mode"], p["paused_v2"] = cfg.mode, True
 
     # ----- state helpers -----
     @property
@@ -1185,14 +1206,15 @@ class Perps:
             return "perps: stop too far"
         lev = choose_leverage(stop_pct, cfg)
         target = (target_for(entry, stop, a.get("swing"), side == "long", cfg)
-                  if cfg.style in ("swing", "fast") or a.get("kind") in ("news", "reversal") else None)
+                  if cfg.style in ("intraday", "fast") or a.get("kind") in ("news", "reversal") else None)
         size = stake * lev
         fee = size * cfg.fee_frac("open")
         pos = {"coin": coin, "side": side, "entry": entry, "size": size, "size0": size, "stake": stake, "stake_left": stake,
                "collateral": stake - fee, "leverage": round(lev, 1), "stop": stop, "stop0": stop, "r": abs(entry - stop),
                "best": entry, "opened_ts": now, "opened_at": _now_iso(now), "borrow": 0.0, "borrow_ts": now,
                "open_fee": round(fee, 4), "open_fee_left": fee, "fees": fee, "tp1": False, "be": False, "realized": 0.0, "mode": "paper",
-               "why": a.get("why") or [], "atr": a.get("atr"), "target": target, "style": cfg.style, "kind": a.get("kind") or "chart"}
+               "why": a.get("why") or [], "atr": a.get("atr"), "target": target, "style": cfg.style, "kind": a.get("kind") or "chart",
+               "worst": entry, "ctx": {k: (self.reads.get(coin) or {}).get(k) for k in ("strength", "rsi", "atr_pct")}}
         pos["liq"] = liq_price(pos, cfg)
         with self.state.lock:
             self.d["bank"] = round(bank - stake, 2)
@@ -1221,6 +1243,7 @@ class Perps:
             pos["borrow"] = pos.get("borrow", 0.0) + pos["size"] * cfg.borrow_pct_hour / 100 * hrs
             pos["borrow_ts"] = now
             pos["best"] = max(pos["best"], price) if long else min(pos["best"], price)
+            pos["worst"] = min(pos.get("worst", price), price) if long else max(pos.get("worst", price), price)
             pos["mark"] = price
             pos["liq"] = liq_price(pos, cfg)
         equity = pos["collateral"] + pnl_at(pos, price) - pos["borrow"]
@@ -1297,7 +1320,14 @@ class Perps:
                    "fees": round(fee + of, 4), "borrow": round(borrow, 4),
                    "why": why, "final": final, "mode": "paper", "opened_at": pos["opened_at"], "kind": pos.get("kind") or "chart",
                    "held_min": round((now - pos["opened_ts"]) / 60, 1), "total": round(pos["realized"], 2) if final else None}
-            self.d["trades"] = ([row] + list(self.d.get("trades") or []))[:200]
+            if final:                                 # what the lab reads: the risk, how far it went each way, the setup
+                sg = 1 if pos["side"] == "long" else -1
+                r0 = abs(pos["entry"] - pos.get("stop0", pos["stop"])) or 1e-12
+                row.update(stop0=pos.get("stop0"), r_px=r0, opened_ts=pos["opened_ts"], closed_ts=now,
+                           mfe_r=round(sg * (pos.get("best", pos["entry"]) - pos["entry"]) / r0, 2),
+                           mae_r=round(sg * (pos["entry"] - pos.get("worst", pos["entry"])) / r0, 2),
+                           ctx=pos.get("ctx"), tp1=pos.get("tp1"))
+            self.d["trades"] = ([row] + list(self.d.get("trades") or []))[:self.trade_cap]
             if final:
                 self.d["position"] = None
                 if pos["realized"] < 0:
